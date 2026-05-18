@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+venv/
+__pycache__/
+*.pyc
+
+# Environment — never commit secrets
+.env
+.env.*
+
+# Pipeline runtime data
+~/.job_pipeline/
+
+# Build output
+*.html
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
