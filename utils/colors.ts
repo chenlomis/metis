@@ -27,10 +27,9 @@ export const SCORE_COLORS = {
 
 // Tag sentiment pills
 export const TAG_COLORS = {
-  green:  { background: '#EAF3DE', color: '#3B6D11' },
-  amber:  { background: '#FAEEDA', color: '#854F0B' },
-  red:    { background: '#FCEBEB', color: '#A32D2D' },
-  orange: { background: '#FAECE7', color: '#993C1D' },
+  green: { background: '#EAF3DE', color: '#3B6D11' },
+  amber: { background: '#FAEEDA', color: '#854F0B' },
+  red:   { background: '#FCEBEB', color: '#A32D2D' },
 } as const;
 
 // Section accent bars + label colors
@@ -47,7 +46,6 @@ export const C_ARROW_DOWN = '#854F0B';
 // Legend dot definitions (order is display order)
 export const LEGEND_DOTS = [
   { color: '#639922', label: 'Strength match' },
-  { color: '#BA7517', label: 'Proceed with awareness' },
-  { color: '#A32D2D', label: 'Real concern' },
-  { color: '#D85A30', label: 'Domain gap' },
+  { color: '#BA7517', label: 'Caution / domain gap' },
+  { color: '#A32D2D', label: 'Hard blocker' },
 ] as const;

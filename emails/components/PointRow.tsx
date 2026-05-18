@@ -9,7 +9,7 @@ interface Props {
 export default function PointRow({ direction, text }: Props) {
   const isUp       = direction === 'up';
   const arrowColor = isUp ? C_ARROW_UP : C_ARROW_DOWN;
-  const textColor  = isUp ? C_BODY     : C_ARROW_DOWN;
+  const textColor  = isUp ? C_ARROW_UP : C_ARROW_DOWN;
   return (
     <table
       cellPadding={0}

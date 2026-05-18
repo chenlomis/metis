@@ -8,11 +8,11 @@ interface Props {
   fontSize?: number;
 }
 
-// Claude occasionally emits legacy keys ("yellow" → amber, "gap" → orange).
-// Map them here rather than crashing or silently rendering green.
+// Claude occasionally emits legacy keys — map them to current sentiments rather than crashing.
 const SENTIMENT_ALIASES: Record<string, keyof typeof TAG_COLORS> = {
   yellow: 'amber',
-  gap:    'orange',
+  orange: 'amber',  // orange collapsed into amber
+  gap:    'amber',  // legacy "gap" sentiment
 };
 
 export default function Tag({ text, sentiment, fontSize = 11 }: Props) {

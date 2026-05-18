@@ -23,7 +23,7 @@ Setup:
     bash setup_cron.sh
 """
 
-import os, re, json, imaplib, smtplib, email, datetime, logging
+import os, re, json, imaplib, smtplib, email, datetime, logging, hashlib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from pathlib import Path
@@ -135,26 +135,30 @@ Given a batch of job listings, return a JSON array — one object per job, same 
     "leveragePoints": ["<short phrase ≤5 words>", ...],
     "frictionPoints": ["<short phrase ≤5 words>", ...],
     "tags": [
-      {{"text": "<≤5 words>", "sentiment": "green" | "amber" | "red" | "orange"}}
+      {{"text": "<≤5 words>", "sentiment": "green" | "amber" | "red"}}
     ]
   }},
   ...
 ]
 
-leveragePoints: 1-2 match explanations. Each must name what the JD specifically requires AND
-  what in the candidate background satisfies it. Format: "<JD need> → <candidate background>",
-  10 words max. Be concrete — reference actual JD language and actual resume items.
-  BAD: "agentic AI fit"           GOOD: "JD needs agentic workflow design → DocuSign Navigator agentic flows"
-  BAD: "healthcare AI grounding"  GOOD: "JD wants ML depth → UIUC Deep Learning for Healthcare + model eval"
-  BAD: "0-1 PRD authoring"        GOOD: "JD requires 0-1 build → DocuSign Custom Extractions from zero"
+leveragePoints: 1-2 match explanations. Lead with a 2-4 word topic label, em-dash (—), then a
+  tight evidence clause. ~12 words total. No "JD needs" prefix — write naturally.
+  BAD:  "JD needs agentic workflow design → DocuSign Navigator agentic flows"
+  GOOD: "agentic platform — DocuSign Navigator flows match JD's core workflow need"
+  BAD:  "JD wants ML depth → UIUC + model eval"
+  GOOD: "ML depth — UIUC Deep Learning for Healthcare + 2k-model eval fits JD"
+  BAD:  "0-1 PRD authoring"
+  GOOD: "0-1 build — DocuSign Custom Extractions built from zero matches JD scope"
 
-frictionPoints: 1 honest concern in same format. Use [] if no real friction.
+frictionPoints: 1 honest concern, same format. Use [] if no real friction.
   NEVER write placeholder text ("none", "n/a", "none material", "no concerns", etc.).
-  BAD: "none material"             GOOD: []
-  BAD: "no significant gaps"       GOOD: "JD expects crawl/index infra exp → no direct background"
+  BAD:  "none material"
+  GOOD: []
+  BAD:  "JD expects crawl/index infra exp → no direct background"
+  GOOD: "crawl/index infra — no direct background, though ML systems work overlaps"
 
-tags: Up to 4 highlight tags. "green" = clear JD↔background match, "amber" = caution,
-      "red" = real blocker, "orange" = domain gap. ≤5 words each.
+tags: Up to 4 highlight tags. "green" = clear JD↔background match, "amber" = caution or
+      domain gap, "red" = hard blocker. ≤5 words each.
 
 Thresholds (calibrated for Staff/Principal PM, after title-level deduction):
   score >= 75  →  apply
@@ -179,6 +183,32 @@ def save_seen_ids(ids: set):
     SEEN_FILE.write_text(json.dumps(list(ids)))
 
 
+def _role_hash(title: str, company: str) -> str:
+    """Stable 12-char hash from normalized title + company."""
+    key = re.sub(r"[^a-z0-9]", "", (title + company).lower())
+    return hashlib.md5(key.encode()).hexdigest()[:12]
+
+
+def load_seen_roles(ttl_days: int = 14) -> set:
+    """Return hashes of roles seen within the TTL window."""
+    p = DATA_DIR / "seen_roles.json"
+    if not p.exists():
+        return set()
+    raw = json.loads(p.read_text())
+    cutoff = (datetime.datetime.now(datetime.timezone.utc)
+              .replace(tzinfo=None) - datetime.timedelta(days=ttl_days))
+    return {h for h, ts in raw.items()
+            if datetime.datetime.fromisoformat(ts) > cutoff}
+
+
+def save_seen_roles(new_entries: dict):
+    """Merge new {hash: iso_timestamp} entries into the store."""
+    p = DATA_DIR / "seen_roles.json"
+    existing = json.loads(p.read_text()) if p.exists() else {}
+    existing.update(new_entries)
+    p.write_text(json.dumps(existing))
+
+
 def fetch_linkedin_alerts(seen_ids: set) -> list[dict]:
     new_threads = []
     with imaplib.IMAP4_SSL("imap.gmail.com") as imap:
@@ -199,6 +229,33 @@ def fetch_linkedin_alerts(seen_ids: set) -> list[dict]:
             if body:
                 new_threads.append({"msg_id": msg_id, "body": body})
     log.info(f"{len(new_threads)} new alert emails to process")
+    return new_threads
+
+
+def fetch_linkedin_alerts_since(since_dt: datetime.datetime) -> list[dict]:
+    """Fetch all LinkedIn alert emails on or after since_dt. Read-only — ignores seen_ids."""
+    new_threads = []
+    with imaplib.IMAP4_SSL("imap.gmail.com") as imap:
+        imap.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
+        imap.select("INBOX")
+        date_str = since_dt.strftime("%d-%b-%Y")
+        _, data = imap.search(
+            None, f'FROM "jobalerts-noreply@linkedin.com" SINCE "{date_str}"'
+        )
+        all_ids = data[0].split()
+        # Use last 100 for wider rerun windows
+        recent = all_ids[-100:] if len(all_ids) > 100 else all_ids
+        log.info(f"--since rerun: checking {len(recent)} emails since {date_str}")
+        for mid in reversed(recent):
+            _, raw = imap.fetch(mid, "(RFC822)")
+            msg = email.message_from_bytes(raw[0][1])
+            msg_id = msg.get("Message-ID", "")
+            if not msg_id:
+                continue
+            body = _extract_text(msg)
+            if body:
+                new_threads.append({"msg_id": msg_id, "body": body})
+    log.info(f"{len(new_threads)} emails matched for rerun")
     return new_threads
 
 
@@ -411,10 +468,11 @@ _C_BORDER = "#e5e5e5"
 _C_BODY   = "#5F5E5A"
 
 _TAG_THEME = {
-    "green":  ("#EAF3DE", "#3B6D11"),
-    "amber":  ("#FAEEDA", "#854F0B"),
-    "red":    ("#FCEBEB", "#A32D2D"),
-    "orange": ("#FAECE7", "#993C1D"),
+    "green": ("#EAF3DE", "#3B6D11"),
+    "amber": ("#FAEEDA", "#854F0B"),
+    "red":   ("#FCEBEB", "#A32D2D"),
+    # Legacy fallbacks — orange collapsed into amber
+    "orange": ("#FAEEDA", "#854F0B"),
 }
 
 
@@ -521,7 +579,7 @@ def _skipped_cell(job: dict) -> str:
     ev = job["eval"]
     friction = ev.get("frictionPoints", [])
     first = friction[0] if friction else ""
-    skip_tags = [t for t in ev.get("tags", []) if t.get("sentiment") in ("red", "orange")]
+    skip_tags = [t for t in ev.get("tags", []) if t.get("sentiment") in ("red", "amber", "orange")]
     tags = _render_tags(skip_tags, max_tags=3, size=10)
     return (
         f'<td valign="top" style="background:#f5f5f3;padding:10px 12px;border-radius:4px;width:50%">'
@@ -741,27 +799,39 @@ def send_digest(html: str, run_date: str):
 # Main
 # ---------------------------------------------------------------------------
 
-def run_pipeline():
+def run_pipeline(since_dt=None):
     log.info("=== Pipeline run starting ===")
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    seen   = load_seen_ids()
+    client    = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    seen      = load_seen_ids()
+    is_rerun  = since_dt is not None
+    seen_roles          = load_seen_roles()
+    new_role_timestamps: dict = {}
 
     # Stage 1: Ingest
-    threads = fetch_linkedin_alerts(seen)
+    threads = (fetch_linkedin_alerts_since(since_dt) if is_rerun
+               else fetch_linkedin_alerts(seen))
     if not threads:
         log.info("No new alert emails. Done.")
         return
 
     all_jobs: list[dict] = []
-    seen_job_ids:  set[str]   = set()
+    seen_job_ids:   set[str]   = set()
     seen_role_keys: set[tuple] = set()  # dedup same title+company from different locations
     for t in threads:
         jobs_from_thread = extract_jobs(t["body"])
         for job in jobs_from_thread:
-            role_key = (job["title"].lower().strip(), job["company"].lower().strip())
-            if job["job_id"] not in seen_job_ids and role_key not in seen_role_keys:
+            role_key  = (job["title"].lower().strip(), job["company"].lower().strip())
+            role_hash = _role_hash(job["title"], job["company"])
+            if (job["job_id"] not in seen_job_ids
+                    and role_key not in seen_role_keys
+                    and (is_rerun or role_hash not in seen_roles)):
                 seen_job_ids.add(job["job_id"])
                 seen_role_keys.add(role_key)
+                seen_roles.add(role_hash)
+                new_role_timestamps[role_hash] = (
+                    datetime.datetime.now(datetime.timezone.utc)
+                    .replace(tzinfo=None).isoformat()
+                )
                 all_jobs.append(job)
         if jobs_from_thread:
             seen.add(t["msg_id"])  # only mark seen if we got jobs from it
@@ -791,7 +861,11 @@ def run_pipeline():
     run_date = datetime.datetime.now().strftime("%B %d, %Y")
     html = render_html(all_jobs, run_date)
     send_digest(html, run_date)
-    save_seen_ids(seen)
+
+    # Persist state only on normal runs — reruns are read-only
+    if not is_rerun:
+        save_seen_ids(seen)
+        save_seen_roles(new_role_timestamps)
 
     apply_n    = sum(1 for j in all_jobs if j["eval"].get("verdict") == "apply")
     consider_n = sum(1 for j in all_jobs if j["eval"].get("verdict") == "consider")
@@ -823,13 +897,32 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--debug", action="store_true", help="Dump a raw email body to inspect format")
-    parser.add_argument("--reset", action="store_true", help="Clear seen-IDs so all emails reprocess")
+    parser.add_argument("--reset", action="store_true", help="Clear seen-IDs and seen-roles so all emails reprocess")
+    parser.add_argument(
+        "--since", metavar="DATE",
+        help="Reprocess emails since DATE. Examples: '7d', 'yesterday', '2026-05-10'. "
+             "Read-only — does not update seen_ids or seen_roles."
+    )
     args = parser.parse_args()
 
     if args.reset:
         SEEN_FILE.unlink(missing_ok=True)
-        print("Seen IDs cleared — all emails will reprocess on next run.")
+        (DATA_DIR / "seen_roles.json").unlink(missing_ok=True)
+        print("Seen IDs and seen roles cleared — all emails will reprocess on next run.")
     elif args.debug:
         debug_emails()
+    elif args.since:
+        import dateparser
+        since_str = args.since
+        if re.match(r'^\d+d$', since_str):
+            days = int(since_str[:-1])
+            since_dt = datetime.datetime.now() - datetime.timedelta(days=days)
+        else:
+            since_dt = dateparser.parse(since_str, settings={"RETURN_AS_TIMEZONE_AWARE": False})
+        if not since_dt:
+            print(f"Could not parse --since '{args.since}'. Try: '7d', 'yesterday', '2026-05-10'")
+            raise SystemExit(1)
+        log.info(f"Rerun mode: fetching emails since {since_dt.strftime('%Y-%m-%d')}")
+        run_pipeline(since_dt=since_dt)
     else:
         run_pipeline()

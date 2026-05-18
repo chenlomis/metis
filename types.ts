@@ -1,5 +1,5 @@
 export type Tier = 'apply' | 'consider' | 'skipped';
-export type TagSentiment = 'green' | 'amber' | 'red' | 'orange';
+export type TagSentiment = 'green' | 'amber' | 'red';
 
 export interface Tag {
   text: string;
