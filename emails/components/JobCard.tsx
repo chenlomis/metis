@@ -31,7 +31,7 @@ export default function JobCard({ job, tier }: Props) {
               {job.title}
             </td>
             <td style={{ width: '1px', whiteSpace: 'nowrap', paddingLeft: '8px', verticalAlign: 'top' }}>
-              <span style={{ background: pillColors.background, color: pillColors.color, fontSize: '12px', fontWeight: 500, padding: '3px 10px', borderRadius: '20px', fontFamily: FONT, whiteSpace: 'nowrap', display: 'inline-block' }}>
+              <span style={{ background: pillColors.background, color: pillColors.color, fontSize: '11px', fontWeight: 500, padding: '3px 9px', borderRadius: '20px', fontFamily: FONT, whiteSpace: 'nowrap', display: 'inline-block' }}>
                 {job.score}%
               </span>
             </td>
@@ -40,7 +40,7 @@ export default function JobCard({ job, tier }: Props) {
       </table>
 
       {/* Company · location */}
-      <p style={{ fontSize: '13px', color: C_MUTED, margin: '0 0 10px 0', fontFamily: FONT }}>
+      <p style={{ fontSize: '13px', color: C_MUTED, margin: '0 0 10px 0', fontFamily: FONT, lineHeight: '1.6' }}>
         {job.company} · {job.location}
       </p>
 

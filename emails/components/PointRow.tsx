@@ -15,7 +15,7 @@ export default function PointRow({ direction, text }: Props) {
       cellPadding={0}
       cellSpacing={0}
       border={0}
-      style={{ width: '100%', marginBottom: '4px', borderCollapse: 'collapse' }}
+      style={{ width: '100%', marginBottom: '8px', borderCollapse: 'collapse' }}
     >
       <tbody>
         <tr>
@@ -32,7 +32,7 @@ export default function PointRow({ direction, text }: Props) {
           >
             {isUp ? '↑' : '↓'}
           </td>
-          <td style={{ fontSize: '13px', color: textColor, lineHeight: '1.55', fontFamily: FONT }}>
+          <td style={{ fontSize: '13px', color: textColor, lineHeight: '1.5', fontFamily: FONT }}>
             {text}
           </td>
         </tr>

@@ -1,11 +1,12 @@
-export const FONT = "-apple-system, 'Helvetica Neue', Arial, sans-serif";
+// Ink & Slate palette — applied 2026-05-14
+export const FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif";
 
 // Text
-export const C_HEADING       = '#222222';
-export const C_BODY          = '#5F5E5A';
-export const C_MUTED         = '#888780';
-export const C_SUBTLE        = '#aaaaaa';
-export const C_SKIPPED_TITLE = '#2C2C2A';
+export const C_HEADING       = '#1f2118';  // warm near-black — role titles, card headings
+export const C_BODY          = '#1f2118';  // warm near-black — body / paragraph text
+export const C_MUTED         = '#72716d';  // secondary — company, alumni count, section labels
+export const C_SUBTLE        = '#aaaaaa';  // tertiary — column headers, hints
+export const C_SKIPPED_TITLE = '#1f2118';  // skipped role titles
 export const C_LINK          = '#185FA5';
 
 // Backgrounds
@@ -18,34 +19,35 @@ export const C_BORDER         = '#e5e5e5';
 export const C_BORDER_LIGHT   = '#dddddd';
 export const C_BORDER_SECTION = '#eeece5';
 
-// Score tier pills
+// Score tier pills — tints, not fills; all within same lightness band
 export const SCORE_COLORS = {
-  apply:    { background: '#EAF3DE', color: '#3B6D11' },
-  consider: { background: '#FAEEDA', color: '#854F0B' },
-  skipped:  { background: '#F1EFE8', color: '#5F5E5A' },
+  apply:    { background: '#eef2ee', color: '#2d5a2d' },
+  consider: { background: '#f4f0e8', color: '#7a5c1e' },
+  skipped:  { background: '#f0f0ef', color: '#52514e' },
 } as const;
 
-// Tag sentiment pills
+// Tag sentiment pills — tints only, same lightness band as score pills
 export const TAG_COLORS = {
-  green: { background: '#EAF3DE', color: '#3B6D11' },
-  amber: { background: '#FAEEDA', color: '#854F0B' },
-  red:   { background: '#FCEBEB', color: '#A32D2D' },
+  green:   { background: '#eef2ee', color: '#2d5a2d' },  // strength match
+  amber:   { background: '#f4f0e8', color: '#7a5c1e' },  // caution / domain gap
+  red:     { background: '#f2eeee', color: '#8b2e2e' },  // hard blocker
+  neutral: { background: '#f0f0ef', color: '#52514e' },  // neutral / context tag
 } as const;
 
 // Section accent bars + label colors
 export const SECTION_ACCENT = {
-  apply:    { bar: '#639922', label: '#3B6D11' },
-  consider: { bar: '#BA7517', label: '#854F0B' },
+  apply:    { bar: '#2d5a2d', label: '#2d5a2d' },
+  consider: { bar: '#7a5c1e', label: '#7a5c1e' },
   skipped:  { bar: '#888780', label: '#888780' },
 } as const;
 
 // Leverage / friction arrow colors
-export const C_ARROW_UP   = '#3B6D11';
-export const C_ARROW_DOWN = '#854F0B';
+export const C_ARROW_UP   = '#2d5a2d';  // green — strength signal
+export const C_ARROW_DOWN = '#7a5c1e';  // amber — friction signal
 
-// Legend dot definitions (order is display order)
+// Legend dot definitions (display order)
 export const LEGEND_DOTS = [
-  { color: '#639922', label: 'Strength match' },
-  { color: '#BA7517', label: 'Caution / domain gap' },
-  { color: '#A32D2D', label: 'Hard blocker' },
+  { color: '#2d5a2d', label: 'Strength match' },
+  { color: '#7a5c1e', label: 'Caution / domain gap' },
+  { color: '#8b2e2e', label: 'Hard blocker' },
 ] as const;

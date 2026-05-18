@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scorerole"
+version = "0.1.0"
+description = "Personalized job alert digest — filters, scores, and delivers only what's worth your time"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic",
+    "httpx",
+    "beautifulsoup4",
+    "python-dotenv",
+    "dateparser",
+    "python-docx",
+]
+
+[project.scripts]
+scorerole = "scorerole.pipeline:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["scorerole*"]

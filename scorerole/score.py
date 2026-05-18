@@ -1,0 +1,182 @@
+import re, json, logging
+import anthropic
+
+log = logging.getLogger(__name__)
+
+# MODEL is read from pipeline.py at call time — passed in via the client object.
+# Keep a local reference for the score_jobs_batch call.
+import os
+MODEL = os.getenv("MODEL", "claude-sonnet-4-6")
+
+_LOMIS_PROFILE = """
+CANDIDATE: Lomis Chen — Senior PM actively searching (as of May 2026)
+TARGET LEVEL: Staff PM / Principal PM / Lead PM (~10 years experience)
+LOCATION: Redmond WA; SF Bay Area also doable; remote-friendly preferred
+
+SCORE CALIBRATION:
+For Staff/Principal PM roles, 75-82% IS a strong match — these are senior roles
+with genuinely high bars. Do not inflate. 75%+ = apply. 87%+ is exceptional and rare.
+
+TITLE-LEVEL RULE (apply before scoring):
+If the role title does NOT contain Staff / Lead / Principal / Director / Head / VP / GM,
+deduct 10 points from the raw score. A "Senior PM" title at any company is a lateral or
+downward move from the target level. Account for that deduction explicitly.
+
+CORE STRENGTHS:
+- Full-stack AI product ownership: both ML architecture AND UX (rare for PM)
+- Production-grade model evaluation: precision/recall, 2,000+ custom models
+- 0-1 builder: Custom Extractions (DocuSign), Suggested Fields, FieldsExplorer, Azure CLI
+- AI-assisted product work: Suggested Fields, AZ Next, autoplacing — counts as AI even if
+  not cutting-edge research; "claudifying" is less differentiating now but still a real fit
+- Enterprise SaaS: fine to work with; monetization through enterprise deals
+- Agentic AI, human-in-the-loop design, trust in AI outputs
+- Developer platform: Azure CLI, external APIs, PyCon China, SDK/API/CLI, OSS-adjacent
+- Data analytics, search, recsys, personalization — strong ML-driven UX/ranking background
+- Healthcare AI academic grounding (Deep Learning for Healthcare, UIUC)
+- Microsoft cultural fluency (4+ years PM2), cross-geo: US, UK, IST
+- A/B experimentation, beta program architecture, influence without authority
+- ECE background (BS) + Apple hardware/software codesign (iPhone 7 RF) — hardware-adjacent
+  roles are not out of reach; pure hardware without PM/software angle is a stretch
+
+AI/ML SCOPE — preference, not requirement:
+  AI/ML is broad. Fits include: frontier research labs (OpenAI, DeepMind, xAI, Mistral),
+  data/analytics platforms, search, agentic workflows, orchestration, dev tooling/platform.
+  Does NOT have to be AI-first if the role has strong technical depth and 0-1 scope.
+
+EXPERIENCE:
+- DocuSign (Jan 2022 – Mar 2026): Senior PM, Navigator AI Platform
+- Microsoft (Sept 2017 – Dec 2021): PM2 (later rebranded from Program Manager), Azure CLI + Azure ML
+- Apple Intern (Jan–May 2016): RF Design Engineering, iPhone 7 WiFi (hardware/software codesign)
+- HydroOne Intern (Sept 2014–May 2015): Telecom Engineering, 300+ station designs
+- GE Hitachi Junior PM (May 2013–Jan 2014): QC procedures, ~$1M revenue impact
+
+GREEN FLAGS: lean team, genuine 0-1, AI/ML or data/search/agentic/dev-tooling, technical
+             depth, mission-driven, strategic ownership, async/remote, SF Bay Area also OK,
+             frontier research labs, SaaS with real product depth
+
+YELLOW FLAGS: large org matrix, GTM-heavy, heavy evangelism, on-site requirements,
+              hardware-adjacent without software/PM angle, pure AI-assisted SaaS with no
+              deeper ML or platform scope, regulatory/compliance/privacy focus
+
+RED FLAGS: pure execution/order-taking, cybersecurity/IT systems (no product angle),
+           KTLO/maintenance, loudest-voice culture, bureaucracy, TPM roles,
+           T&S with no AI or product angle
+
+GAPS (not red flags — evaluate on merit, not auto-skip):
+  fintech infra, mortgage servicing, HPC infra, pure growth PM, DevRel primary
+"""
+
+SCORE_SYSTEM = f"""{_LOMIS_PROFILE}
+
+You are a job fit evaluator for Lomis Chen.
+
+Given a batch of job listings, return a JSON array — one object per job, same order as input:
+[
+  {{
+    "score": <integer 0-100>,
+    "verdict": "apply" | "consider" | "skipped",
+    "leveragePoints": ["<short phrase ≤5 words>", ...],
+    "frictionPoints": ["<short phrase ≤5 words>", ...],
+    "tags": [
+      {{"text": "<≤5 words>", "sentiment": "green" | "amber" | "red"}}
+    ]
+  }},
+  ...
+]
+
+leveragePoints: 1-2 match explanations. Lead with a 2-4 word topic label, em-dash (—), then a
+  tight evidence clause. ~12 words total. No "JD needs" prefix — write naturally.
+  BAD:  "JD needs agentic workflow design → DocuSign Navigator agentic flows"
+  GOOD: "agentic platform — DocuSign Navigator flows match JD's core workflow need"
+  BAD:  "JD wants ML depth → UIUC + model eval"
+  GOOD: "ML depth — UIUC Deep Learning for Healthcare + 2k-model eval fits JD"
+  BAD:  "0-1 PRD authoring"
+  GOOD: "0-1 build — DocuSign Custom Extractions built from zero matches JD scope"
+
+frictionPoints: 1 honest concern, same format. Use [] if no real friction.
+  NEVER write placeholder text ("none", "n/a", "none material", "no concerns", etc.).
+  BAD:  "none material"
+  GOOD: []
+  BAD:  "JD expects crawl/index infra exp → no direct background"
+  GOOD: "crawl/index infra — no direct background, though ML systems work overlaps"
+
+tags: Up to 4 highlight tags. "green" = clear JD↔background match, "amber" = caution or
+      domain gap, "red" = hard blocker. ≤5 words each.
+
+Thresholds (calibrated for Staff/Principal PM, after title-level deduction):
+  score >= 75  →  apply
+  score 60-74  →  consider
+  score < 60   →  skipped
+
+Be honest. 75% IS strong at this level. Do not inflate.
+Return ONLY valid JSON array — no markdown fences, no preamble."""
+
+
+def score_jobs_batch(client: anthropic.Anthropic, jobs: list[dict]) -> list[dict]:
+    job_blocks = "\n\n---\n\n".join(
+        "JOB {n}: {title} at {company} ({location})\n{jd_line}".format(
+            n=i + 1,
+            title=j["title"],
+            company=j["company"],
+            location=j["location"],
+            jd_line=(
+                "JD:\n" + j["jd"][:1500]
+                if j.get("jd")
+                else "(No JD retrieved — score from title/company only)"
+            ),
+        )
+        for i, j in enumerate(jobs)
+    )
+
+    response = client.messages.create(
+        model=MODEL,
+        max_tokens=4096,
+        system=[
+            {
+                "type": "text",
+                "text": SCORE_SYSTEM,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
+        messages=[{
+            "role": "user",
+            "content": (
+                f"Score all {len(jobs)} jobs for Lomis. "
+                f"Return a JSON array of exactly {len(jobs)} objects.\n\n"
+                f"{job_blocks}"
+            ),
+        }],
+    )
+
+    usage = response.usage
+    log.info(
+        f"Scoring — input: {usage.input_tokens} tokens "
+        f"(cache_write: {getattr(usage, 'cache_creation_input_tokens', 0)}, "
+        f"cache_read: {getattr(usage, 'cache_read_input_tokens', 0)}), "
+        f"output: {usage.output_tokens} tokens"
+    )
+
+    raw = re.sub(
+        r"^```(?:json)?\s*|\s*```$", "", response.content[0].text.strip(), flags=re.MULTILINE
+    ).strip()
+    try:
+        evals = json.loads(raw)
+        if isinstance(evals, dict):
+            evals = [evals]
+    except json.JSONDecodeError:
+        log.warning("Batch score JSON parse failed — all jobs marked skip")
+        evals = []
+
+    for i, job in enumerate(jobs):
+        job["eval"] = evals[i] if i < len(evals) else {
+            "score": 0, "verdict": "skipped", "leveragePoints": [], "frictionPoints": ["Scoring parse error"], "tags": []
+        }
+    return jobs
+
+
+def rank_jobs(jobs: list[dict]) -> list[dict]:
+    order = {"apply": 0, "consider": 1, "skipped": 2}
+    return sorted(jobs, key=lambda j: (
+        order.get(j["eval"].get("verdict", "skipped"), 3),
+        -j["eval"].get("score", 0),
+    ))

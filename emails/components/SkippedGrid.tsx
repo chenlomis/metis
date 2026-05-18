@@ -30,33 +30,38 @@ export default function SkippedGrid({ jobs }: { jobs: Job[] }) {
         </tbody>
       </table>
 
-      {/* Two-column table list */}
-      <table width="100%" cellPadding={0} cellSpacing={0} border={0} style={{ borderCollapse: 'collapse', background: C_BG_SECONDARY, borderRadius: '4px' }}>
+      {/* Two-column table list.
+          tableLayout:fixed + explicit width on every <td> prevents email clients
+          (Outlook, Gmail) from breaking a row across two visual lines when the
+          reason text is long — fixes the Gemini-reported layout fracture. */}
+      <table width="100%" cellPadding={0} cellSpacing={0} border={0} style={{ borderCollapse: 'collapse', tableLayout: 'fixed' as const, background: C_BG_SECONDARY, borderRadius: '4px' }}>
+        <colgroup>
+          <col style={{ width: '50%' }} />
+          <col style={{ width: '50%' }} />
+        </colgroup>
         <tbody>
           {/* Header row */}
           <tr>
             <td
-              width="50%"
-              style={{ padding: '8px 14px', borderBottom: `1px solid ${C_BORDER_LIGHT}`, fontSize: '10px', fontWeight: 500, textTransform: 'uppercase' as const, letterSpacing: '0.05em', color: C_SUBTLE, fontFamily: FONT }}
+              style={{ width: '50%', padding: '8px 14px', borderBottom: `1px solid ${C_BORDER_LIGHT}`, fontSize: '10px', fontWeight: 500, textTransform: 'uppercase' as const, letterSpacing: '0.05em', color: C_SUBTLE, fontFamily: FONT }}
             >
               Role · Company
             </td>
             <td
-              width="50%"
-              style={{ padding: '8px 14px', borderBottom: `1px solid ${C_BORDER_LIGHT}`, fontSize: '10px', fontWeight: 500, textTransform: 'uppercase' as const, letterSpacing: '0.05em', color: C_SUBTLE, fontFamily: FONT }}
+              style={{ width: '50%', padding: '8px 14px', borderBottom: `1px solid ${C_BORDER_LIGHT}`, fontSize: '10px', fontWeight: 500, textTransform: 'uppercase' as const, letterSpacing: '0.05em', color: C_SUBTLE, fontFamily: FONT }}
             >
               Why skipped
             </td>
           </tr>
 
-          {/* Data rows */}
+          {/* Data rows — each row is a single <tr> so company + reason stay bound */}
           {jobs.map((job, i) => {
             const isLast  = i === jobs.length - 1;
             const border  = isLast ? undefined : `1px solid ${C_BORDER}`;
             const reason  = firstSentence(job.frictionPoints[0] ?? '');
             return (
               <tr key={i}>
-                <td width="50%" valign="top" style={{ padding: '8px 14px', borderBottom: border, verticalAlign: 'top' }}>
+                <td style={{ width: '50%', padding: '8px 14px', borderBottom: border, verticalAlign: 'top' }}>
                   <p style={{ fontSize: '12px', fontWeight: 'bold' as const, color: C_SKIPPED_TITLE, margin: '0 0 2px 0', fontFamily: FONT }}>
                     {job.title}
                   </p>
@@ -64,7 +69,7 @@ export default function SkippedGrid({ jobs }: { jobs: Job[] }) {
                     {job.company} · {job.location}
                   </p>
                 </td>
-                <td width="50%" valign="middle" style={{ padding: '8px 14px', borderBottom: border, fontSize: '11px', color: C_BODY, lineHeight: '1.5', verticalAlign: 'middle', fontFamily: FONT }}>
+                <td style={{ width: '50%', padding: '8px 14px', borderBottom: border, fontSize: '11px', color: C_BODY, lineHeight: '1.6', verticalAlign: 'top', fontFamily: FONT }}>
                   {reason}
                 </td>
               </tr>
