@@ -21,7 +21,7 @@ from .state import (
     load_seen_roles, save_seen_roles, _role_hash,
 )
 from .sources import fetch_alerts
-from .sources.linkedin import extract_jobs, _extract_text
+from .sources.linkedin import extract_jobs, extract_jobs_html, _extract_text
 from .score import score_jobs_batch, rank_jobs, SCORE_SYSTEM
 from .render import render_html, send_digest
 
@@ -64,6 +64,12 @@ def run_pipeline(since_dt=None):
     seen_role_keys: set[tuple] = set()  # dedup same title+company from different locations
     for t in threads:
         jobs_from_thread = extract_jobs(t["body"])
+        # Recommendation emails ("Company is hiring" / "Similar jobs") have no plain-text
+        # "View job:" lines — fall back to HTML link extraction
+        if not jobs_from_thread and t.get("html"):
+            jobs_from_thread = extract_jobs_html(t["html"])
+            if jobs_from_thread:
+                log.info(f"HTML extraction found {len(jobs_from_thread)} jobs in recommendation email")
         for job in jobs_from_thread:
             role_key  = (job["title"].lower().strip(), job["company"].lower().strip())
             role_hash = _role_hash(job["title"], job["company"])

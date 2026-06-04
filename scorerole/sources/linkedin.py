@@ -9,6 +9,13 @@ import os
 GMAIL_ADDRESS      = os.getenv("GMAIL_ADDRESS", "chenlomis@gmail.com")
 GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
 
+# Both LinkedIn alert senders captured in one IMAP OR search:
+#   jobalerts-noreply@ → standard "Your job alert for X" digests
+#   jobs-noreply@       → "Company is hiring" / "Jobs similar to X" recommendation emails
+_LINKEDIN_SENDER_SEARCH = (
+    'OR FROM "jobalerts-noreply@linkedin.com" FROM "jobs-noreply@linkedin.com"'
+)
+
 _NOISE_LINES = re.compile(
     r"^\d+\s+connections?$"
     r"|actively hiring"
@@ -34,15 +41,28 @@ _BROWSER_HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
+# Matches LinkedIn job view URLs in both plain text and HTML href attributes
+_JOB_URL_RE = re.compile(r"https://www\.linkedin\.com/comm/jobs/view/(\d+)/")
+
+# Matches "Company · Location" lines in HTML recommendation emails
+_COMPANY_LOC_RE = re.compile(r"^(.+?)\s+·\s+(.+)$")
+
+# Short strings that appear as link text but are not job titles
+_NON_TITLE_LABELS = frozenset({
+    "view all jobs", "easy apply", "linkedin", "apply", "see more",
+    "expand your search", "remote jobs", "recommendations based on your activity",
+})
+
 
 def _extract_text(msg) -> str:
+    """Return the best plain-text representation of the email body."""
     if msg.is_multipart():
         for part in msg.walk():
             if part.get_content_type() == "text/plain":
                 payload = part.get_payload(decode=True)
                 if payload:
                     return payload.decode("utf-8", errors="ignore")
-        # Fallback to HTML
+        # Fallback to HTML→text
         for part in msg.walk():
             if part.get_content_type() == "text/html":
                 payload = part.get_payload(decode=True)
@@ -54,7 +74,24 @@ def _extract_text(msg) -> str:
     return payload.decode("utf-8", errors="ignore") if payload else ""
 
 
+def _get_html_body(msg) -> str:
+    """Return the raw HTML body of the email, or empty string if none."""
+    if msg.is_multipart():
+        for part in msg.walk():
+            if part.get_content_type() == "text/html":
+                payload = part.get_payload(decode=True)
+                if payload:
+                    return payload.decode("utf-8", errors="ignore")
+    payload = msg.get_payload(decode=True)
+    if payload:
+        decoded = payload.decode("utf-8", errors="ignore")
+        if "<html" in decoded[:500].lower():
+            return decoded
+    return ""
+
+
 def extract_jobs(body: str) -> list[dict]:
+    """Parse jobs from standard LinkedIn alert emails (plain-text 'View job:' format)."""
     # Anchor on "View job: URL", look backwards for title / company / location.
     # Alumni-count lines are captured separately before noise filtering so they
     # don't displace the title from the -3 slot.
@@ -99,6 +136,92 @@ def extract_jobs(body: str) -> list[dict]:
     return jobs
 
 
+def extract_jobs_html(html: str) -> list[dict]:
+    """Parse jobs from HTML recommendation emails ('Company is hiring' / 'Similar jobs').
+
+    These emails embed job links in <a href> tags without a plain-text 'View job:' line.
+    Company and location appear as 'Company · Location' text adjacent to each job link.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    jobs: list[dict] = []
+    seen: set[str] = set()
+
+    for a_tag in soup.find_all("a", href=True):
+        href = a_tag.get("href", "")
+        m = _JOB_URL_RE.search(href)
+        if not m:
+            continue
+        job_id = m.group(1)
+        if job_id in seen:
+            continue
+
+        title = a_tag.get_text(strip=True)
+        # Filter out navigation links, buttons, logo links, etc.
+        if not title or len(title) < 6 or title.lower() in _NON_TITLE_LABELS:
+            continue
+
+        # Locate "Company · Location" in the text immediately following the link.
+        # Strategy 1: direct next siblings of the <a> tag
+        company, location = _find_company_location_siblings(a_tag)
+
+        # Strategy 2: text lines within the parent container
+        if not company:
+            company, location = _find_company_location_container(a_tag, title)
+
+        if not company:
+            log.debug(f"HTML extract: skipping '{title}' — could not find company/location")
+            continue
+
+        seen.add(job_id)
+        jobs.append({
+            "title":        title,
+            "company":      company,
+            "location":     location,
+            "alumni_count": None,
+            "job_id":       job_id,
+            "url":          f"https://www.linkedin.com/jobs/view/{job_id}/",
+        })
+
+    return jobs
+
+
+def _find_company_location_siblings(a_tag) -> tuple[str, str]:
+    """Search direct next siblings of <a> for 'Company · Location' text."""
+    for node in a_tag.next_siblings:
+        text = (
+            node.get_text(separator=" ", strip=True)
+            if hasattr(node, "get_text")
+            else str(node).strip()
+        )
+        if not text:
+            continue
+        cm = _COMPANY_LOC_RE.match(text)
+        if cm:
+            return cm.group(1).strip(), cm.group(2).strip()
+        # Stop if we hit another job link — we've passed this job's block
+        if hasattr(node, "find") and node.find("a", href=_JOB_URL_RE):
+            break
+    return "", ""
+
+
+def _find_company_location_container(a_tag, title: str) -> tuple[str, str]:
+    """Walk up to the nearest container and search its text lines."""
+    container = a_tag.parent
+    # Step up one level if the parent is too narrow to hold both title and company
+    if container and len(container.get_text(strip=True)) < len(title) + 4:
+        container = container.parent
+    if not container:
+        return "", ""
+    for line in container.get_text(separator="\n").splitlines():
+        line = line.strip()
+        if not line or line == title:
+            continue
+        cm = _COMPANY_LOC_RE.match(line)
+        if cm:
+            return cm.group(1).strip(), cm.group(2).strip()
+    return "", ""
+
+
 def _fetch_one_jd(job: dict) -> str:
     try:
         r = httpx.get(job["url"], headers=_BROWSER_HEADERS, timeout=12, follow_redirects=True)
@@ -136,51 +259,45 @@ def enrich_jobs(jobs: list[dict]) -> list[dict]:
     return jobs
 
 
+def _fetch_emails(imap, search_criteria: str, max_recent: int,
+                  seen_ids: set | None = None) -> list[dict]:
+    """Shared fetch loop used by both alert functions."""
+    _, data = imap.search(None, search_criteria)
+    all_ids = data[0].split()
+    recent = all_ids[-max_recent:] if len(all_ids) > max_recent else all_ids
+    log.info(f"Checking {len(recent)} LinkedIn emails (criteria: {search_criteria[:60]}…)")
+    threads = []
+    for mid in reversed(recent):
+        _, raw = imap.fetch(mid, "(RFC822)")
+        msg = email.message_from_bytes(raw[0][1])
+        msg_id = msg.get("Message-ID", "")
+        if not msg_id:
+            continue
+        if seen_ids is not None and msg_id in seen_ids:
+            continue
+        body = _extract_text(msg)
+        html  = _get_html_body(msg)
+        if body or html:
+            threads.append({"msg_id": msg_id, "body": body, "html": html})
+    return threads
+
+
 def fetch_linkedin_alerts(seen_ids: set) -> list[dict]:
-    new_threads = []
     with imaplib.IMAP4_SSL("imap.gmail.com") as imap:
         imap.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
         imap.select("INBOX")
-        _, data = imap.search(None, 'FROM "jobalerts-noreply@linkedin.com"')
-        all_ids = data[0].split()
-        # Check most recent 30 emails only
-        recent = all_ids[-30:] if len(all_ids) > 30 else all_ids
-        log.info(f"Checking {len(recent)} recent LinkedIn alert emails")
-        for mid in reversed(recent):
-            _, raw = imap.fetch(mid, "(RFC822)")
-            msg = email.message_from_bytes(raw[0][1])
-            msg_id = msg.get("Message-ID", "")
-            if not msg_id or msg_id in seen_ids:
-                continue
-            body = _extract_text(msg)
-            if body:
-                new_threads.append({"msg_id": msg_id, "body": body})
-    log.info(f"{len(new_threads)} new alert emails to process")
-    return new_threads
+        threads = _fetch_emails(imap, _LINKEDIN_SENDER_SEARCH, 30, seen_ids)
+    log.info(f"{len(threads)} new LinkedIn emails to process")
+    return threads
 
 
 def fetch_linkedin_alerts_since(since_dt: datetime.datetime) -> list[dict]:
-    """Fetch all LinkedIn alert emails on or after since_dt. Read-only — ignores seen_ids."""
-    new_threads = []
+    """Fetch all LinkedIn emails on or after since_dt. Read-only — ignores seen_ids."""
+    date_str = since_dt.strftime("%d-%b-%Y")
+    criteria = f'{_LINKEDIN_SENDER_SEARCH} SINCE "{date_str}"'
     with imaplib.IMAP4_SSL("imap.gmail.com") as imap:
         imap.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
         imap.select("INBOX")
-        date_str = since_dt.strftime("%d-%b-%Y")
-        _, data = imap.search(
-            None, f'FROM "jobalerts-noreply@linkedin.com" SINCE "{date_str}"'
-        )
-        all_ids = data[0].split()
-        # Use last 100 for wider rerun windows
-        recent = all_ids[-100:] if len(all_ids) > 100 else all_ids
-        log.info(f"--since rerun: checking {len(recent)} emails since {date_str}")
-        for mid in reversed(recent):
-            _, raw = imap.fetch(mid, "(RFC822)")
-            msg = email.message_from_bytes(raw[0][1])
-            msg_id = msg.get("Message-ID", "")
-            if not msg_id:
-                continue
-            body = _extract_text(msg)
-            if body:
-                new_threads.append({"msg_id": msg_id, "body": body})
-    log.info(f"{len(new_threads)} emails matched for rerun")
-    return new_threads
+        threads = _fetch_emails(imap, criteria, 100)
+    log.info(f"{len(threads)} LinkedIn emails matched for --since {date_str} rerun")
+    return threads
