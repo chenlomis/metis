@@ -2,7 +2,7 @@ import * as React from 'react';
 import { Section } from '@react-email/components';
 import {
   FONT, C_MUTED, C_BODY, C_SUBTLE, C_BORDER, C_BORDER_LIGHT,
-  C_BG_SECONDARY, C_BORDER_SECTION, C_SKIPPED_TITLE, SECTION_ACCENT,
+  C_BG_SECONDARY, C_BORDER_SECTION, C_SKIPPED_TITLE, C_LINK, SECTION_ACCENT,
 } from '../../utils/colors';
 import type { Job } from '../../types';
 
@@ -62,8 +62,10 @@ export default function SkippedGrid({ jobs }: { jobs: Job[] }) {
             return (
               <tr key={i}>
                 <td style={{ width: '50%', padding: '8px 14px', borderBottom: border, verticalAlign: 'top' }}>
-                  <p style={{ fontSize: '12px', fontWeight: 'bold' as const, color: C_SKIPPED_TITLE, margin: '0 0 2px 0', fontFamily: FONT }}>
-                    {job.title}
+                  <p style={{ fontSize: '12px', fontWeight: 'bold' as const, margin: '0 0 2px 0', fontFamily: FONT }}>
+                    <a href={job.postingUrl} style={{ color: C_LINK, textDecoration: 'none' }}>
+                      {job.title}
+                    </a>
                   </p>
                   <p style={{ fontSize: '11px', color: C_MUTED, margin: 0, fontFamily: FONT }}>
                     {job.company} · {job.location}
