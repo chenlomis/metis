@@ -1,4 +1,5 @@
 import re, json, logging
+from pathlib import Path
 import anthropic
 
 log = logging.getLogger(__name__)
@@ -8,7 +9,26 @@ log = logging.getLogger(__name__)
 import os
 MODEL = os.getenv("MODEL", "claude-sonnet-4-6")
 
-_LOMIS_PROFILE = """
+# ---------------------------------------------------------------------------
+# Profile — loaded from ~/.job_pipeline/lomis-profile.md if present.
+# Edit that file to update; changes apply on next scorerole run automatically.
+# Fallback: the inline stub below (kept only as a last resort).
+# ---------------------------------------------------------------------------
+_PROFILE_PATH = Path.home() / ".job_pipeline" / "lomis-profile.md"
+
+def _load_profile() -> str:
+    if _PROFILE_PATH.exists():
+        content = _PROFILE_PATH.read_text().strip()
+        if content:
+            log.info(f"Loaded candidate profile from {_PROFILE_PATH}")
+            return content
+    log.warning(
+        f"Profile file not found at {_PROFILE_PATH} — using inline fallback. "
+        f"Run: cp <lomis-profile.md> {_PROFILE_PATH}"
+    )
+    return _LOMIS_PROFILE_FALLBACK
+
+_LOMIS_PROFILE_FALLBACK = """
 CANDIDATE: Lomis Chen — Senior PM actively searching (as of May 2026)
 TARGET LEVEL: Staff PM / Principal PM / Lead PM (~10 years experience)
 LOCATION: Redmond WA; SF Bay Area also doable; remote-friendly preferred
@@ -66,7 +86,11 @@ GAPS (not red flags — evaluate on merit, not auto-skip):
   fintech infra, mortgage servicing, HPC infra, pure growth PM, DevRel primary
 """
 
-SCORE_SYSTEM = f"""{_LOMIS_PROFILE}
+
+def _build_score_system() -> str:
+    """Build the scoring system prompt, loading the profile fresh each call."""
+    profile = _load_profile()
+    return f"""{profile}
 
 You are a job fit evaluator for Lomis Chen.
 
@@ -112,6 +136,12 @@ Be honest. 75% IS strong at this level. Do not inflate.
 Return ONLY valid JSON array — no markdown fences, no preamble."""
 
 
+# SCORE_SYSTEM kept as a module-level alias for any external callers,
+# but score_jobs_batch always calls _build_score_system() to pick up
+# the latest profile from disk.
+SCORE_SYSTEM = _build_score_system()
+
+
 def score_jobs_batch(client: anthropic.Anthropic, jobs: list[dict]) -> list[dict]:
     job_blocks = "\n\n---\n\n".join(
         "JOB {n}: {title} at {company} ({location})\n{jd_line}".format(
@@ -134,7 +164,7 @@ def score_jobs_batch(client: anthropic.Anthropic, jobs: list[dict]) -> list[dict
         system=[
             {
                 "type": "text",
-                "text": SCORE_SYSTEM,
+                "text": _build_score_system(),
                 "cache_control": {"type": "ephemeral"},
             }
         ],

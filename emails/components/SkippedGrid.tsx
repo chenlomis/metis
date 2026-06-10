@@ -66,6 +66,11 @@ export default function SkippedGrid({ jobs }: { jobs: Job[] }) {
                     <a href={job.postingUrl} style={{ color: C_LINK, textDecoration: 'none' }}>
                       {job.title}
                     </a>
+                    {job.score != null && (
+                      <span style={{ fontSize: '10px', fontWeight: 400, color: C_MUTED, marginLeft: '5px' }}>
+                        {job.score}%
+                      </span>
+                    )}
                   </p>
                   <p style={{ fontSize: '11px', color: C_MUTED, margin: 0, fontFamily: FONT }}>
                     {job.company} · {job.location}
