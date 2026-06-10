@@ -131,13 +131,13 @@ def run_pipeline(since_dt: datetime.datetime):
     consider_n = sum(1 for j in all_jobs if j["eval"].get("verdict") == "consider")
     log.info(f"=== Done — {len(all_jobs)} evaluated: {apply_n} apply, {consider_n} consider ===")
 
-    # Stage 5: Hand off to career-ops (non-blocking)
-    # Writes apply/consider roles with external ATS URLs to career-ops pipeline queue,
-    # then triggers evaluation + tailored PDF generation in the background.
-    from .careerops import write_pipeline_queue, trigger_pipeline
-    n_queued = write_pipeline_queue(all_jobs)
-    if n_queued > 0:
-        trigger_pipeline()
+    # Stage 5: Hand off to career-ops
+    # Records qualifying roles in pipeline.md, then opens each ATS URL in a
+    # visible browser with contact fields pre-filled from config/profile.yml.
+    from .careerops import write_pipeline_queue, open_and_prefill
+    newly_queued = write_pipeline_queue(all_jobs)
+    if newly_queued:
+        open_and_prefill(newly_queued)
 
 
 def debug_emails():
