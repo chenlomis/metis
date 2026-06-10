@@ -9,11 +9,14 @@ import os
 GMAIL_ADDRESS      = os.getenv("GMAIL_ADDRESS", "chenlomis@gmail.com")
 GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
 
-# Both LinkedIn alert senders captured in one IMAP OR search:
+# All three LinkedIn alert senders, nested OR for IMAP:
 #   jobalerts-noreply@ → standard "Your job alert for X" digests
 #   jobs-noreply@       → "Company is hiring" / "Jobs similar to X" recommendation emails
+#   jobs-listings@      → "Jobs you might like" (JYMBII) digests
 _LINKEDIN_SENDER_SEARCH = (
-    'OR FROM "jobalerts-noreply@linkedin.com" FROM "jobs-noreply@linkedin.com"'
+    'OR OR FROM "jobalerts-noreply@linkedin.com" '
+    'FROM "jobs-noreply@linkedin.com" '
+    'FROM "jobs-listings@linkedin.com"'
 )
 
 _NOISE_LINES = re.compile(
@@ -222,11 +225,17 @@ def _find_company_location_container(a_tag, title: str) -> tuple[str, str]:
     return "", ""
 
 
-def _fetch_one_jd(job: dict) -> str:
+def _fetch_one_jd(job: dict) -> tuple[str, str]:
+    """Fetch the JD text and external apply URL for a job.
+
+    Returns (jd_text, apply_url). apply_url is the external ATS link
+    (Greenhouse, Lever, Ashby, etc.) from the JSON-LD applyAction, or
+    empty string for LinkedIn Easy Apply roles.
+    """
     try:
         r = httpx.get(job["url"], headers=_BROWSER_HEADERS, timeout=12, follow_redirects=True)
         if r.status_code != 200:
-            return ""
+            return "", ""
         soup = BeautifulSoup(r.text, "html.parser")
         # LinkedIn embeds structured job data in JSON-LD
         for script in soup.find_all("script", type="application/ld+json"):
@@ -234,28 +243,43 @@ def _fetch_one_jd(job: dict) -> str:
                 data = json.loads(script.string or "")
                 if data.get("@type") == "JobPosting":
                     raw_desc = data.get("description", "")
-                    return BeautifulSoup(raw_desc, "html.parser").get_text("\n")[:3000].strip()
+                    jd_text  = BeautifulSoup(raw_desc, "html.parser").get_text("\n")[:3000].strip()
+                    # applyAction.target is the external ATS URL; absent for LinkedIn Easy Apply
+                    apply_url = (
+                        data.get("applyAction", {}).get("target", "")
+                        or data.get("url", "")
+                        or ""
+                    )
+                    # Reject LinkedIn-internal apply URLs — only keep real external ATS links
+                    if "linkedin.com" in apply_url:
+                        apply_url = ""
+                    return jd_text, apply_url
             except (json.JSONDecodeError, AttributeError):
                 continue
-        # Fallback: common LinkedIn description containers
+        # Fallback: common LinkedIn description containers (no apply URL available here)
         for cls_pat in [r"description__text", r"job-details__main-content", r"show-more-less-html"]:
             el = soup.find(class_=re.compile(cls_pat, re.I))
             if el:
-                return el.get_text("\n", strip=True)[:3000]
+                return el.get_text("\n", strip=True)[:3000], ""
     except Exception as e:
         log.warning(f"JD fetch failed ({job['title']} @ {job['company']}): {e}")
-    return ""
+    return "", ""
 
 
 def enrich_jobs(jobs: list[dict]) -> list[dict]:
-    # Sequential with a small delay to avoid LinkedIn 429s
+    """Fetch JD text and external apply URL for each job. Sequential with delay."""
     import time as _time
     for i, job in enumerate(jobs):
-        job["jd"] = _fetch_one_jd(job)
+        jd_text, apply_url = _fetch_one_jd(job)
+        job["jd"]        = jd_text
+        job["apply_url"] = apply_url
         if i < len(jobs) - 1:
             _time.sleep(0.4)
-    fetched = sum(1 for j in jobs if j.get("jd"))
-    log.info(f"JD fetched for {fetched}/{len(jobs)} jobs")
+    fetched   = sum(1 for j in jobs if j.get("jd"))
+    has_apply = sum(1 for j in jobs if j.get("apply_url"))
+    log.info(f"JD fetched for {fetched}/{len(jobs)} jobs; "
+             f"{has_apply} have external apply URL, "
+             f"{len(jobs) - has_apply} are LinkedIn Easy Apply")
     return jobs
 
 

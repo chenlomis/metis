@@ -119,7 +119,7 @@ def run_pipeline(since_dt: datetime.datetime):
     all_jobs = score_jobs_batch(client, all_jobs)
     all_jobs = rank_jobs(all_jobs)
 
-    # Stage 4: Deliver
+    # Stage 4: Deliver digest email
     run_date = datetime.datetime.now().strftime("%B %d, %Y")
     html = render_html(all_jobs, run_date)
     send_digest(html, run_date)
@@ -130,6 +130,14 @@ def run_pipeline(since_dt: datetime.datetime):
     apply_n    = sum(1 for j in all_jobs if j["eval"].get("verdict") == "apply")
     consider_n = sum(1 for j in all_jobs if j["eval"].get("verdict") == "consider")
     log.info(f"=== Done — {len(all_jobs)} evaluated: {apply_n} apply, {consider_n} consider ===")
+
+    # Stage 5: Hand off to career-ops (non-blocking)
+    # Writes apply/consider roles with external ATS URLs to career-ops pipeline queue,
+    # then triggers evaluation + tailored PDF generation in the background.
+    from .careerops import write_pipeline_queue, trigger_pipeline
+    n_queued = write_pipeline_queue(all_jobs)
+    if n_queued > 0:
+        trigger_pipeline()
 
 
 def debug_emails():
