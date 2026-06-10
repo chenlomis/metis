@@ -132,12 +132,14 @@ def run_pipeline(since_dt: datetime.datetime):
     log.info(f"=== Done — {len(all_jobs)} evaluated: {apply_n} apply, {consider_n} consider ===")
 
     # Stage 5: Hand off to career-ops
-    # Records qualifying roles in pipeline.md, then opens each ATS URL in a
-    # visible browser with contact fields pre-filled from config/profile.yml.
-    from .careerops import write_pipeline_queue, open_and_prefill
-    newly_queued = write_pipeline_queue(all_jobs)
-    if newly_queued:
-        open_and_prefill(newly_queued)
+    # Records qualifying roles in pipeline.md (deduped), then opens each LinkedIn
+    # job page authenticated, detects Apply type, skips Easy Apply, and pre-fills
+    # contact + EEO fields on external ATS pages.
+    from .careerops import write_pipeline_queue, open_and_prefill, _qualifying
+    write_pipeline_queue(all_jobs)          # record-keeping / dedup
+    to_open = _qualifying(all_jobs)         # all score≥60 this run (not just new)
+    if to_open:
+        open_and_prefill(to_open)
 
 
 def debug_emails():

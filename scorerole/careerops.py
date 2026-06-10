@@ -48,17 +48,13 @@ def _is_available() -> bool:
     return True
 
 
-def _qualifying(jobs: list[dict]) -> tuple[list[dict], list[dict]]:
-    """Split jobs into (has_external_url, easy_apply_only)."""
-    has_url, easy_apply = [], []
-    for j in jobs:
-        if j.get("eval", {}).get("score", 0) < CAREER_OPS_MIN_SCORE:
-            continue
-        if j.get("apply_url"):
-            has_url.append(j)
-        else:
-            easy_apply.append(j)
-    return has_url, easy_apply
+def _qualifying(jobs: list[dict]) -> list[dict]:
+    """Return all jobs scoring ≥ CAREER_OPS_MIN_SCORE that have a LinkedIn URL."""
+    return [
+        j for j in jobs
+        if j.get("eval", {}).get("score", 0) >= CAREER_OPS_MIN_SCORE
+        and j.get("url")
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -66,24 +62,17 @@ def _qualifying(jobs: list[dict]) -> tuple[list[dict], list[dict]]:
 # ---------------------------------------------------------------------------
 
 def write_pipeline_queue(jobs: list[dict]) -> list[dict]:
-    """Persist qualifying jobs with external ATS URLs to data/pipeline.md.
+    """Persist qualifying jobs to data/pipeline.md for record-keeping.
 
-    Returns the list of jobs that were newly added (for passing to open_and_prefill).
+    Records the LinkedIn job URL (starting point for apply-basic.mjs).
+    Returns the list of jobs newly added (deduped against existing entries).
     """
     if not _is_available():
         return []
 
-    to_open, easy_apply = _qualifying(jobs)
-
-    if easy_apply:
-        log.info(
-            f"career-ops: {len(easy_apply)} LinkedIn Easy Apply role(s) — "
-            f"no external URL, open manually: "
-            + ", ".join(f"{j['title']} @ {j['company']}" for j in easy_apply)
-        )
-
-    if not to_open:
-        log.info("career-ops: no qualifying jobs with external apply URLs.")
+    qualifying = _qualifying(jobs)
+    if not qualifying:
+        log.info("career-ops: no qualifying jobs to queue (score < threshold or no URL).")
         return []
 
     PIPELINE_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -91,8 +80,8 @@ def write_pipeline_queue(jobs: list[dict]) -> list[dict]:
 
     newly_added: list[dict] = []
     new_lines:   list[str]  = []
-    for job in to_open:
-        url = job["apply_url"]
+    for job in qualifying:
+        url     = job["url"]           # LinkedIn job URL — apply-basic.mjs starts here
         if url in existing:
             log.debug(f"career-ops: already queued — {url}")
             continue
@@ -118,8 +107,7 @@ def write_pipeline_queue(jobs: list[dict]) -> list[dict]:
         + existing[insert_at:].lstrip("\n")
     )
     PIPELINE_FILE.write_text(updated)
-
-    log.info(f"career-ops: recorded {len(new_lines)} job(s) in {PIPELINE_FILE}")
+    log.info(f"career-ops: queued {len(new_lines)} job(s) in {PIPELINE_FILE}")
     return newly_added
 
 
@@ -128,11 +116,11 @@ def write_pipeline_queue(jobs: list[dict]) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def open_and_prefill(jobs: list[dict]) -> None:
-    """Open each job's ATS URL in a visible browser and pre-fill contact fields.
+    """Open each job in a visible browser via LinkedIn auth, detect apply type,
+    skip Easy Apply, and pre-fill contact + EEO fields on external ATS pages.
 
-    Uses apply-basic.mjs (Playwright) to fill: first name, last name, email,
-    phone, LinkedIn URL, location from config/profile.yml.
-    Browser stays open — review, complete remaining fields, and submit.
+    Uses apply-basic.mjs (Playwright + li_at cookie).
+    Browser stays open after all tabs are processed — review and submit.
     """
     if not _is_available():
         return
@@ -144,25 +132,24 @@ def open_and_prefill(jobs: list[dict]) -> None:
         )
         return
 
-    urls = [j["apply_url"] for j in jobs if j.get("apply_url")]
-    if not urls:
+    # Pass LinkedIn job URLs — apply-basic.mjs authenticates, finds Apply button,
+    # skips Easy Apply, follows external redirects, and fills ATS forms.
+    linkedin_urls = [j["url"] for j in jobs if j.get("url")]
+    if not linkedin_urls:
         return
 
-    log.info(
-        f"Opening {len(urls)} application(s) in browser with contact fields pre-filled..."
-    )
+    log.info(f"Opening {len(linkedin_urls)} job(s) via LinkedIn (Easy Apply will be skipped):")
     for job in jobs:
-        if job.get("apply_url"):
-            log.info(
-                f"  {job['title']} @ {job['company']} "
-                f"({job['eval']['score']}%) → {job['apply_url']}"
-            )
+        log.info(
+            f"  {job['title']} @ {job['company']} "
+            f"({job['eval']['score']}%) → {job['url']}"
+        )
 
-    # Run Playwright script — headed (visible) browser, does NOT detach
-    # so scorerole waits for the script to finish opening all tabs before exiting.
+    # Inherit full env (includes LINKEDIN_COOKIE loaded by dotenv in pipeline.py)
     result = subprocess.run(
-        [NODE_BIN, str(APPLY_SCRIPT)] + urls,
+        [NODE_BIN, str(APPLY_SCRIPT)] + linkedin_urls,
         cwd=str(CAREER_OPS_DIR),
+        env=os.environ.copy(),
     )
     if result.returncode != 0:
         log.error("apply-basic.mjs exited with an error — check output above.")
