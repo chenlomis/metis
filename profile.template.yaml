@@ -43,10 +43,7 @@ preferences:                        # soft signals — adjust ranking, don't har
     - "AI/ML Platform"
     - "Developer Tools"
   industry_avoid: []                # soft avoids
-  comp_target_usd: null             # aspirational total comp (vs salary_floor_usd which is hard)
-  work_style: "Cross-functional leadership"
-                                    # "Deep IC / individual focus" / "Cross-functional leadership"
-                                    # "Player-coach (both)" / null
+  base_salary_target_usd: null      # aspirational base salary (vs salary_floor_usd which is the hard floor)
 
 scoring:
   apply_threshold: 75               # score >= this → "apply" verdict
