@@ -141,6 +141,7 @@ def _extract_with_claude(api_key: str, text: str) -> dict:
 def _show_profile(profile: dict, console):
     from rich.table import Table
     from rich.panel import Panel
+    from rich import box as rich_box
 
     c = profile.get("candidate", {})
     t = profile.get("target", {})
@@ -169,9 +170,9 @@ def _show_profile(profile: dict, console):
     if salary:
         tbl.add_row("Salary floor", f"${salary:,}")
 
-    console.print(Panel(tbl, title="[bold]Extracted profile[/bold]",
-                        subtitle="[dim]extracted from your resume[/dim]",
-                        border_style="green", padding=(1, 2)))
+    console.print(Panel(tbl, title="[bold green]Extracted profile[/bold green]",
+                        subtitle="[dim]review below — nothing saved yet[/dim]",
+                        border_style="green", box=rich_box.ROUNDED, padding=(1, 2)))
 
 
 # ---------------------------------------------------------------------------
@@ -181,35 +182,52 @@ def _show_profile(profile: dict, console):
 def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str = ""):
     try:
         import questionary
+        from questionary import Style as QStyle
         from rich.console import Console
         from rich.panel import Panel
+        from rich import box as rich_box
     except ImportError as e:
         sys.exit(
             f"❌  Missing dependency: {e}\n"
             f"    Run: pip install questionary rich"
         )
 
+    # Consistent green/gray palette matching scorerole's visual identity
+    Q_STYLE = QStyle([
+        ("qmark",       "fg:#57a55a bold"),   # the leading ?
+        ("question",    "bold"),
+        ("answer",      "fg:#57a55a bold"),   # typed / confirmed answer
+        ("pointer",     "fg:#57a55a bold"),   # ❯ in select menus
+        ("highlighted", "fg:#57a55a bold"),   # hovered option
+        ("selected",    "fg:#57a55a"),        # checked option
+        ("instruction", "fg:#6c6c6c"),        # (Use arrow keys) hint
+        ("separator",   "fg:#6c6c6c"),
+    ])
+
     console = Console()
 
     # ── Welcome ──────────────────────────────────────────────────────────────
     console.print()
     console.print(Panel(
-        "[bold]Welcome to scorerole.[/bold]\n\n"
-        "This wizard sets up your profile so scorerole can match job listings\n"
-        "to [italic]your[/italic] background, interests, and aspirations — not a generic template.\n\n"
-        "You'll provide your resume, we'll extract the key details with Claude,\n"
-        "and you'll have a chance to review and adjust before anything is saved.\n\n"
+        "[bold]scorerole init[/bold]\n\n"
+        "Sets up your profile so scorerole can match job listings to\n"
+        "[italic]your[/italic] background, interests, and aspirations — not a generic template.\n\n"
+        "  [dim]1.[/dim]  Provide your resume (PDF, DOCX, or TXT)\n"
+        "  [dim]2.[/dim]  Claude extracts your profile\n"
+        "  [dim]3.[/dim]  Review and adjust before anything is saved\n\n"
         "[dim]Takes about 2 minutes.  Run `scorerole init` any time to update.[/dim]",
         border_style="dim",
-        padding=(1, 2),
+        box=rich_box.ROUNDED,
+        padding=(1, 3),
     ))
-    console.print()
 
     # ── Step 1: Resume ───────────────────────────────────────────────────────
-    console.rule("[dim]Step 1 of 3 — Resume[/dim]")
     console.print()
-    console.print("  [dim]Accepted formats: PDF, DOCX, TXT/MD[/dim]")
-    console.print("  [dim]Tip: drag the file into your terminal window to paste its path.[/dim]\n")
+    console.print("[dim]  Step 1 of 3 — Resume[/dim]")
+    console.print("[dim]  ─────────────────────[/dim]")
+    console.print()
+    console.print("  [dim]Accepted: PDF, DOCX, TXT/MD"
+                  "   ·   Tip: drag the file into this window to paste its path.[/dim]\n")
 
     resume_path = None
     if resume_path_arg:
@@ -222,9 +240,10 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
             resume_path = p
 
     while not resume_path:
-        raw = questionary.path("  Path to your resume:").ask()
+        raw = questionary.path("  Path to your resume:", style=Q_STYLE).ask()
         if raw is None:
             sys.exit(0)
+        raw = raw.strip().strip("\"'").replace("\\ ", " ")
         p = Path(raw).expanduser().resolve()
         if not p.exists():
             console.print("  [red]File not found — try again.[/red]\n")
@@ -237,11 +256,12 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
             resume_path = p
 
     resume_text = _parse_file(resume_path)
-    console.print(f"\n  [green]✓[/green]  Parsed [bold]{len(resume_text):,}[/bold] characters"
-                  f" from {resume_path.name}\n")
+    console.print(f"\n  [green]✓[/green]  {resume_path.name} "
+                  f"[dim]({len(resume_text):,} characters)[/dim]\n")
 
     # ── Step 2: LinkedIn (optional) ──────────────────────────────────────────
-    console.rule("[dim]Step 2 of 3 — LinkedIn (optional)[/dim]")
+    console.print("[dim]  Step 2 of 3 — LinkedIn (optional)[/dim]")
+    console.print("[dim]  ──────────────────────────────────[/dim]")
     console.print()
     console.print(
         "  Your LinkedIn profile often contains skills, endorsements, and role details\n"
@@ -249,39 +269,39 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
     )
 
     wants_linkedin = questionary.confirm(
-        "  Add your LinkedIn profile?", default=False
+        "  Add your LinkedIn profile?", default=False, style=Q_STYLE
     ).ask()
 
     supp_text = ""
     if wants_linkedin:
         console.print()
-        console.print("  [dim]How to export:[/dim]")
-        console.print("  [dim]LinkedIn → Me → Settings & Privacy → Data Privacy[/dim]")
-        console.print("  [dim]→ Get a copy of your data → select Profile → Request archive[/dim]")
-        console.print("  [dim]LinkedIn will email you a download link (usually within minutes).[/dim]\n")
+        console.print("  [dim]Export: LinkedIn → Me → Settings & Privacy → Data Privacy[/dim]")
+        console.print("  [dim]        → Get a copy of your data → Profile → Request archive[/dim]")
+        console.print("  [dim]        LinkedIn emails you a link (usually within minutes).[/dim]\n")
 
         supp_path = None
         while supp_path is None:
             raw = questionary.path(
-                "  Path to your LinkedIn PDF (or Enter to skip):",
+                "  Path to LinkedIn PDF (Enter to skip):", style=Q_STYLE
             ).ask()
             if raw is None or raw.strip() == "":
                 break
+            raw = raw.strip().strip("\"'").replace("\\ ", " ")
             p = Path(raw).expanduser().resolve()
             if not p.exists():
                 console.print("  [red]File not found — try again, or press Enter to skip.[/red]\n")
             elif p.is_dir():
                 console.print(
                     "  [red]That's a folder, not a file.[/red]  "
-                    "Drag the LinkedIn PDF file into the terminal, or press Enter to skip.\n"
+                    "Drag the LinkedIn PDF into the terminal, or press Enter to skip.\n"
                 )
             else:
                 supp_path = p
 
         if supp_path:
             supp_text = _parse_file(supp_path)
-            console.print(f"\n  [green]✓[/green]  Parsed [bold]{len(supp_text):,}[/bold] characters"
-                          f" from {supp_path.name}")
+            console.print(f"\n  [green]✓[/green]  {supp_path.name} "
+                          f"[dim]({len(supp_text):,} characters)[/dim]")
 
     full_text = resume_text
     if supp_text:
@@ -289,7 +309,8 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
 
     # ── Step 3: Extract + review ─────────────────────────────────────────────
     console.print()
-    console.rule("[dim]Step 3 of 3 — Build your profile[/dim]")
+    console.print("[dim]  Step 3 of 3 — Build your profile[/dim]")
+    console.print("[dim]  ──────────────────────────────────[/dim]")
     console.print()
 
     try:
@@ -297,57 +318,56 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
     except ImportError:
         sys.exit("❌  pyyaml not installed. Run: pip install pyyaml")
 
-    with console.status("  Analyzing your resume with Claude…"):
+    with console.status("  [dim]Analyzing your resume with Claude…[/dim]"):
         try:
             profile = _extract_with_claude(api_key, full_text)
         except Exception as e:
             sys.exit(f"❌  Extraction failed: {e}")
 
-    console.print("  [green]✓[/green]  Done — here's what we found:\n")
+    console.print("  [green]✓[/green]  Extraction complete\n")
     _show_profile(profile, console)
     console.print()
-    console.print("  [dim]These were extracted from your resume. Review them below.[/dim]\n")
 
     # ── Review loop ───────────────────────────────────────────────────────────
     while True:
         action = questionary.select(
-            "  Does this look right?",
+            "  Looks good?",
             choices=[
-                "Yes — save profile",
-                "Edit target roles",
-                "Edit deal-breakers",
-                "Edit salary floor",
-                "Re-run extraction",
+                questionary.Choice("Save profile", value="save"),
+                questionary.Choice("Edit target roles", value="roles"),
+                questionary.Choice("Edit deal-breakers", value="dbs"),
+                questionary.Choice("Edit salary floor", value="salary"),
+                questionary.Choice("Re-run extraction", value="rerun"),
             ],
+            style=Q_STYLE,
         ).ask()
 
-        if action is None or action.startswith("Yes"):
+        if action is None or action == "save":
             break
 
-        elif action == "Edit target roles":
+        elif action == "roles":
             current = ", ".join(profile.get("target", {}).get("roles", []))
-            console.print("  [dim]Enter your target job titles, comma-separated.[/dim]")
-            console.print("  [dim]Example: Staff PM, Principal PM, Director of Product[/dim]\n")
-            new_val = questionary.text("  Target roles:", default=current).ask()
+            console.print("  [dim]Comma-separated.  e.g. Staff PM, Principal PM, Director of Product[/dim]\n")
+            new_val = questionary.text("  Target roles:", default=current, style=Q_STYLE).ask()
             if new_val:
                 profile.setdefault("target", {})["roles"] = [
                     r.strip() for r in new_val.split(",") if r.strip()
                 ]
 
-        elif action == "Edit deal-breakers":
+        elif action == "dbs":
             current = ", ".join(profile.get("deal_breakers", []))
             console.print("  [dim]Hard no's — roles matching these will be skipped.[/dim]")
-            console.print("  [dim]Example: no equity, on-site 5 days/week, no AI component[/dim]\n")
-            new_val = questionary.text("  Deal-breakers:", default=current).ask()
+            console.print("  [dim]e.g. no equity, on-site 5 days/week, no AI component[/dim]\n")
+            new_val = questionary.text("  Deal-breakers:", default=current, style=Q_STYLE).ask()
             if new_val:
                 profile["deal_breakers"] = [
                     d.strip() for d in new_val.split(",") if d.strip()
                 ]
 
-        elif action == "Edit salary floor":
+        elif action == "salary":
             current = str(profile.get("salary_floor_usd") or "")
             new_val = questionary.text(
-                "  Minimum salary (USD, numbers only):", default=current
+                "  Minimum salary (USD, numbers only):", default=current, style=Q_STYLE
             ).ask()
             if new_val:
                 try:
@@ -357,8 +377,8 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
                 except ValueError:
                     console.print("  [red]Could not parse — keeping current value.[/red]")
 
-        elif action.startswith("Re-run"):
-            with console.status("  Re-running extraction…"):
+        elif action == "rerun":
+            with console.status("  [dim]Re-running extraction…[/dim]"):
                 try:
                     profile = _extract_with_claude(api_key, full_text)
                 except Exception as e:
@@ -372,21 +392,22 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
     # ── Save ──────────────────────────────────────────────────────────────────
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     PROFILE_PATH.write_text(yaml.dump(profile, allow_unicode=True, sort_keys=False))
-    console.print(f"\n  [green]✓[/green]  Profile saved.\n")
+    console.print(f"\n  [green]✓[/green]  Saved to [dim]{PROFILE_PATH}[/dim]\n")
 
     # ── What next ─────────────────────────────────────────────────────────────
     next_action = questionary.select(
-        "  What would you like to do next?",
+        "  What next?",
         choices=[
-            "Open profile in editor",
-            "Open .env template in editor",
-            "Exit",
+            questionary.Choice("Open profile in editor", value="profile"),
+            questionary.Choice("Open .env in editor", value="env"),
+            questionary.Choice("Done", value="exit"),
         ],
+        style=Q_STYLE,
     ).ask()
 
-    if next_action == "Open profile in editor":
+    if next_action == "profile":
         open_in_editor(PROFILE_PATH)
-    elif next_action == "Open .env template in editor":
+    elif next_action == "env":
         env_example = Path(__file__).parent.parent / ".env.example"
         target = env_example if env_example.exists() else PROFILE_PATH.parent
         open_in_editor(target)
