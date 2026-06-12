@@ -43,6 +43,8 @@ Each role gets a **score (0–100)**, a **verdict** (apply / consider / skip), l
 # 1. Clone and install
 git clone https://github.com/YOUR_USERNAME/scorerole
 cd scorerole
+python3 -m venv venv && source venv/bin/activate
+pip install --upgrade pip   # requires pip ≥ 21.3
 pip install -e .
 
 # 2. Configure credentials
