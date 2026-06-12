@@ -65,9 +65,15 @@ def open_in_editor(path: Path):
 _EXTRACT_SYSTEM = """\
 You are a career profile extractor.
 
-Given resume text (and optionally a LinkedIn export or supplementary notes),
-extract the candidate's information and return ONLY valid YAML matching this
-schema exactly — no markdown fences, no commentary, no extra keys:
+Given resume text (and optionally a LinkedIn export, supplementary notes, and
+USER-PROVIDED PREFERENCES), extract the candidate's information and return ONLY
+valid YAML matching this schema exactly — no markdown fences, no commentary,
+no extra keys.
+
+IMPORTANT: If a "USER-PROVIDED PREFERENCES" section is present, its values
+override anything you would otherwise infer from the resume for these fields:
+target.roles, deal_breakers, salary_floor_usd, candidate.open_to_remote,
+candidate.open_to_relocation, and notes (merge calibration text into notes).
 
 candidate:
   name: string
@@ -77,7 +83,7 @@ candidate:
   open_to_relocation: []         # list of cities/regions, or empty
 
 target:
-  roles: []                      # infer from trajectory — e.g. ["Staff PM", "Principal PM"]
+  roles: []                      # use user-provided if given; else infer from trajectory
   level: string                  # "ic", "senior", "staff", "director", "vp", "c-suite"
   industries: []                 # inferred from background
 
@@ -101,11 +107,12 @@ strengths: []                    # 6-10 items, each a concrete phrase with evide
 green_flags: []                  # role/company types they'd love
 yellow_flags: []                 # things to watch out for (honest)
 red_flags: []                    # hard blockers
-deal_breakers: []                # absolute no's
-salary_floor_usd: int or null    # if inferable from location + seniority
+deal_breakers: []                # use user-provided if given; else infer
+salary_floor_usd: int or null    # use user-provided if given; else infer from seniority + location
 notes: |
-  Any important scoring calibration notes. Include a level-mismatch rule if
-  the candidate's current title understates their actual scope.
+  Scoring calibration notes. Include a level-mismatch rule if the candidate's
+  current title understates their actual scope. Incorporate any user-provided
+  calibration text verbatim.
 
 Rules:
 - Use null or [] when information is absent; never omit a key.
@@ -115,17 +122,21 @@ Rules:
 """
 
 
-def _extract_with_claude(api_key: str, text: str) -> dict:
+def _extract_with_claude(api_key: str, text: str, user_context: str = "") -> dict:
     import anthropic, yaml
 
     client = anthropic.Anthropic(api_key=api_key)
     model  = os.getenv("MODEL", "claude-sonnet-4-6")
 
+    content = text[:12_000]
+    if user_context:
+        content += "\n\n" + user_context
+
     msg = client.messages.create(
         model=model,
         max_tokens=2048,
         system=_EXTRACT_SYSTEM,
-        messages=[{"role": "user", "content": text[:14_000]}],
+        messages=[{"role": "user", "content": content}],
     )
     raw = msg.content[0].text.strip()
     if raw.startswith("```"):
@@ -152,12 +163,23 @@ def _show_profile(profile: dict, console):
 
     tbl.add_row("Name",         c.get("name", "—"))
     tbl.add_row("Location",     c.get("location", "—"))
-    tbl.add_row("Remote",       "yes" if c.get("open_to_remote") else "no")
+    remote_str = "yes" if c.get("open_to_remote") else "no"
+    reloc = c.get("open_to_relocation") or []
+    if reloc:
+        remote_str += f"  [dim]· relocation: {', '.join(reloc)}[/dim]"
+    tbl.add_row("Remote",       remote_str)
     tbl.add_row("Target roles", "\n".join(t.get("roles", [])) or "—")
     tbl.add_row("Level",        t.get("level", "—"))
 
     dbs = profile.get("deal_breakers", [])
-    tbl.add_row("Deal-breakers", ("\n".join(dbs)) if dbs else "none set")
+    tbl.add_row("Deal-breakers", ("\n".join(dbs)) if dbs else "[dim]none set[/dim]")
+
+    gf = profile.get("green_flags", [])
+    if gf:
+        gf_preview = gf[0]
+        if len(gf) > 1:
+            gf_preview += f"\n[dim]… and {len(gf) - 1} more[/dim]"
+        tbl.add_row("Green flags", gf_preview)
 
     strengths = profile.get("strengths", [])
     if strengths:
@@ -170,9 +192,113 @@ def _show_profile(profile: dict, console):
     if salary:
         tbl.add_row("Salary floor", f"${salary:,}")
 
+    notes = (profile.get("notes") or "").strip()
+    if notes:
+        first_line = notes.splitlines()[0][:80]
+        if len(notes) > len(first_line):
+            first_line += "[dim]…[/dim]"
+        tbl.add_row("Scoring notes", first_line)
+
     console.print(Panel(tbl, title="[bold green]Extracted profile[/bold green]",
                         subtitle="[dim]review below — nothing saved yet[/dim]",
                         border_style="green", box=rich_box.ROUNDED, padding=(1, 2)))
+
+
+# ---------------------------------------------------------------------------
+# Preferences collection (Step 3)
+# ---------------------------------------------------------------------------
+
+def _collect_preferences(console, Q_STYLE) -> dict:
+    """Collect the intent and constraints that resumes can't capture."""
+    import questionary
+
+    console.print()
+    console.print("[dim]  Step 3 of 4 — Your preferences[/dim]")
+    console.print("[dim]  ─────────────────────────────[/dim]")
+    console.print()
+    console.print(
+        "  Your resume shows [italic]what you've done.[/italic]\n"
+        "  These questions capture [italic]where you're headed[/italic] and your\n"
+        "  personal rules — things Claude can't reliably infer.\n"
+    )
+
+    target_roles = questionary.text(
+        "  Target roles:",
+        instruction="(comma-separated — be aspirational, not just your current title)",
+        style=Q_STYLE,
+    ).ask() or ""
+
+    work_mode = questionary.select(
+        "  Work mode:",
+        choices=["Remote-first", "Hybrid OK", "On-site OK", "No preference"],
+        style=Q_STYLE,
+    ).ask() or "No preference"
+
+    wants_relocation = questionary.confirm(
+        "  Open to relocation?", default=False, style=Q_STYLE
+    ).ask()
+    relocation_cities = ""
+    if wants_relocation:
+        relocation_cities = questionary.text(
+            "  Preferred cities / regions:",
+            instruction="(comma-separated)",
+            style=Q_STYLE,
+        ).ask() or ""
+
+    deal_breakers = questionary.text(
+        "  Deal-breakers:",
+        instruction="(comma-separated hard no's — roles matching these will be skipped)",
+        style=Q_STYLE,
+    ).ask() or ""
+
+    salary_floor = questionary.text(
+        "  Minimum salary (USD, numbers only):",
+        instruction="(e.g. 200000 — leave blank to let Claude estimate)",
+        style=Q_STYLE,
+    ).ask() or ""
+
+    green_flags = questionary.text(
+        "  What excites you? (optional):",
+        instruction="(role / company types you'd love — comma-separated)",
+        style=Q_STYLE,
+    ).ask() or ""
+
+    calibration = questionary.text(
+        "  Scoring calibration notes (optional):",
+        instruction="(e.g. 'Staff-level scope despite Senior title')",
+        style=Q_STYLE,
+    ).ask() or ""
+
+    return {
+        "target_roles":      [r.strip() for r in target_roles.split(",")    if r.strip()],
+        "work_mode":         work_mode,
+        "relocation_cities": [c.strip() for c in relocation_cities.split(",") if c.strip()],
+        "deal_breakers":     [d.strip() for d in deal_breakers.split(",")   if d.strip()],
+        "salary_floor":      salary_floor.replace(",", "").replace("$", "").strip(),
+        "green_flags":       [g.strip() for g in green_flags.split(",")     if g.strip()],
+        "calibration":       calibration.strip(),
+    }
+
+
+def _format_user_context(prefs: dict) -> str:
+    """Format collected preferences into a block Claude can use during extraction."""
+    lines = ["--- USER-PROVIDED PREFERENCES (override inferred values) ---"]
+    if prefs.get("target_roles"):
+        lines.append(f"Target roles: {', '.join(prefs['target_roles'])}")
+    lines.append(f"Work mode: {prefs.get('work_mode', 'No preference')}")
+    if prefs.get("relocation_cities"):
+        lines.append(f"Open to relocation: yes — {', '.join(prefs['relocation_cities'])}")
+    else:
+        lines.append("Open to relocation: no")
+    if prefs.get("deal_breakers"):
+        lines.append(f"Deal-breakers: {', '.join(prefs['deal_breakers'])}")
+    if prefs.get("salary_floor"):
+        lines.append(f"Salary floor: ${prefs['salary_floor']}")
+    if prefs.get("green_flags"):
+        lines.append(f"Green flags (things I'd love): {', '.join(prefs['green_flags'])}")
+    if prefs.get("calibration"):
+        lines.append(f"Scoring calibration: {prefs['calibration']}")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -209,13 +335,15 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
     # ── Welcome ──────────────────────────────────────────────────────────────
     console.print()
     console.print(Panel(
-        "[bold]scorerole init[/bold]\n\n"
-        "Sets up your profile so scorerole can match job listings to\n"
-        "[italic]your[/italic] background, interests, and aspirations — not a generic template.\n\n"
-        "  [dim]1.[/dim]  Provide your resume (PDF, DOCX, or TXT)\n"
-        "  [dim]2.[/dim]  Claude extracts your profile\n"
-        "  [dim]3.[/dim]  Review and adjust before anything is saved\n\n"
-        "[dim]Takes about 2 minutes.  Run `scorerole init` any time to update.[/dim]",
+        "[bold]Let's build your scorerole profile![/bold]\n\n"
+        "The more context you provide, the better we can filter and\n"
+        "score roles against your background.\n\n"
+        "  [dim]1.[/dim]  Point us to your resume (PDF, DOCX, or TXT)\n"
+        "  [dim]2.[/dim]  Optionally add your LinkedIn profile\n"
+        "  [dim]3.[/dim]  Tell us about your aspirations, achievements,\n"
+        "       deal-breakers, and preferences\n"
+        "  [dim]4.[/dim]  Review and tweak the final profile before saving\n\n"
+        "[dim]It takes about 2 mins.  Run `scorerole init` anytime to update.[/dim]",
         border_style="dim",
         box=rich_box.ROUNDED,
         padding=(1, 3),
@@ -223,7 +351,7 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
 
     # ── Step 1: Resume ───────────────────────────────────────────────────────
     console.print()
-    console.print("[dim]  Step 1 of 3 — Resume[/dim]")
+    console.print("[dim]  Step 1 of 4 — Resume[/dim]")
     console.print("[dim]  ─────────────────────[/dim]")
     console.print()
     console.print("  [dim]Accepted: PDF, DOCX, TXT/MD"
@@ -260,7 +388,7 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
                   f"[dim]({len(resume_text):,} characters)[/dim]\n")
 
     # ── Step 2: LinkedIn (optional) ──────────────────────────────────────────
-    console.print("[dim]  Step 2 of 3 — LinkedIn (optional)[/dim]")
+    console.print("[dim]  Step 2 of 4 — LinkedIn (optional)[/dim]")
     console.print("[dim]  ──────────────────────────────────[/dim]")
     console.print()
     console.print(
@@ -307,9 +435,13 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
     if supp_text:
         full_text += "\n\n--- SUPPLEMENTARY PROFILE ---\n\n" + supp_text
 
-    # ── Step 3: Extract + review ─────────────────────────────────────────────
+    # ── Step 3: Preferences ──────────────────────────────────────────────────
+    prefs = _collect_preferences(console, Q_STYLE)
+    user_context = _format_user_context(prefs)
+
+    # ── Step 4: Extract + review ─────────────────────────────────────────────
     console.print()
-    console.print("[dim]  Step 3 of 3 — Build your profile[/dim]")
+    console.print("[dim]  Step 4 of 4 — Build your profile[/dim]")
     console.print("[dim]  ──────────────────────────────────[/dim]")
     console.print()
 
@@ -320,7 +452,7 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
 
     with console.status("  [dim]Analyzing your resume with Claude…[/dim]"):
         try:
-            profile = _extract_with_claude(api_key, full_text)
+            profile = _extract_with_claude(api_key, full_text, user_context)
         except Exception as e:
             sys.exit(f"❌  Extraction failed: {e}")
 
@@ -334,9 +466,11 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
             "  Looks good?",
             choices=[
                 questionary.Choice("Save profile", value="save"),
-                questionary.Choice("Edit target roles", value="roles"),
+                questionary.Choice("Edit target roles & level", value="roles"),
                 questionary.Choice("Edit deal-breakers", value="dbs"),
+                questionary.Choice("Edit green flags", value="gf"),
                 questionary.Choice("Edit salary floor", value="salary"),
+                questionary.Choice("Edit scoring notes", value="notes"),
                 questionary.Choice("Re-run extraction", value="rerun"),
             ],
             style=Q_STYLE,
@@ -346,22 +480,53 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
             break
 
         elif action == "roles":
-            current = ", ".join(profile.get("target", {}).get("roles", []))
-            console.print("  [dim]Comma-separated.  e.g. Staff PM, Principal PM, Director of Product[/dim]\n")
-            new_val = questionary.text("  Target roles:", default=current, style=Q_STYLE).ask()
-            if new_val:
-                profile.setdefault("target", {})["roles"] = [
-                    r.strip() for r in new_val.split(",") if r.strip()
-                ]
+            t = profile.setdefault("target", {})
+            current_roles = ", ".join(t.get("roles", []))
+            current_level = t.get("level", "")
+            console.print(
+                "  [dim]Roles: comma-separated.  e.g. Staff PM, Principal PM, Director of Product[/dim]\n"
+            )
+            new_roles = questionary.text(
+                "  Target roles:", default=current_roles, style=Q_STYLE
+            ).ask()
+            if new_roles:
+                t["roles"] = [r.strip() for r in new_roles.split(",") if r.strip()]
+            new_level = questionary.select(
+                "  Seniority level:",
+                choices=["ic", "senior", "staff", "director", "vp", "c-suite"],
+                default=current_level if current_level in
+                        ["ic","senior","staff","director","vp","c-suite"] else "staff",
+                style=Q_STYLE,
+            ).ask()
+            if new_level:
+                t["level"] = new_level
 
         elif action == "dbs":
             current = ", ".join(profile.get("deal_breakers", []))
-            console.print("  [dim]Hard no's — roles matching these will be skipped.[/dim]")
-            console.print("  [dim]e.g. no equity, on-site 5 days/week, no AI component[/dim]\n")
-            new_val = questionary.text("  Deal-breakers:", default=current, style=Q_STYLE).ask()
-            if new_val:
+            console.print(
+                "  [dim]Hard no's — roles matching these will be filtered out.[/dim]\n"
+                "  [dim]e.g. no equity, on-site 5 days/week, no AI/ML component[/dim]\n"
+            )
+            new_val = questionary.text(
+                "  Deal-breakers:", default=current, style=Q_STYLE
+            ).ask()
+            if new_val is not None:
                 profile["deal_breakers"] = [
                     d.strip() for d in new_val.split(",") if d.strip()
+                ]
+
+        elif action == "gf":
+            current = ", ".join(profile.get("green_flags", []))
+            console.print(
+                "  [dim]Role / company types you'd love — boosts score when matched.[/dim]\n"
+                "  [dim]e.g. AI-native platform teams, companies with applied science orgs[/dim]\n"
+            )
+            new_val = questionary.text(
+                "  Green flags:", default=current, style=Q_STYLE
+            ).ask()
+            if new_val is not None:
+                profile["green_flags"] = [
+                    g.strip() for g in new_val.split(",") if g.strip()
                 ]
 
         elif action == "salary":
@@ -377,10 +542,22 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
                 except ValueError:
                     console.print("  [red]Could not parse — keeping current value.[/red]")
 
+        elif action == "notes":
+            current = (profile.get("notes") or "").strip()
+            console.print(
+                "  [dim]Calibration notes help Claude score edge cases correctly.[/dim]\n"
+                "  [dim]e.g. 'Title understates scope — weight impact over title level.'[/dim]\n"
+            )
+            new_val = questionary.text(
+                "  Scoring notes:", default=current, style=Q_STYLE
+            ).ask()
+            if new_val is not None:
+                profile["notes"] = new_val.strip()
+
         elif action == "rerun":
             with console.status("  [dim]Re-running extraction…[/dim]"):
                 try:
-                    profile = _extract_with_claude(api_key, full_text)
+                    profile = _extract_with_claude(api_key, full_text, user_context)
                 except Exception as e:
                     console.print(f"  [red]Extraction failed: {e}[/red]")
                     continue
