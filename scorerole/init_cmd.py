@@ -73,7 +73,8 @@ no extra keys.
 IMPORTANT: If a "USER-PROVIDED PREFERENCES" section is present, its values
 override anything you would otherwise infer from the resume for these fields:
 target.roles, deal_breakers, salary_floor_usd, candidate.open_to_remote,
-candidate.open_to_relocation, and notes (merge calibration text into notes).
+candidate.open_to_relocation, aspirations.track, aspirations.direction,
+aspirations.company_types, preferences.*, and notes (merge calibration text).
 
 candidate:
   name: string
@@ -86,6 +87,21 @@ target:
   roles: []                      # use user-provided if given; else infer from trajectory
   level: string                  # "ic", "senior", "staff", "director", "vp", "c-suite"
   industries: []                 # inferred from background
+
+aspirations:
+  track: string                  # "ic", "management", or "flexible"
+  direction: |                   # use user-provided; 2-3 sentences on career arc and desired next chapter
+  company_types: []              # company archetypes they're drawn to (e.g. "AI-native startup")
+  avoid_company_types: []        # company types to avoid — soft, not hard (those go in deal_breakers)
+
+preferences:
+  company_stage: []              # ordered preference: "seed", "series-a", "growth", "public"
+  company_size: null             # "startup (<200)", "mid-size (200-2000)", "enterprise (2000+)", or null
+  industry_targets: []           # industries to move toward (may differ from past industries)
+  industry_avoid: []             # industries to steer away from — soft signal, affects ranking
+  comp_target_usd: null          # aspirational total comp (vs salary_floor which is a hard floor)
+  work_style: null               # "deep IC / individual focus", "cross-functional leadership",
+                                 # "player-coach", or null
 
 scoring:
   apply_threshold: 75
@@ -104,19 +120,24 @@ education:
     year: int or null
 
 strengths: []                    # 6-10 items, each a concrete phrase with evidence
-green_flags: []                  # role/company types they'd love
-yellow_flags: []                 # things to watch out for (honest)
-red_flags: []                    # hard blockers
-deal_breakers: []                # use user-provided if given; else infer
-salary_floor_usd: int or null    # use user-provided if given; else infer from seniority + location
+green_flags: []                  # role / company signals that boost score
+yellow_flags: []                 # honest gaps or risks
+red_flags: []                    # strong concerns
+deal_breakers: []                # hard no's — use user-provided if given; roles matching these
+                                 # should be capped at a low score regardless of other signals
+salary_floor_usd: int or null    # hard floor — use user-provided if given; else infer
 notes: |
-  Scoring calibration notes. Include a level-mismatch rule if the candidate's
-  current title understates their actual scope. Incorporate any user-provided
-  calibration text verbatim.
+  Scoring calibration. Include a level-mismatch rule if title understates scope.
+  Distinguish hard filters (deal_breakers, salary_floor) from soft signals
+  (preferences.*) that adjust ranking rather than disqualify.
+  Incorporate any user-provided calibration text verbatim.
 
 Rules:
 - Use null or [] when information is absent; never omit a key.
 - Infer target roles and level from title trajectory, not just current title.
+- aspirations.direction: write from the candidate's perspective, forward-looking.
+- preferences.*: soft signals — they should nudge scores, not hard-filter.
+- deal_breakers: hard filters — a role matching any deal-breaker should score ≤30.
 - Be honest in yellow_flags — surface real gaps or risks.
 - Return ONLY the YAML block.
 """
@@ -171,6 +192,24 @@ def _show_profile(profile: dict, console):
     tbl.add_row("Target roles", "\n".join(t.get("roles", [])) or "—")
     tbl.add_row("Level",        t.get("level", "—"))
 
+    asp = profile.get("aspirations", {})
+    if asp.get("track"):
+        tbl.add_row("Track", asp["track"])
+    if asp.get("direction"):
+        direction_preview = asp["direction"].strip().splitlines()[0][:80]
+        tbl.add_row("Direction", direction_preview)
+    if asp.get("company_types"):
+        tbl.add_row("Drawn to", "\n".join(asp["company_types"]))
+
+    pref = profile.get("preferences", {})
+    pref_parts = []
+    if pref.get("company_stage"):
+        pref_parts.append(f"stage: {', '.join(pref['company_stage'])}")
+    if pref.get("work_style"):
+        pref_parts.append(f"style: {pref['work_style']}")
+    if pref_parts:
+        tbl.add_row("Preferences", "\n".join(pref_parts))
+
     dbs = profile.get("deal_breakers", [])
     tbl.add_row("Deal-breakers", ("\n".join(dbs)) if dbs else "[dim]none set[/dim]")
 
@@ -222,9 +261,12 @@ def _collect_preferences(console, Q_STYLE) -> dict:
         "  personal rules — things Claude can't reliably infer.\n"
     )
 
+    # ── Hard filters ─────────────────────────────────────────────────────────
+    console.print("  [bold]Hard filters[/bold]  [dim]— these disqualify or cap a role's score[/dim]\n")
+
     target_roles = questionary.text(
         "  Target roles:",
-        instruction="(comma-separated — be aspirational, not just your current title)",
+        instruction="(be aspirational — what you're going for, not just where you've been)",
         style=Q_STYLE,
     ).ask() or ""
 
@@ -247,42 +289,106 @@ def _collect_preferences(console, Q_STYLE) -> dict:
 
     deal_breakers = questionary.text(
         "  Deal-breakers:",
-        instruction="(comma-separated hard no's — roles matching these will be skipped)",
+        instruction="(hard no's — roles matching any of these score ≤30 regardless of fit)",
         style=Q_STYLE,
     ).ask() or ""
 
     salary_floor = questionary.text(
         "  Minimum salary (USD, numbers only):",
-        instruction="(e.g. 200000 — leave blank to let Claude estimate)",
+        instruction="(hard floor — leave blank to let Claude estimate from seniority)",
         style=Q_STYLE,
     ).ask() or ""
 
-    green_flags = questionary.text(
-        "  What excites you? (optional):",
-        instruction="(role / company types you'd love — comma-separated)",
+    # ── Aspirations ───────────────────────────────────────────────────────────
+    console.print()
+    console.print("  [bold]Aspirations[/bold]  [dim]— where you're headed, not just where you've been[/dim]\n")
+
+    track = questionary.select(
+        "  Career track:",
+        choices=[
+            questionary.Choice("IC-focused  (Staff / Principal / Distinguished)", value="ic"),
+            questionary.Choice("Management  (Director / VP / C-suite)", value="management"),
+            questionary.Choice("Flexible — open to both", value="flexible"),
+        ],
+        style=Q_STYLE,
+    ).ask() or "flexible"
+
+    direction = questionary.text(
+        "  Career direction (optional):",
+        instruction="(2-3 sentences — where you want to go and why)",
+        style=Q_STYLE,
+    ).ask() or ""
+
+    company_types = questionary.text(
+        "  Company types you're drawn to (optional):",
+        instruction="(e.g. AI-native startup, enterprise SaaS with applied science team)",
+        style=Q_STYLE,
+    ).ask() or ""
+
+    # ── Soft preferences ──────────────────────────────────────────────────────
+    console.print()
+    console.print("  [bold]Soft preferences[/bold]  [dim]— these adjust ranking, not hard-filter[/dim]\n")
+
+    company_stage = questionary.checkbox(
+        "  Company stage (select all that appeal):",
+        choices=["Seed / Series A", "Growth (Series B–D)", "Late-stage / pre-IPO", "Public / enterprise"],
+        style=Q_STYLE,
+    ).ask() or []
+
+    industry_targets = questionary.text(
+        "  Industries you want to move toward (optional):",
+        instruction="(may differ from your past — comma-separated)",
+        style=Q_STYLE,
+    ).ask() or ""
+
+    work_style = questionary.select(
+        "  Work style preference:",
+        choices=[
+            "Deep IC / individual focus",
+            "Cross-functional leadership",
+            "Player-coach (both)",
+            "No preference",
+        ],
+        style=Q_STYLE,
+    ).ask() or "No preference"
+
+    comp_target = questionary.text(
+        "  Target total comp (USD, optional):",
+        instruction="(aspirational — separate from your hard floor)",
         style=Q_STYLE,
     ).ask() or ""
 
     calibration = questionary.text(
-        "  Scoring calibration notes (optional):",
-        instruction="(e.g. 'Staff-level scope despite Senior title')",
+        "  Scoring calibration (optional):",
+        instruction="(e.g. 'Staff scope despite Senior title — weight impact over title')",
         style=Q_STYLE,
     ).ask() or ""
 
     return {
-        "target_roles":      [r.strip() for r in target_roles.split(",")    if r.strip()],
+        # hard filters
+        "target_roles":      [r.strip() for r in target_roles.split(",")      if r.strip()],
         "work_mode":         work_mode,
         "relocation_cities": [c.strip() for c in relocation_cities.split(",") if c.strip()],
-        "deal_breakers":     [d.strip() for d in deal_breakers.split(",")   if d.strip()],
+        "deal_breakers":     [d.strip() for d in deal_breakers.split(",")     if d.strip()],
         "salary_floor":      salary_floor.replace(",", "").replace("$", "").strip(),
-        "green_flags":       [g.strip() for g in green_flags.split(",")     if g.strip()],
+        # aspirations
+        "track":             track,
+        "direction":         direction.strip(),
+        "company_types":     [t.strip() for t in company_types.split(",")     if t.strip()],
+        # soft preferences
+        "company_stage":     company_stage,
+        "industry_targets":  [i.strip() for i in industry_targets.split(",") if i.strip()],
+        "work_style":        work_style,
+        "comp_target":       comp_target.replace(",", "").replace("$", "").strip(),
         "calibration":       calibration.strip(),
     }
 
 
 def _format_user_context(prefs: dict) -> str:
-    """Format collected preferences into a block Claude can use during extraction."""
-    lines = ["--- USER-PROVIDED PREFERENCES (override inferred values) ---"]
+    """Format collected preferences into a structured block Claude ingests during extraction."""
+    lines = ["--- USER-PROVIDED PREFERENCES (override inferred values) ---", ""]
+
+    lines.append("# Hard filters")
     if prefs.get("target_roles"):
         lines.append(f"Target roles: {', '.join(prefs['target_roles'])}")
     lines.append(f"Work mode: {prefs.get('work_mode', 'No preference')}")
@@ -291,13 +397,35 @@ def _format_user_context(prefs: dict) -> str:
     else:
         lines.append("Open to relocation: no")
     if prefs.get("deal_breakers"):
-        lines.append(f"Deal-breakers: {', '.join(prefs['deal_breakers'])}")
+        lines.append(f"Deal-breakers (cap score ≤30 if matched): {', '.join(prefs['deal_breakers'])}")
     if prefs.get("salary_floor"):
-        lines.append(f"Salary floor: ${prefs['salary_floor']}")
-    if prefs.get("green_flags"):
-        lines.append(f"Green flags (things I'd love): {', '.join(prefs['green_flags'])}")
+        lines.append(f"Salary floor (hard): ${prefs['salary_floor']}")
+
+    lines.append("")
+    lines.append("# Aspirations")
+    if prefs.get("track"):
+        lines.append(f"Career track: {prefs['track']}")
+    if prefs.get("direction"):
+        lines.append(f"Career direction: {prefs['direction']}")
+    if prefs.get("company_types"):
+        lines.append(f"Drawn to company types: {', '.join(prefs['company_types'])}")
+
+    lines.append("")
+    lines.append("# Soft preferences (adjust ranking, not hard filters)")
+    if prefs.get("company_stage"):
+        lines.append(f"Company stage preference: {', '.join(prefs['company_stage'])}")
+    if prefs.get("industry_targets"):
+        lines.append(f"Industries to move toward: {', '.join(prefs['industry_targets'])}")
+    if prefs.get("work_style"):
+        lines.append(f"Work style: {prefs['work_style']}")
+    if prefs.get("comp_target"):
+        lines.append(f"Total comp target: ${prefs['comp_target']}")
+
     if prefs.get("calibration"):
-        lines.append(f"Scoring calibration: {prefs['calibration']}")
+        lines.append("")
+        lines.append(f"# Scoring calibration")
+        lines.append(prefs["calibration"])
+
     return "\n".join(lines)
 
 
@@ -467,7 +595,9 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
             choices=[
                 questionary.Choice("Save profile", value="save"),
                 questionary.Choice("Edit target roles & level", value="roles"),
+                questionary.Choice("Edit aspirations & career direction", value="asp"),
                 questionary.Choice("Edit deal-breakers", value="dbs"),
+                questionary.Choice("Edit soft preferences", value="prefs"),
                 questionary.Choice("Edit green flags", value="gf"),
                 questionary.Choice("Edit salary floor", value="salary"),
                 questionary.Choice("Edit scoring notes", value="notes"),
@@ -483,11 +613,11 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
             t = profile.setdefault("target", {})
             current_roles = ", ".join(t.get("roles", []))
             current_level = t.get("level", "")
-            console.print(
-                "  [dim]Roles: comma-separated.  e.g. Staff PM, Principal PM, Director of Product[/dim]\n"
-            )
             new_roles = questionary.text(
-                "  Target roles:", default=current_roles, style=Q_STYLE
+                "  Target roles:",
+                default=current_roles,
+                instruction="(comma-separated aspirational titles)",
+                style=Q_STYLE,
             ).ask()
             if new_roles:
                 t["roles"] = [r.strip() for r in new_roles.split(",") if r.strip()]
@@ -501,11 +631,41 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
             if new_level:
                 t["level"] = new_level
 
+        elif action == "asp":
+            asp = profile.setdefault("aspirations", {})
+            new_track = questionary.select(
+                "  Career track:",
+                choices=[
+                    questionary.Choice("IC-focused", value="ic"),
+                    questionary.Choice("Management", value="management"),
+                    questionary.Choice("Flexible — open to both", value="flexible"),
+                ],
+                default=asp.get("track", "flexible"),
+                style=Q_STYLE,
+            ).ask()
+            if new_track:
+                asp["track"] = new_track
+            new_dir = questionary.text(
+                "  Career direction:",
+                default=(asp.get("direction") or "").strip(),
+                instruction="(2-3 sentences — where you want to go and why)",
+                style=Q_STYLE,
+            ).ask()
+            if new_dir is not None:
+                asp["direction"] = new_dir.strip()
+            new_co = questionary.text(
+                "  Company types drawn to:",
+                default=", ".join(asp.get("company_types") or []),
+                instruction="(comma-separated, e.g. AI-native startup, enterprise SaaS)",
+                style=Q_STYLE,
+            ).ask()
+            if new_co is not None:
+                asp["company_types"] = [c.strip() for c in new_co.split(",") if c.strip()]
+
         elif action == "dbs":
             current = ", ".join(profile.get("deal_breakers", []))
             console.print(
-                "  [dim]Hard no's — roles matching these will be filtered out.[/dim]\n"
-                "  [dim]e.g. no equity, on-site 5 days/week, no AI/ML component[/dim]\n"
+                "  [dim]Hard no's — any match caps the role score at ≤30.[/dim]\n"
             )
             new_val = questionary.text(
                 "  Deal-breakers:", default=current, style=Q_STYLE
@@ -515,11 +675,42 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
                     d.strip() for d in new_val.split(",") if d.strip()
                 ]
 
+        elif action == "prefs":
+            pref = profile.setdefault("preferences", {})
+            new_stage = questionary.checkbox(
+                "  Company stage (select all that appeal):",
+                choices=["Seed / Series A", "Growth (Series B–D)", "Late-stage / pre-IPO", "Public / enterprise"],
+                default=pref.get("company_stage") or [],
+                style=Q_STYLE,
+            ).ask()
+            if new_stage is not None:
+                pref["company_stage"] = new_stage
+            new_ws = questionary.select(
+                "  Work style:",
+                choices=[
+                    "Deep IC / individual focus",
+                    "Cross-functional leadership",
+                    "Player-coach (both)",
+                    "No preference",
+                ],
+                default=pref.get("work_style", "No preference"),
+                style=Q_STYLE,
+            ).ask()
+            if new_ws:
+                pref["work_style"] = new_ws
+            new_ind = questionary.text(
+                "  Industries to move toward:",
+                default=", ".join(pref.get("industry_targets") or []),
+                instruction="(may differ from past — comma-separated)",
+                style=Q_STYLE,
+            ).ask()
+            if new_ind is not None:
+                pref["industry_targets"] = [i.strip() for i in new_ind.split(",") if i.strip()]
+
         elif action == "gf":
             current = ", ".join(profile.get("green_flags", []))
             console.print(
-                "  [dim]Role / company types you'd love — boosts score when matched.[/dim]\n"
-                "  [dim]e.g. AI-native platform teams, companies with applied science orgs[/dim]\n"
+                "  [dim]Role / company signals that boost your score when matched.[/dim]\n"
             )
             new_val = questionary.text(
                 "  Green flags:", default=current, style=Q_STYLE
@@ -545,7 +736,6 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
         elif action == "notes":
             current = (profile.get("notes") or "").strip()
             console.print(
-                "  [dim]Calibration notes help Claude score edge cases correctly.[/dim]\n"
                 "  [dim]e.g. 'Title understates scope — weight impact over title level.'[/dim]\n"
             )
             new_val = questionary.text(

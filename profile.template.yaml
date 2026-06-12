@@ -14,14 +14,39 @@ candidate:
     - "New York City"
 
 target:
-  roles:                            # list your target job titles
+  roles:                            # aspirational titles — be ambitious, not just historical
     - "Staff PM"
     - "Principal PM"
     - "Director of Product"
   level: "staff"                    # ic / senior / staff / director / vp / c-suite
-  industries:                       # preferred domains (used in scoring)
-    - "AI/ML"
+  industries:                       # inferred from background
+
+aspirations:
+  track: "flexible"                 # ic / management / flexible
+  direction: |
+    Two or three sentences about where you want to go and why — forward-looking,
+    not a summary of your resume. E.g. "Moving from Senior PM at DocuSign toward
+    a Staff/Principal IC role at an AI-native company where I can own 0-1 product
+    strategy, work closely with ML researchers, and build for enterprise scale."
+  company_types:                    # company archetypes you're drawn to
+    - "AI-native startup with applied science team"
+    - "Enterprise SaaS with clear AI roadmap"
+  avoid_company_types:              # soft avoids — hard no's go in deal_breakers
+    - "pure consulting / services"
+
+preferences:                        # soft signals — adjust ranking, don't hard-filter
+  company_stage:                    # seed / series-a / growth / public
+    - "growth"
+    - "public"
+  company_size: null                # "startup (<200)" / "mid-size (200-2000)" / "enterprise (2000+)"
+  industry_targets:                 # industries to move toward (may differ from past)
+    - "AI/ML Platform"
     - "Developer Tools"
+  industry_avoid: []                # soft avoids
+  comp_target_usd: null             # aspirational total comp (vs salary_floor_usd which is hard)
+  work_style: "Cross-functional leadership"
+                                    # "Deep IC / individual focus" / "Cross-functional leadership"
+                                    # "Player-coach (both)" / null
 
 scoring:
   apply_threshold: 75               # score >= this → "apply" verdict
