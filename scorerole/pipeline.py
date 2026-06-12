@@ -216,6 +216,18 @@ def main():
         help="Optional: LinkedIn export PDF, bio, or any supplementary text file.",
     )
 
+    # config subcommand
+    config_p = subparsers.add_parser(
+        "config",
+        help="Open a config file in your editor (profile or env).",
+    )
+    config_p.add_argument(
+        "file", nargs="?", default="profile",
+        choices=["profile", "env"],
+        help="'profile' opens ~/.job_pipeline/profile.yaml (default); "
+             "'env' opens .env in the project directory.",
+    )
+
     # reset subcommand
     reset_p = subparsers.add_parser("reset", help="Clear seen-role state so all roles reprocess.")
     reset_p.add_argument("--force", action="store_true", help="Skip confirmation prompt.")
@@ -225,7 +237,22 @@ def main():
 
     args = parser.parse_args()
 
-    if args.command == "init":
+    if args.command == "config":
+        from .init_cmd import open_in_editor
+        if args.file == "env":
+            target = Path(__file__).parent.parent / ".env"
+            if not target.exists():
+                example = Path(__file__).parent.parent / ".env.example"
+                print(f".env not found — opening .env.example instead.")
+                target = example
+        else:
+            target = DATA_DIR / "profile.yaml"
+            if not target.exists():
+                print("No profile found. Run `scorerole init` first.")
+                raise SystemExit(1)
+        open_in_editor(target)
+
+    elif args.command == "init":
         _validate_env(require_gmail=False)   # only needs API key to parse resume
         from .init_cmd import run_init
         run_init(
