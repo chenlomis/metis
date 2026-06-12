@@ -33,7 +33,7 @@ Each role gets a **score (0–100)**, a **verdict** (apply / consider / skip), l
 | **LinkedIn job alerts** | Source of job listings | Set up daily email alerts for your target role on LinkedIn (see setup below) |
 | **Your resume** (PDF, DOCX, or TXT) | Used by `scorerole init` to build your profile | Your existing resume file |
 
-**Operating environment:** macOS or Linux recommended. Python 3.11+ required. Windows (WSL2) should work but is untested.
+**Operating environment:** macOS or Linux recommended. **Python 3.11+ required** — macOS ships with Python 3.9 which is too old. Install 3.11+ via [Homebrew](https://brew.sh): `brew install python@3.11`. Windows (WSL2) should work but is untested.
 
 ---
 
@@ -43,8 +43,8 @@ Each role gets a **score (0–100)**, a **verdict** (apply / consider / skip), l
 # 1. Clone and install
 git clone https://github.com/YOUR_USERNAME/scorerole
 cd scorerole
-python3 -m venv venv && source venv/bin/activate
-pip install --upgrade pip   # requires pip ≥ 21.3
+python3.11 -m venv venv && source venv/bin/activate   # macOS ships 3.9; use 3.11+
+pip install --upgrade pip
 pip install -e .
 
 # 2. Configure credentials
