@@ -214,19 +214,27 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
     resume_path = None
     if resume_path_arg:
         p = Path(resume_path_arg).expanduser().resolve()
-        resume_path = p if p.exists() else None
-        if not resume_path:
+        if not p.exists():
             console.print(f"  [red]File not found:[/red] {resume_path_arg}\n")
+        elif p.is_dir():
+            console.print(f"  [red]That's a folder, not a file:[/red] {resume_path_arg}\n")
+        else:
+            resume_path = p
 
     while not resume_path:
         raw = questionary.path("  Path to your resume:").ask()
         if raw is None:
             sys.exit(0)
         p = Path(raw).expanduser().resolve()
-        if p.exists():
-            resume_path = p
-        else:
+        if not p.exists():
             console.print("  [red]File not found — try again.[/red]\n")
+        elif p.is_dir():
+            console.print(
+                "  [red]That's a folder, not a file.[/red]  "
+                "Drag your resume [italic]file[/italic] into the terminal window.\n"
+            )
+        else:
+            resume_path = p
 
     resume_text = _parse_file(resume_path)
     console.print(f"\n  [green]✓[/green]  Parsed [bold]{len(resume_text):,}[/bold] characters"
@@ -260,10 +268,15 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
             if raw is None or raw.strip() == "":
                 break
             p = Path(raw).expanduser().resolve()
-            if p.exists():
-                supp_path = p
-            else:
+            if not p.exists():
                 console.print("  [red]File not found — try again, or press Enter to skip.[/red]\n")
+            elif p.is_dir():
+                console.print(
+                    "  [red]That's a folder, not a file.[/red]  "
+                    "Drag the LinkedIn PDF file into the terminal, or press Enter to skip.\n"
+                )
+            else:
+                supp_path = p
 
         if supp_path:
             supp_text = _parse_file(supp_path)

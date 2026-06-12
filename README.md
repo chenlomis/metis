@@ -181,6 +181,27 @@ profile.template.yaml   # Starter profile template
 
 ---
 
+## Troubleshooting
+
+**`ERROR: Invalid requirement: '#'` during `pip install -e .`**
+
+This happens when a stale `scorerole.egg-info/` directory exists from a previous install (e.g. after `git pull` updating the dependency list). Delete it and reinstall:
+
+```bash
+rm -rf scorerole.egg-info
+pip install -e .
+```
+
+**`scorerole: command not found` after install**
+
+Make sure your virtualenv is activated: `source venv/bin/activate`. Then try `pip install -e .` again.
+
+**`FileNotFoundError: No profile found — run scorerole init`**
+
+Run `scorerole init` to create your scoring profile before running the digest.
+
+---
+
 ## Contributing
 
 Bug reports and PRs welcome. Please open an issue before large changes.
