@@ -40,66 +40,6 @@ def _candidate_name() -> str:
     return "the candidate"
 
 
-# kept for any external callers that imported the symbol directly
-_LOMIS_PROFILE_FALLBACK = """
-CANDIDATE: Lomis Chen — Senior PM actively searching (as of May 2026)
-TARGET LEVEL: Staff PM / Principal PM / Lead PM (~10 years experience)
-LOCATION: Redmond WA; SF Bay Area also doable; remote-friendly preferred
-
-SCORE CALIBRATION:
-For Staff/Principal PM roles, 75-82% IS a strong match — these are senior roles
-with genuinely high bars. Do not inflate. 75%+ = apply. 87%+ is exceptional and rare.
-
-TITLE-LEVEL RULE (apply before scoring):
-If the role title does NOT contain Staff / Lead / Principal / Director / Head / VP / GM,
-deduct 10 points from the raw score. A "Senior PM" title at any company is a lateral or
-downward move from the target level. Account for that deduction explicitly.
-
-CORE STRENGTHS:
-- Full-stack AI product ownership: both ML architecture AND UX (rare for PM)
-- Production-grade model evaluation: precision/recall, 2,000+ custom models
-- 0-1 builder: Custom Extractions (DocuSign), Suggested Fields, FieldsExplorer, Azure CLI
-- AI-assisted product work: Suggested Fields, AZ Next, autoplacing — counts as AI even if
-  not cutting-edge research; "claudifying" is less differentiating now but still a real fit
-- Enterprise SaaS: fine to work with; monetization through enterprise deals
-- Agentic AI, human-in-the-loop design, trust in AI outputs
-- Developer platform: Azure CLI, external APIs, PyCon China, SDK/API/CLI, OSS-adjacent
-- Data analytics, search, recsys, personalization — strong ML-driven UX/ranking background
-- Healthcare AI academic grounding (Deep Learning for Healthcare, UIUC)
-- Microsoft cultural fluency (4+ years PM2), cross-geo: US, UK, IST
-- A/B experimentation, beta program architecture, influence without authority
-- ECE background (BS) + Apple hardware/software codesign (iPhone 7 RF) — hardware-adjacent
-  roles are not out of reach; pure hardware without PM/software angle is a stretch
-
-AI/ML SCOPE — preference, not requirement:
-  AI/ML is broad. Fits include: frontier research labs (OpenAI, DeepMind, xAI, Mistral),
-  data/analytics platforms, search, agentic workflows, orchestration, dev tooling/platform.
-  Does NOT have to be AI-first if the role has strong technical depth and 0-1 scope.
-
-EXPERIENCE:
-- DocuSign (Jan 2022 – Mar 2026): Senior PM, Navigator AI Platform
-- Microsoft (Sept 2017 – Dec 2021): PM2 (later rebranded from Program Manager), Azure CLI + Azure ML
-- Apple Intern (Jan–May 2016): RF Design Engineering, iPhone 7 WiFi (hardware/software codesign)
-- HydroOne Intern (Sept 2014–May 2015): Telecom Engineering, 300+ station designs
-- GE Hitachi Junior PM (May 2013–Jan 2014): QC procedures, ~$1M revenue impact
-
-GREEN FLAGS: lean team, genuine 0-1, AI/ML or data/search/agentic/dev-tooling, technical
-             depth, mission-driven, strategic ownership, async/remote, SF Bay Area also OK,
-             frontier research labs, SaaS with real product depth
-
-YELLOW FLAGS: large org matrix, GTM-heavy, heavy evangelism, on-site requirements,
-              hardware-adjacent without software/PM angle, pure AI-assisted SaaS with no
-              deeper ML or platform scope, regulatory/compliance/privacy focus
-
-RED FLAGS: pure execution/order-taking, cybersecurity/IT systems (no product angle),
-           KTLO/maintenance, loudest-voice culture, bureaucracy, TPM roles,
-           T&S with no AI or product angle
-
-GAPS (not red flags — evaluate on merit, not auto-skip):
-  fintech infra, mortgage servicing, HPC infra, pure growth PM, DevRel primary
-"""
-
-
 def _build_score_system() -> str:
     """Build the scoring system prompt, loading the profile fresh each call."""
     profile = _load_profile()

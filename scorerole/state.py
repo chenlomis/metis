@@ -6,16 +6,6 @@ LOG_DIR   = DATA_DIR / "logs"
 SEEN_FILE = DATA_DIR / "seen_ids.json"
 
 
-def load_seen_ids() -> set:
-    if SEEN_FILE.exists():
-        return set(json.loads(SEEN_FILE.read_text()))
-    return set()
-
-
-def save_seen_ids(ids: set):
-    SEEN_FILE.write_text(json.dumps(list(ids)))
-
-
 def _role_hash(title: str, company: str) -> str:
     """Stable 12-char hash from normalized title + company."""
     key = re.sub(r"[^a-z0-9]", "", (title + company).lower())

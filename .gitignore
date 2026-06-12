@@ -7,6 +7,8 @@ __pycache__/
 # Environment — never commit secrets
 .env
 .env.*
+# ...except the example template (no real values)
+!.env.example
 
 # Pipeline runtime data
 ~/.job_pipeline/

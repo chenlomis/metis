@@ -26,6 +26,34 @@ from .score import score_jobs_batch, rank_jobs
 from .render import render_html, send_digest
 
 # ---------------------------------------------------------------------------
+# Startup validation — fail fast with a clear message if config is missing
+# ---------------------------------------------------------------------------
+def _validate_env(require_gmail: bool = True):
+    errors = []
+    if not ANTHROPIC_API_KEY:
+        errors.append(
+            "  ANTHROPIC_API_KEY is not set.\n"
+            "  Get one at https://console.anthropic.com (separate from Claude.ai subscription)."
+        )
+    if require_gmail:
+        if not GMAIL_ADDRESS:
+            errors.append(
+                "  GMAIL_ADDRESS is not set.\n"
+                "  Add your Gmail address to .env."
+            )
+        if not GMAIL_APP_PASSWORD:
+            errors.append(
+                "  GMAIL_APP_PASSWORD is not set.\n"
+                "  Generate one at https://myaccount.google.com/apppasswords (requires 2FA)."
+            )
+    if errors:
+        print("❌  Missing required configuration:\n")
+        for e in errors:
+            print(e)
+        print("\nSee .env.example for all required fields.")
+        raise SystemExit(1)
+
+# ---------------------------------------------------------------------------
 # Logging — set up after DATA_DIR is imported
 # ---------------------------------------------------------------------------
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -198,9 +226,7 @@ def main():
     args = parser.parse_args()
 
     if args.command == "init":
-        if not ANTHROPIC_API_KEY:
-            print("❌  ANTHROPIC_API_KEY not set. Add it to .env or export it in your shell.")
-            raise SystemExit(1)
+        _validate_env(require_gmail=False)   # only needs API key to parse resume
         from .init_cmd import run_init
         run_init(
             api_key=ANTHROPIC_API_KEY,
@@ -219,10 +245,12 @@ def main():
         print("State cleared — all roles will re-score on the next run.")
 
     elif args.command == "debug":
+        _validate_env()
         debug_emails()
 
     else:
         # Default: run the digest pipeline
+        _validate_env()
         since_dt = _parse_lookback(args.lookback)
         if not since_dt:
             print(f"Could not parse --lookback '{args.lookback}'. "
