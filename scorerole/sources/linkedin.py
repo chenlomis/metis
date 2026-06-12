@@ -4,9 +4,9 @@ from bs4 import BeautifulSoup
 
 log = logging.getLogger(__name__)
 
-# Credentials read from env — set by pipeline.py at startup
+# Credentials read from env — set via .env (see .env.example)
 import os
-GMAIL_ADDRESS      = os.getenv("GMAIL_ADDRESS", "chenlomis@gmail.com")
+GMAIL_ADDRESS      = os.getenv("GMAIL_ADDRESS", "")
 GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
 
 # All three LinkedIn alert senders, nested OR for IMAP:

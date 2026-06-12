@@ -1,0 +1,78 @@
+# scorerole candidate profile template
+# ─────────────────────────────────────────────────────────────────────────────
+# Copy this to ~/.job_pipeline/profile.yaml and fill it in, OR run:
+#   scorerole init --resume path/to/resume.pdf
+# to have Claude generate it from your resume automatically.
+# ─────────────────────────────────────────────────────────────────────────────
+
+candidate:
+  name: "Your Name"
+  email: "you@example.com"
+  location: "City, State"           # e.g. "San Francisco, CA"
+  open_to_remote: true
+  open_to_relocation:               # list cities/regions, or leave empty
+    - "New York City"
+
+target:
+  roles:                            # list your target job titles
+    - "Staff PM"
+    - "Principal PM"
+    - "Director of Product"
+  level: "staff"                    # ic / senior / staff / director / vp / c-suite
+  industries:                       # preferred domains (used in scoring)
+    - "AI/ML"
+    - "Developer Tools"
+
+scoring:
+  apply_threshold: 75               # score >= this → "apply" verdict
+  consider_threshold: 55            # score >= this → "consider" verdict
+  level_mismatch_deduction: 10      # deducted when title doesn't match target level
+
+experience:
+  - company: "Most Recent Company"
+    title: "Your Title"
+    dates: "Jan 2022 – Present"
+    highlights:
+      - "Key accomplishment or responsibility"
+      - "Another highlight with specific impact"
+  - company: "Previous Company"
+    title: "Your Title"
+    dates: "2018 – 2022"
+    highlights:
+      - "Key accomplishment"
+
+education:
+  - institution: "University Name"
+    degree: "BS Computer Science"
+    year: 2018
+
+strengths:                          # 5-10 concrete strengths with evidence
+  - "0-1 product builds — launched X from zero, resulting in Y"
+  - "ML/data background — [specific experience]"
+  - "Cross-functional leadership — [specific scale/scope]"
+
+green_flags:                        # role/company types you'd love
+  - "lean team, genuine 0-1 scope"
+  - "technical depth with real product ownership"
+  - "mission-driven, async/remote"
+
+yellow_flags:                       # things to watch out for
+  - "large org matrix without clear ownership"
+  - "GTM-heavy without product depth"
+
+red_flags:                          # hard blockers
+  - "pure execution/order-taking"
+  - "no product ownership"
+
+deal_breakers:                      # absolute no's — will not apply
+  - "no equity"
+  - "on-site 5 days/week"
+
+salary_floor_usd: 150000            # set to null if not applicable
+
+notes: |
+  Add any custom scoring calibration notes here.
+  For example:
+  - Level rules (e.g. deduct X points for titles below target level)
+  - Domain preferences or caveats
+  - Anything Claude should weigh specially when evaluating fit

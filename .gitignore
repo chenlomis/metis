@@ -14,6 +14,9 @@ __pycache__/
 # Build output
 *.html
 
+# Private / personal integrations — not part of the OSS package
+private/
+
 # macOS
 .DS_Store
 

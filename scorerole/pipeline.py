@@ -9,10 +9,10 @@ load_dotenv(override=True)
 # Config
 # ---------------------------------------------------------------------------
 ANTHROPIC_API_KEY  = os.getenv("ANTHROPIC_API_KEY")
-GMAIL_ADDRESS      = os.getenv("GMAIL_ADDRESS", "chenlomis@gmail.com")
+GMAIL_ADDRESS      = os.getenv("GMAIL_ADDRESS", "")
 GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
-RECIPIENT_EMAIL    = os.getenv("RECIPIENT_EMAIL", "chenlomis@gmail.com")
-MODEL              = "claude-sonnet-4-6"
+RECIPIENT_EMAIL    = os.getenv("RECIPIENT_EMAIL", GMAIL_ADDRESS)
+MODEL              = os.getenv("MODEL", "claude-sonnet-4-6")
 MAX_JOBS_PER_RUN   = int(os.getenv("MAX_JOBS_PER_RUN", "20"))
 DEFAULT_LOOKBACK   = "3d"
 
@@ -58,10 +58,10 @@ def _parse_lookback(value: str) -> datetime.datetime | None:
 # ---------------------------------------------------------------------------
 
 def run_pipeline(since_dt: datetime.datetime):
-    """Fetch emails since since_dt, score unseen roles, and deliver digest.
+    """Fetch LinkedIn alert emails since since_dt, score unseen roles, deliver digest.
 
-    seen_roles.json (14-day TTL) is the sole dedup gate — roles already
-    scored within the last 14 days are skipped automatically.
+    seen_roles.json (14-day TTL) is the dedup gate — roles already scored
+    within the last 14 days are skipped automatically.
     """
     log.info(f"=== Pipeline run starting — lookback since {since_dt.strftime('%Y-%m-%d')} ===")
     client     = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -131,16 +131,6 @@ def run_pipeline(since_dt: datetime.datetime):
     consider_n = sum(1 for j in all_jobs if j["eval"].get("verdict") == "consider")
     log.info(f"=== Done — {len(all_jobs)} evaluated: {apply_n} apply, {consider_n} consider ===")
 
-    # Stage 5: Hand off to career-ops
-    # Records qualifying roles in pipeline.md (deduped), then opens each LinkedIn
-    # job page authenticated, detects Apply type, skips Easy Apply, and pre-fills
-    # contact + EEO fields on external ATS pages.
-    from .careerops import write_pipeline_queue, open_and_prefill, _qualifying
-    write_pipeline_queue(all_jobs)          # record-keeping / dedup
-    to_open = _qualifying(all_jobs)         # all score≥60 this run (not just new)
-    if to_open:
-        open_and_prefill(to_open)
-
 
 def debug_emails():
     """Dump the most recent LinkedIn email body to ~/.job_pipeline/debug_email.txt."""
@@ -173,27 +163,52 @@ def main():
 
     parser = argparse.ArgumentParser(
         prog="scorerole",
-        description="Personalized job alert digest — fetches, scores, and delivers "
+        description="AI-powered job alert digest — filters, scores, and delivers "
                     "only what's worth your time.",
     )
     parser.add_argument(
         "--lookback", default=DEFAULT_LOOKBACK, metavar="DURATION",
-        help=f"How far back to fetch emails. Examples: '3d', '7d', '2026-05-10'. "
+        help=f"How far back to fetch emails. Accepts: '3d', '7d', '2026-05-10'. "
              f"Default: {DEFAULT_LOOKBACK}",
     )
 
     subparsers = parser.add_subparsers(dest="command")
 
+    # init subcommand
+    init_p = subparsers.add_parser(
+        "init",
+        help="Create your scoring profile from a resume (PDF, DOCX, or TXT).",
+    )
+    init_p.add_argument(
+        "--resume", metavar="PATH",
+        help="Path to your resume (PDF, DOCX, or TXT). Prompted interactively if omitted.",
+    )
+    init_p.add_argument(
+        "--supplement", metavar="PATH",
+        help="Optional: LinkedIn export PDF, bio, or any supplementary text file.",
+    )
+
     # reset subcommand
-    reset_p = subparsers.add_parser("reset", help="Clear state so all roles reprocess")
-    reset_p.add_argument("--force", action="store_true", help="Skip confirmation prompt")
+    reset_p = subparsers.add_parser("reset", help="Clear seen-role state so all roles reprocess.")
+    reset_p.add_argument("--force", action="store_true", help="Skip confirmation prompt.")
 
     # debug subcommand
-    subparsers.add_parser("debug", help="Dump the most recent LinkedIn email body for inspection")
+    subparsers.add_parser("debug", help="Dump the most recent LinkedIn alert email for inspection.")
 
     args = parser.parse_args()
 
-    if args.command == "reset":
+    if args.command == "init":
+        if not ANTHROPIC_API_KEY:
+            print("❌  ANTHROPIC_API_KEY not set. Add it to .env or export it in your shell.")
+            raise SystemExit(1)
+        from .init_cmd import run_init
+        run_init(
+            api_key=ANTHROPIC_API_KEY,
+            resume_path_arg=getattr(args, "resume", "") or "",
+            supplement_path_arg=getattr(args, "supplement", "") or "",
+        )
+
+    elif args.command == "reset":
         if not args.force:
             ans = input("Clear all state? Roles will be re-scored on the next run. [y/N] ")
             if ans.strip().lower() != "y":
@@ -207,6 +222,7 @@ def main():
         debug_emails()
 
     else:
+        # Default: run the digest pipeline
         since_dt = _parse_lookback(args.lookback)
         if not since_dt:
             print(f"Could not parse --lookback '{args.lookback}'. "

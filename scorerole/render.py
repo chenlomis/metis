@@ -6,9 +6,9 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 # Credentials needed by send_digest — read from env directly
-GMAIL_ADDRESS      = os.getenv("GMAIL_ADDRESS", "chenlomis@gmail.com")
+GMAIL_ADDRESS      = os.getenv("GMAIL_ADDRESS", "")
 GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
-RECIPIENT_EMAIL    = os.getenv("RECIPIENT_EMAIL", "chenlomis@gmail.com")
+RECIPIENT_EMAIL    = os.getenv("RECIPIENT_EMAIL", GMAIL_ADDRESS)
 
 _FONT     = "-apple-system, 'Helvetica Neue', Arial, sans-serif"
 _C_MUTED  = "#888780"
@@ -298,7 +298,7 @@ def build_digest_html(jobs: list[dict], run_date: str) -> str:
         f'<table width="100%" cellpadding="0" cellspacing="0" border="0">'
         f'<tr><td height="1" style="background:{_C_BORDER};font-size:0;line-height:0">&nbsp;</td></tr>'
         f'<tr><td style="padding-top:12px;font-size:11px;color:#aaa;text-align:center;'
-        f'font-family:{_FONT}">Lomis job alert pipeline &middot; powered by Claude Sonnet 4.6 '
+        f'font-family:{_FONT}">scorerole &middot; powered by Claude '
         f'&middot; {len(jobs)} roles evaluated</td></tr>'
         f'</table>'
     )
