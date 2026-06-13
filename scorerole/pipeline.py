@@ -14,7 +14,7 @@ GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
 RECIPIENT_EMAIL    = os.getenv("RECIPIENT_EMAIL", GMAIL_ADDRESS)
 MODEL              = os.getenv("MODEL", "claude-sonnet-4-6")
 MAX_JOBS_PER_RUN   = int(os.getenv("MAX_JOBS_PER_RUN", "20"))
-DEFAULT_LOOKBACK   = "3d"
+DEFAULT_LOOKBACK   = os.getenv("DEFAULT_LOOKBACK", "3d")
 
 from .state import (
     DATA_DIR, LOG_DIR, SEEN_FILE,
@@ -232,7 +232,8 @@ def main():
 
     # reset subcommand
     reset_p = subparsers.add_parser("reset", help="Clear seen-role state so all roles reprocess.")
-    reset_p.add_argument("--force", action="store_true", help="Skip confirmation prompt.")
+    reset_p.add_argument("--force",   action="store_true", help="Skip confirmation prompt.")
+    reset_p.add_argument("--profile", action="store_true", help="Also delete your scoring profile (~/.job_pipeline/profile.yaml).")
 
     # debug subcommand
     subparsers.add_parser("debug", help="Dump the most recent LinkedIn alert email for inspection.")
@@ -264,14 +265,28 @@ def main():
         )
 
     elif args.command == "reset":
+        targets = [SEEN_FILE, DATA_DIR / "seen_roles.json"]
+        if args.profile:
+            targets.append(DATA_DIR / "profile.yaml")
+
+        existing = [p for p in targets if p.exists()]
+        if not existing:
+            print("Nothing to reset — no state files found.")
+            return
+
+        names = ", ".join(p.name for p in existing)
         if not args.force:
-            ans = input("Clear all state? Roles will be re-scored on the next run. [y/N] ")
+            suffix = " + your scoring profile" if args.profile else ""
+            ans = input(f"Clear dedup state{suffix}? This cannot be undone. [y/N] ")
             if ans.strip().lower() != "y":
                 print("Aborted.")
                 return
-        SEEN_FILE.unlink(missing_ok=True)
-        (DATA_DIR / "seen_roles.json").unlink(missing_ok=True)
-        print("State cleared — all roles will re-score on the next run.")
+
+        for p in existing:
+            p.unlink(missing_ok=True)
+        print(f"Cleared: {names}")
+        if args.profile and (DATA_DIR / "profile.yaml") in existing:
+            print("Run `scorerole init` to rebuild your scoring profile.")
 
     elif args.command == "debug":
         _validate_env()

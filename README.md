@@ -117,6 +117,7 @@ See [`profile.template.yaml`](./profile.template.yaml) for the full schema with 
 | `scorerole init --supplement path/to/linkedin.pdf` | Add a LinkedIn export or supplementary file |
 | `scorerole reset` | Clear dedup state so all roles reprocess on next run |
 | `scorerole reset --force` | Same, no confirmation prompt |
+| `scorerole reset --profile` | Also delete your scoring profile — useful for a clean start |
 | `scorerole debug` | Dump the most recent LinkedIn alert email to `~/.job_pipeline/debug_email.txt` |
 
 ---

@@ -481,12 +481,70 @@ def _format_user_context(prefs: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Preferences → profile mapper  (used by "Update prefs" re-run mode)
+# ---------------------------------------------------------------------------
+
+def _apply_prefs_to_profile(profile: dict, prefs: dict) -> None:
+    """Apply collected preferences to an existing profile dict in-place.
+
+    Preserves Claude-extracted fields (experience, strengths, flags).
+    Overwrites goals, filters, and soft preferences from fresh user input.
+    """
+    # Target roles
+    if prefs.get("target_roles"):
+        profile.setdefault("target", {})["roles"] = prefs["target_roles"]
+
+    # Work mode → open_to_remote
+    work_mode = prefs.get("work_mode") or []
+    if work_mode:
+        profile.setdefault("candidate", {})["open_to_remote"] = "Remote-first" in work_mode
+
+    # Relocation
+    reloc = prefs.get("relocation_cities")
+    if reloc is not None:
+        profile.setdefault("candidate", {})["open_to_relocation"] = reloc
+
+    # Deal-breakers (replace, not append)
+    if prefs.get("deal_breakers") is not None:
+        profile["deal_breakers"] = prefs["deal_breakers"]
+
+    # Salary floor
+    if prefs.get("salary_floor"):
+        try:
+            profile["salary_floor_usd"] = int(prefs["salary_floor"])
+        except (ValueError, TypeError):
+            pass
+
+    # Aspirations
+    asp = profile.setdefault("aspirations", {})
+    if prefs.get("track"):
+        asp["track"] = prefs["track"]
+    if prefs.get("direction"):
+        asp["direction"] = prefs["direction"]
+    if prefs.get("company_types"):
+        asp["company_types"] = prefs["company_types"]
+
+    # Soft preferences
+    pref = profile.setdefault("preferences", {})
+    if prefs.get("company_stage") is not None:
+        pref["company_stage"] = prefs["company_stage"]
+    if prefs.get("industry_targets") is not None:
+        pref["industry_targets"] = prefs["industry_targets"]
+
+    # Extra calibration notes — append to existing
+    if prefs.get("calibration"):
+        existing = (profile.get("notes") or "").strip()
+        profile["notes"] = (existing + "\n\n" + prefs["calibration"]).strip() if existing else prefs["calibration"]
+
+
+# ---------------------------------------------------------------------------
 # Main wizard
 # ---------------------------------------------------------------------------
 
 def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str = ""):
     try:
         import questionary
+        import yaml
         from questionary import Style as QStyle
         from rich.console import Console
         from rich.panel import Panel
@@ -507,153 +565,230 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
 
     console = Console()
 
-    # ── Welcome ──────────────────────────────────────────────────────────────
-    console.print()
-    console.print(Panel(
-        "[bold]Let's build your scorerole profile![/bold]\n\n"
-        "The more context you provide, the better we can filter and\n"
-        "score roles against your background.\n\n"
-        "  [dim]1.[/dim]  Point us to your resume (PDF, DOCX, or TXT)\n"
-        "  [dim]2.[/dim]  Optionally add your LinkedIn profile\n"
-        "  [dim]3.[/dim]  Tell us about your aspirations, deal-breakers,\n"
-        "       and preferences\n"
-        "  [dim]4.[/dim]  Review and tweak the final profile before saving\n\n"
-        "[dim]It takes about 2 mins.  Run `scorerole init` anytime to update.[/dim]",
-        border_style="dim",
-        box=rich_box.ROUNDED,
-        padding=(1, 3),
-    ))
+    # State — full wizard populates these; quick/update_prefs paths set them directly.
+    full_text       = ""
+    user_context    = ""
+    profile         = None
+    skip_extraction = False
 
-    # ── Step 1: Resume ───────────────────────────────────────────────────────
-    console.print()
-    console.print("[dim]  Step 1 of 4 — Resume[/dim]")
-    console.print("[dim]  ─────────────────────[/dim]")
-    console.print()
-    console.print(
-        "  [dim]Accepted: PDF, DOCX, TXT/MD"
-        "   ·   Tip: drag the file into this window to paste its path.[/dim]\n"
-    )
+    # ── Detect existing profile ───────────────────────────────────────────────
+    if PROFILE_PATH.exists() and not resume_path_arg:
+        import datetime as _dt
+        try:
+            existing = yaml.safe_load(PROFILE_PATH.read_text()) or {}
+        except Exception:
+            existing = {}
 
-    resume_path = None
-    if resume_path_arg:
-        p = Path(resume_path_arg).expanduser().resolve()
-        if not p.exists():
-            console.print(f"  [red]File not found:[/red] {resume_path_arg}\n")
-        elif p.is_dir():
-            console.print(f"  [red]That's a folder, not a file:[/red] {resume_path_arg}\n")
-        else:
-            resume_path = p
+        mod_time  = _dt.datetime.fromtimestamp(PROFILE_PATH.stat().st_mtime).strftime("%b %d, %Y")
+        cand_name = (existing.get("candidate") or {}).get("name", "")
 
-    while not resume_path:
-        raw = questionary.path("  Path to your resume:", style=Q_STYLE).ask()
-        if raw is None:
-            sys.exit(0)
-        raw = raw.strip().strip("\"'").replace("\\ ", " ")
-        p = Path(raw).expanduser().resolve()
-        if not p.exists():
-            console.print("  [red]File not found — try again.[/red]\n")
-        elif p.is_dir():
-            console.print(
-                "  [red]That's a folder, not a file.[/red]  "
-                "Drag your resume [italic]file[/italic] into the terminal window.\n"
-            )
-        else:
-            resume_path = p
-
-    resume_text = _parse_file(resume_path)
-    console.print(
-        f"\n  [green]✓[/green]  {resume_path.name} "
-        f"[dim]({len(resume_text):,} characters)[/dim]\n"
-    )
-
-    # ── Step 2: LinkedIn (optional) ──────────────────────────────────────────
-    console.print("[dim]  Step 2 of 4 — LinkedIn (optional)[/dim]")
-    console.print("[dim]  ──────────────────────────────────[/dim]")
-    console.print()
-    console.print(
-        "  Your LinkedIn profile often contains skills, endorsements, and role details\n"
-        "  that resumes leave out. Adding it improves how well your profile matches roles.\n"
-    )
-
-    wants_linkedin = questionary.confirm(
-        "  Add your LinkedIn profile?", default=False, style=Q_STYLE
-    ).ask()
-
-    supp_text = ""
-    if wants_linkedin:
         console.print()
-        console.print("  [dim]Export: LinkedIn → Me → Settings & Privacy → Data Privacy[/dim]")
-        console.print("  [dim]        → Get a copy of your data → Profile → Request archive[/dim]")
-        console.print("  [dim]        LinkedIn emails you a link (usually within minutes).[/dim]\n")
+        console.print(Panel(
+            "[bold]Profile found[/bold]  [dim]· last updated " + mod_time + "[/dim]"
+            + (f"\n  {cand_name}" if cand_name else ""),
+            border_style="green",
+            box=rich_box.ROUNDED,
+            padding=(1, 3),
+        ))
+        console.print()
 
-        supp_path = None
-        while supp_path is None:
-            raw = questionary.path("  Path to LinkedIn PDF (Enter to skip):", style=Q_STYLE).ask()
-            if raw is None or raw.strip() == "":
-                break
+        mode = questionary.select(
+            "  What do you want to do?",
+            choices=[
+                questionary.Choice("Quick edit     — jump to review menu, no re-extraction",       value="quick"),
+                questionary.Choice("Update prefs   — re-answer Step 3, apply to existing profile", value="update_prefs"),
+                questionary.Choice("Full re-run    — new resume, start from scratch",               value="full"),
+                questionary.Choice("Clear profile  — delete and start fresh",                       value="clear"),
+            ],
+            style=Q_STYLE,
+        ).ask()
+
+        if mode is None:
+            sys.exit(0)
+
+        if mode == "clear":
+            confirmed = questionary.confirm(
+                "  Delete your profile? This cannot be undone.", default=False, style=Q_STYLE
+            ).ask()
+            if not confirmed:
+                sys.exit(0)
+            PROFILE_PATH.unlink()
+            console.print("  [dim]Profile cleared.[/dim]")
+            # fall through to full wizard
+
+        elif mode == "quick":
+            profile = existing
+            skip_extraction = True
+            console.print()
+            _show_profile(profile, console)
+            console.print()
+
+        elif mode == "update_prefs":
+            profile = existing
+            skip_extraction = True
+            console.print()
+            console.print(
+                "  [dim]Experience, strengths, and flags from your last extraction are preserved.[/dim]\n"
+                "  [dim]Your new answers below update goals, deal-breakers, and preferences.[/dim]"
+            )
+            console.print()
+            _show_profile(profile, console)
+            prefs = _collect_preferences(console, Q_STYLE)
+            user_context = _format_user_context(prefs)
+            _apply_prefs_to_profile(profile, prefs)
+            console.print()
+            _show_profile(profile, console)
+            console.print()
+
+        # mode == "full" falls through to the full wizard below
+
+    if not skip_extraction:
+        # ── Welcome ──────────────────────────────────────────────────────────
+        console.print()
+        console.print(Panel(
+            "[bold]Let's build your scorerole profile![/bold]\n\n"
+            "The more context you provide, the better we can filter and\n"
+            "score roles against your background.\n\n"
+            "  [dim]1.[/dim]  Point us to your resume (PDF, DOCX, or TXT)\n"
+            "  [dim]2.[/dim]  Optionally add your LinkedIn profile\n"
+            "  [dim]3.[/dim]  Tell us about your aspirations, deal-breakers,\n"
+            "       and preferences\n"
+            "  [dim]4.[/dim]  Review and tweak the final profile before saving\n\n"
+            "[dim]It takes about 2 mins.  Run `scorerole init` anytime to update.[/dim]",
+            border_style="dim",
+            box=rich_box.ROUNDED,
+            padding=(1, 3),
+        ))
+
+        # ── Step 1: Resume ───────────────────────────────────────────────────
+        console.print()
+        console.print("[dim]  Step 1 of 4 — Resume[/dim]")
+        console.print("[dim]  ─────────────────────[/dim]")
+        console.print()
+        console.print(
+            "  [dim]Accepted: PDF, DOCX, TXT/MD"
+            "   ·   Tip: drag the file into this window to paste its path.[/dim]\n"
+        )
+
+        resume_path = None
+        if resume_path_arg:
+            p = Path(resume_path_arg).expanduser().resolve()
+            if not p.exists():
+                console.print(f"  [red]File not found:[/red] {resume_path_arg}\n")
+            elif p.is_dir():
+                console.print(f"  [red]That's a folder, not a file:[/red] {resume_path_arg}\n")
+            else:
+                resume_path = p
+
+        while not resume_path:
+            raw = questionary.path("  Path to your resume:", style=Q_STYLE).ask()
+            if raw is None:
+                sys.exit(0)
             raw = raw.strip().strip("\"'").replace("\\ ", " ")
             p = Path(raw).expanduser().resolve()
             if not p.exists():
-                console.print("  [red]File not found — try again, or press Enter to skip.[/red]\n")
+                console.print("  [red]File not found — try again.[/red]\n")
             elif p.is_dir():
                 console.print(
                     "  [red]That's a folder, not a file.[/red]  "
-                    "Drag the LinkedIn PDF into the terminal, or press Enter to skip.\n"
+                    "Drag your resume [italic]file[/italic] into the terminal window.\n"
                 )
             else:
-                supp_path = p
+                resume_path = p
 
-        if supp_path:
-            supp_text = _parse_file(supp_path)
-            console.print(
-                f"\n  [green]✓[/green]  {supp_path.name} "
-                f"[dim]({len(supp_text):,} characters)[/dim]"
-            )
+        resume_text = _parse_file(resume_path)
+        console.print(
+            f"\n  [green]✓[/green]  {resume_path.name} "
+            f"[dim]({len(resume_text):,} characters)[/dim]\n"
+        )
 
-    full_text = resume_text
-    if supp_text:
-        full_text += "\n\n--- SUPPLEMENTARY PROFILE ---\n\n" + supp_text
+        # ── Step 2: LinkedIn (optional) ──────────────────────────────────────
+        console.print("[dim]  Step 2 of 4 — LinkedIn (optional)[/dim]")
+        console.print("[dim]  ──────────────────────────────────[/dim]")
+        console.print()
+        console.print(
+            "  Your LinkedIn profile often contains skills, endorsements, and role details\n"
+            "  that resumes leave out. Adding it improves how well your profile matches roles.\n"
+        )
 
-    # ── Step 3: Preferences ──────────────────────────────────────────────────
-    prefs = _collect_preferences(console, Q_STYLE)
-    user_context = _format_user_context(prefs)
+        wants_linkedin = questionary.confirm(
+            "  Add your LinkedIn profile?", default=False, style=Q_STYLE
+        ).ask()
 
-    # ── Step 4: Extract + review ─────────────────────────────────────────────
-    console.print()
-    console.print("[dim]  Step 4 of 4 — Build your profile[/dim]")
-    console.print("[dim]  ──────────────────────────────────[/dim]")
-    console.print()
+        supp_text = ""
+        if wants_linkedin:
+            console.print()
+            console.print("  [dim]Export: LinkedIn → Me → Settings & Privacy → Data Privacy[/dim]")
+            console.print("  [dim]        → Get a copy of your data → Profile → Request archive[/dim]")
+            console.print("  [dim]        LinkedIn emails you a link (usually within minutes).[/dim]\n")
 
-    try:
-        import yaml
-    except ImportError:
-        sys.exit("❌  pyyaml not installed. Run: pip install pyyaml")
+            supp_path = None
+            while supp_path is None:
+                raw = questionary.path("  Path to LinkedIn PDF (Enter to skip):", style=Q_STYLE).ask()
+                if raw is None or raw.strip() == "":
+                    break
+                raw = raw.strip().strip("\"'").replace("\\ ", " ")
+                p = Path(raw).expanduser().resolve()
+                if not p.exists():
+                    console.print("  [red]File not found — try again, or press Enter to skip.[/red]\n")
+                elif p.is_dir():
+                    console.print(
+                        "  [red]That's a folder, not a file.[/red]  "
+                        "Drag the LinkedIn PDF into the terminal, or press Enter to skip.\n"
+                    )
+                else:
+                    supp_path = p
 
-    with console.status("  [dim]Analyzing your resume with Claude…[/dim]"):
-        try:
-            profile = _extract_with_claude(api_key, full_text, user_context)
-        except Exception as e:
-            sys.exit(f"\n❌  Extraction failed: {e}")
+            if supp_path:
+                supp_text = _parse_file(supp_path)
+                console.print(
+                    f"\n  [green]✓[/green]  {supp_path.name} "
+                    f"[dim]({len(supp_text):,} characters)[/dim]"
+                )
 
-    console.print("  [green]✓[/green]  Extraction complete\n")
-    _show_profile(profile, console)
-    console.print()
+        full_text = resume_text
+        if supp_text:
+            full_text += "\n\n--- SUPPLEMENTARY PROFILE ---\n\n" + supp_text
+
+        # ── Step 3: Preferences ──────────────────────────────────────────────
+        prefs = _collect_preferences(console, Q_STYLE)
+        user_context = _format_user_context(prefs)
+
+        # ── Step 4: Extract ──────────────────────────────────────────────────
+        console.print()
+        console.print("[dim]  Step 4 of 4 — Build your profile[/dim]")
+        console.print("[dim]  ──────────────────────────────────[/dim]")
+        console.print()
+
+        with console.status("  [dim]Analyzing your resume with Claude…[/dim]"):
+            try:
+                profile = _extract_with_claude(api_key, full_text, user_context)
+            except Exception as e:
+                sys.exit(f"\n❌  Extraction failed: {e}")
+
+        console.print("  [green]✓[/green]  Extraction complete\n")
+        _show_profile(profile, console)
+        console.print()
 
     # ── Review loop ───────────────────────────────────────────────────────────
+    # "Re-run extraction" only offered when we have a resume to work with.
+    review_choices = [
+        questionary.Choice("Save profile",                 value="save"),
+        questionary.Choice("Edit target roles & level",    value="roles"),
+        questionary.Choice("Edit aspirations & direction", value="asp"),
+        questionary.Choice("Edit deal-breakers",           value="dbs"),
+        questionary.Choice("Edit soft preferences",        value="prefs"),
+        questionary.Choice("Edit green flags",             value="gf"),
+        questionary.Choice("Edit salary floor",            value="salary"),
+        questionary.Choice("Edit scoring notes",           value="notes"),
+    ]
+    if full_text:
+        review_choices.append(questionary.Choice("Re-run extraction", value="rerun"))
+
     while True:
         action = questionary.select(
             "  Looks good?",
-            choices=[
-                questionary.Choice("Save profile",                        value="save"),
-                questionary.Choice("Edit target roles & level",           value="roles"),
-                questionary.Choice("Edit aspirations & direction",        value="asp"),
-                questionary.Choice("Edit deal-breakers",                  value="dbs"),
-                questionary.Choice("Edit soft preferences",               value="prefs"),
-                questionary.Choice("Edit green flags",                    value="gf"),
-                questionary.Choice("Edit salary floor",                   value="salary"),
-                questionary.Choice("Edit scoring notes",                  value="notes"),
-                questionary.Choice("Re-run extraction",                   value="rerun"),
-            ],
+            choices=review_choices,
             style=Q_STYLE,
         ).ask()
 
