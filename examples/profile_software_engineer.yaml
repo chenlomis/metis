@@ -1,0 +1,115 @@
+# scorerole test profile — Staff Software Engineer
+# Usage: cp examples/profile_software_engineer.yaml ~/.job_pipeline/profile.yaml
+
+candidate:
+  name: "Alex Kim"
+  email: "alex.kim@example.com"
+  location: "Seattle, WA"
+  open_to_remote: true
+  open_to_relocation:
+    - "San Francisco Bay Area"
+    - "New York / NYC"
+
+target:
+  roles:
+    - "Staff Software Engineer"
+    - "Principal Engineer"
+    - "Engineering Lead"
+  level: "staff"
+  industries:
+    - "AI/ML Infrastructure"
+    - "Developer Tools"
+    - "FinTech"
+
+aspirations:
+  track: "ic"
+  direction: >
+    Targeting Staff/Principal IC roles in AI infrastructure or ML platform engineering.
+    Six years building distributed payment systems at Stripe has given me deep systems
+    intuition; ready to pivot toward companies where the core product is developer tooling
+    or AI infrastructure. Want to own technical architecture decisions end-to-end, not
+    execute on someone else's.
+  company_types:
+    - "AI-native infrastructure or tooling company"
+    - "Developer tools startup (Series B–D)"
+    - "Enterprise platform with a strong eng culture"
+  avoid_company_types:
+    - "pure consumer product without systems depth"
+    - "outsourcing or staff-augmentation firms"
+
+preferences:
+  company_stage:
+    - "Growth (Series B–D)"
+    - "Late-stage / pre-IPO"
+  company_size: null
+  industry_targets:
+    - "AI/ML Platform"
+    - "Developer Tools"
+    - "Infrastructure / Cloud"
+  industry_avoid:
+    - "pure e-commerce"
+  base_salary_target_usd: 280000
+
+scoring:
+  apply_threshold: 75
+  consider_threshold: 55
+  level_mismatch_deduction: 10
+
+experience:
+  - company: "Stripe"
+    title: "Senior Software Engineer"
+    dates: "Jan 2021 – Present"
+    highlights:
+      - "Built core routing layer for Stripe's global payment network, handling 2M+ TPS at peak"
+      - "Led 3-engineer team to redesign idempotency system, reducing duplicate charge incidents by 94%"
+      - "Designed and shipped Stripe's internal SDK generation pipeline (Golang, Rust, 12 SDKs)"
+      - "Mentored 4 junior engineers; 2 promoted to Senior during tenure"
+  - company: "Amazon Web Services"
+    title: "Software Development Engineer II"
+    dates: "Jun 2018 – Dec 2020"
+    highlights:
+      - "Shipped core features for AWS Step Functions distributed workflow service (Java, DynamoDB)"
+      - "Reduced cold-start latency 40% for Lambda@Edge through JVM optimization initiative"
+      - "On-call for service with 99.999% SLA across 12 regions"
+
+education:
+  - institution: "Carnegie Mellon University"
+    degree: "BS Computer Science, Concentration in Systems"
+    year: 2018
+
+strengths:
+  - "Distributed systems depth — designed payment routing at 2M TPS; deep experience with consistency models and failure modes"
+  - "Cross-language production experience — Go, Rust, Java, Python in production; built multi-language SDK generation pipeline"
+  - "Technical leadership without direct reports — led 3-engineer sub-team at Stripe; drove architecture decisions end-to-end"
+  - "ML-adjacent — built data pipelines feeding Stripe Radar fraud models; familiar with feature stores and model serving"
+  - "AWS depth — 5 years; understands tradeoffs in distributed systems, managed services, and cost at scale"
+
+green_flags:
+  - "role owns infrastructure or platform layer, not just product features"
+  - "small team with genuine technical autonomy"
+  - "company is an AI tooling or ML infrastructure company"
+  - "strong eng culture — RFC or design doc practice"
+  - "open source codebase or developer-facing product"
+
+yellow_flags:
+  - "no direct ML model training experience — infrastructure/systems background, not research"
+  - "management track experience limited to informal mentoring, no direct reports"
+
+red_flags:
+  - "purely frontend or product engineering role without systems depth"
+  - "no growth trajectory to Staff/Principal IC level"
+
+deal_breakers:
+  - "no equity"
+  - "mandatory full on-site (5 days/week)"
+  - "outsourcing or staff augmentation"
+  - "no technical ownership — pure execution role"
+
+salary_floor_usd: 200000
+
+notes: |
+  Strong distributed systems background from Stripe payment infrastructure.
+  Targeting Staff/Principal IC track only — roles below L6 equivalent score <=30.
+  Weight ML platform/infrastructure experience heavily: this is the pivot direction.
+  AWS/cloud depth is table stakes, not a differentiator alone.
+  Deduct 15 points for roles requiring people management as primary responsibility.

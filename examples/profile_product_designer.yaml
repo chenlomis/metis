@@ -1,0 +1,118 @@
+# scorerole test profile — Staff Product Designer
+# Usage: cp examples/profile_product_designer.yaml ~/.job_pipeline/profile.yaml
+
+candidate:
+  name: "Jordan Rivera"
+  email: "jordan.rivera@example.com"
+  location: "San Francisco, CA"
+  open_to_remote: true
+  open_to_relocation: []
+
+target:
+  roles:
+    - "Staff Product Designer"
+    - "Senior Product Designer"
+    - "Design Lead"
+    - "Head of Design"
+  level: "staff"
+  industries:
+    - "AI Tools"
+    - "Developer Tools"
+    - "Creative Tools"
+
+aspirations:
+  track: "flexible"
+  direction: >
+    Looking to move from execution-heavy IC work at Figma toward a role where I can
+    shape product strategy alongside design execution. Five years building design systems
+    and AI-powered features has given me a strong POV on how AI transforms creative
+    workflows. Want to join an AI-native company where design is central to the product
+    — not an afterthought bolted on after engineering ships.
+  company_types:
+    - "AI-native product company where design is core to the product"
+    - "Early-to-growth stage company building creative, knowledge, or developer tools"
+    - "B2B SaaS with a design-forward culture and strong eng partnership"
+  avoid_company_types:
+    - "agency or client services"
+    - "company where design is purely cosmetic execution with no strategic input"
+
+preferences:
+  company_stage:
+    - "Seed / Series A"
+    - "Growth (Series B–D)"
+  company_size: null
+  industry_targets:
+    - "AI/ML Tools"
+    - "Creative Tools"
+    - "Developer Tools"
+  industry_avoid:
+    - "enterprise HR software"
+    - "pure e-commerce"
+  base_salary_target_usd: 200000
+
+scoring:
+  apply_threshold: 70
+  consider_threshold: 50
+  level_mismatch_deduction: 10
+
+experience:
+  - company: "Figma"
+    title: "Product Designer, AI Features"
+    dates: "Mar 2022 – Present"
+    highlights:
+      - "Designed end-to-end UX for Figma AI suite (auto-layout suggestions, design-to-code), reaching 2M users in 6 months"
+      - "Led design system audit and v1→v2 migration; reduced design-to-dev handoff time by 35%"
+      - "Embedded with ML research team to translate model capabilities into user-facing interaction patterns"
+      - "Shipped Figma Plugin API redesign used by 8,000+ plugin developers worldwide"
+  - company: "Dropbox"
+    title: "Product Designer"
+    dates: "Jul 2019 – Feb 2022"
+    highlights:
+      - "Designed Dropbox Paper real-time collaboration features: live cursors, presence indicators, comments"
+      - "Ran 20+ generative research sessions to inform Dropbox's AI-powered search strategy"
+      - "Created and maintained Dropbox's internal design system (500+ components, used by 30+ designers)"
+
+education:
+  - institution: "Rhode Island School of Design (RISD)"
+    degree: "BFA Graphic Design"
+    year: 2019
+
+strengths:
+  - "AI product design — shipped Figma AI suite to 2M users; deep experience translating ML capabilities into intuitive UX without requiring users to understand the model"
+  - "Design systems at scale — built and owned 500+ component systems at both Dropbox and Figma; know the cost of inconsistency"
+  - "ML research partnership — embedded with ML researchers at Figma; bridges design and science without needing a PM in the middle"
+  - "Developer-facing product design — Figma Plugin API redesign for 8k+ developer users; understands technical user needs and mental models"
+  - "Generative user research — 20+ sessions; strong instinct for turning qualitative insight into product direction"
+  - "High-fidelity prototyping — Figma (expert), Framer, ProtoPie; can communicate motion and interaction at the same fidelity as shipped product"
+
+green_flags:
+  - "role involves designing AI-powered features or intelligent workflows"
+  - "small design team where I'd have broad ownership, not a pixel-pusher"
+  - "company builds tools for creators, developers, or knowledge workers"
+  - "product-led company where design drives strategy alongside engineering"
+  - "founding or early design hire — shape culture, not just ship screens"
+
+yellow_flags:
+  - "limited management experience — mentored 2 junior designers informally but no direct reports"
+  - "no native mobile portfolio — primarily web/desktop product; iOS/Android patterns are learnable but not proven"
+
+red_flags:
+  - "design role that is purely executional with no input on product direction or strategy"
+  - "company without a functioning design team or practice"
+
+deal_breakers:
+  - "agency or client services work"
+  - "non-technical consumer products with no AI or creative component"
+  - "sole designer role at a company with 200+ employees (no design culture)"
+  - "full on-site requirement"
+
+salary_floor_usd: 160000
+
+notes: |
+  Strong AI product design background from Figma. Targeting Staff/Senior Designer or
+  Design Lead at AI-native companies. Role must have genuine design ownership and
+  strategic input — not just execution.
+  Weight AI/creative/developer tools heavily. Discount roles at traditional enterprise
+  software unless there is a clear AI product surface.
+  Sole-designer roles at large companies (200+ employees) score <=20.
+  Deduct 10 points for roles with no design system or tooling responsibility.

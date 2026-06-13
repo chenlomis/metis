@@ -223,9 +223,11 @@ def _show_profile(profile: dict, console):
     asp = profile.get("aspirations", {})
     pref = profile.get("preferences", {})
 
-    tbl = Table(show_header=False, box=None, padding=(0, 2))
-    tbl.add_column(style="dim", min_width=16)
-    tbl.add_column()
+    # expand=True makes the table fill available panel width so text wraps
+    # instead of overflowing the terminal edge.
+    tbl = Table(show_header=False, box=None, padding=(0, 2), expand=True)
+    tbl.add_column(style="dim", min_width=16, no_wrap=True, max_width=22)
+    tbl.add_column(overflow="fold")
 
     tbl.add_row("Name",     c.get("name", "—"))
     tbl.add_row("Location", c.get("location", "—"))
@@ -595,10 +597,10 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
         mode = questionary.select(
             "  What do you want to do?",
             choices=[
-                questionary.Choice("Quick edit     — jump to review menu, no re-extraction",       value="quick"),
-                questionary.Choice("Update prefs   — re-answer Step 3, apply to existing profile", value="update_prefs"),
-                questionary.Choice("Full re-run    — new resume, start from scratch",               value="full"),
-                questionary.Choice("Clear profile  — delete and start fresh",                       value="clear"),
+                questionary.Choice("Quick edit    — jump to review menu, no re-extraction",        value="quick"),
+                questionary.Choice("Update prefs  — re-answer Step 3, apply to existing profile",  value="update_prefs"),
+                questionary.Choice("Open in editor — edit profile.yaml directly",                  value="editor"),
+                questionary.Choice("Start fresh   — new resume, full re-extraction",               value="full"),
             ],
             style=Q_STYLE,
         ).ask()
@@ -606,15 +608,9 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
         if mode is None:
             sys.exit(0)
 
-        if mode == "clear":
-            confirmed = questionary.confirm(
-                "  Delete your profile? This cannot be undone.", default=False, style=Q_STYLE
-            ).ask()
-            if not confirmed:
-                sys.exit(0)
-            PROFILE_PATH.unlink()
-            console.print("  [dim]Profile cleared.[/dim]")
-            # fall through to full wizard
+        if mode == "editor":
+            open_in_editor(PROFILE_PATH)
+            sys.exit(0)
 
         elif mode == "quick":
             profile = existing
@@ -773,19 +769,24 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
     # ── Review loop ───────────────────────────────────────────────────────────
     # "Re-run extraction" only offered when we have a resume to work with.
     review_choices = [
-        questionary.Choice("Save profile",                 value="save"),
-        questionary.Choice("Edit target roles & level",    value="roles"),
-        questionary.Choice("Edit aspirations & direction", value="asp"),
-        questionary.Choice("Edit deal-breakers",           value="dbs"),
-        questionary.Choice("Edit soft preferences",        value="prefs"),
-        questionary.Choice("Edit green flags",             value="gf"),
-        questionary.Choice("Edit salary floor",            value="salary"),
-        questionary.Choice("Edit scoring notes",           value="notes"),
+        questionary.Choice("Save profile",                                          value="save"),
+        questionary.Separator("  ─────────────────────────────────────────────"),
+        questionary.Choice("  Target roles & level",                                value="roles"),
+        questionary.Choice("  Strengths",                                           value="strengths"),
+        questionary.Choice("  Aspirations & career goals",                          value="asp"),
+        questionary.Choice("  Deal-breakers",                                       value="dbs"),
+        questionary.Choice("  Minimum salary",                                      value="salary"),
+        questionary.Choice("  Nice-to-haves  (company stage, industry)",            value="prefs"),
+        questionary.Choice("  Boost signals  (green flags Claude watches for)",     value="gf"),
+        questionary.Choice("  AI instructions  (custom scoring guidance)",          value="notes"),
     ]
     if full_text:
-        review_choices.append(questionary.Choice("Re-run extraction", value="rerun"))
+        review_choices.append(questionary.Separator("  ─────────────────────────────────────────────"))
+        review_choices.append(questionary.Choice("  Re-run AI extraction",          value="rerun"))
 
     while True:
+        print()
+        print("  Arrow keys to navigate  ·  Enter to select  ·  Ctrl-C to cancel")
         action = questionary.select(
             "  Looks good?",
             choices=review_choices,
@@ -811,6 +812,17 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
             ).ask()
             if new_level:
                 t["level"] = new_level
+
+        elif action == "strengths":
+            print()
+            print("  List your key strengths — each on its own line (semicolons separate them).")
+            print("  Be specific: 'ML depth — trained 2k+ models, RLHF at DocuSign' beats 'ML skills'.")
+            current_strengths = "; ".join(profile.get("strengths", []))
+            new_val = questionary.text(
+                "  Strengths:", default=current_strengths, style=Q_STYLE
+            ).ask()
+            if new_val is not None:
+                profile["strengths"] = [s.strip() for s in new_val.split(";") if s.strip()]
 
         elif action == "asp":
             asp = profile.setdefault("aspirations", {})
@@ -840,6 +852,9 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
                 asp["company_types"] = [c.strip() for c in new_co.split(",") if c.strip()]
 
         elif action == "dbs":
+            print()
+            print("  Deal-breakers: absolute walk-away rules. Roles matching any of these score ≤30.")
+            print("  Comma-separated. E.g. no equity, on-site 5d/wk, no AI/ML product surface")
             new_val = questionary.text(
                 "  Deal-breakers:", default=", ".join(profile.get("deal_breakers", [])), style=Q_STYLE
             ).ask()
@@ -847,6 +862,8 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
                 profile["deal_breakers"] = [d.strip() for d in new_val.split(",") if d.strip()]
 
         elif action == "prefs":
+            print()
+            print("  Nice-to-haves: soft signals that nudge score up or down — don't disqualify.")
             pref = profile.setdefault("preferences", {})
             new_stage = questionary.checkbox(
                 "  Company stage:",
@@ -865,15 +882,20 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
                 pref["industry_targets"] = [i.strip() for i in new_ind.split(",") if i.strip()]
 
         elif action == "gf":
+            print()
+            print("  Boost signals: role/company signals that strongly increase a job's score.")
+            print("  E.g. 'lean team with 0-1 scope', 'AI-native company', 'technical product ownership'")
             new_val = questionary.text(
-                "  Green flags:", default=", ".join(profile.get("green_flags", [])), style=Q_STYLE
+                "  Boost signals:", default=", ".join(profile.get("green_flags", [])), style=Q_STYLE
             ).ask()
             if new_val is not None:
                 profile["green_flags"] = [g.strip() for g in new_val.split(",") if g.strip()]
 
         elif action == "salary":
+            print()
+            print("  Minimum salary: hard floor in USD. Roles below this score ≤30 regardless of fit.")
             current = str(profile.get("salary_floor_usd") or "")
-            new_val = questionary.text("  Min. base salary (USD):", default=current, style=Q_STYLE).ask()
+            new_val = questionary.text("  Minimum salary (USD):", default=current, style=Q_STYLE).ask()
             if new_val:
                 try:
                     profile["salary_floor_usd"] = int(new_val.replace(",", "").replace("$", ""))
@@ -881,8 +903,12 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
                     console.print("  [red]Could not parse — keeping current value.[/red]")
 
         elif action == "notes":
+            print()
+            print("  AI instructions: free-text guidance for the scoring model.")
+            print("  E.g. 'Staff-scope despite Senior title — weight scope over title'")
+            print("       'Deduct 15 pts for roles that require people management as primary duty'")
             new_val = questionary.text(
-                "  Scoring notes:", default=(profile.get("notes") or "").strip(), style=Q_STYLE
+                "  AI instructions:", default=(profile.get("notes") or "").strip(), style=Q_STYLE
             ).ask()
             if new_val is not None:
                 profile["notes"] = new_val.strip()
