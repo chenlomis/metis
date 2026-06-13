@@ -53,19 +53,8 @@ def _validate_env(require_gmail: bool = True):
         print("\nSee .env.example for all required fields.")
         raise SystemExit(1)
 
-# ---------------------------------------------------------------------------
-# Logging — set up after DATA_DIR is imported
-# ---------------------------------------------------------------------------
-LOG_DIR.mkdir(parents=True, exist_ok=True)
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)s  %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-    handlers=[
-        logging.FileHandler(LOG_DIR / f"{datetime.date.today()}.log"),
-        logging.StreamHandler(),
-    ],
-)
+# Module-level logger reference — handlers are wired up inside main()
+# so that importing pipeline doesn't create directories or touch the root logger.
 log = logging.getLogger(__name__)
 
 
@@ -188,6 +177,19 @@ def debug_emails():
 
 def main():
     import argparse
+
+    # Set up logging here (not at module level) so importing pipeline
+    # doesn't create directories or hijack the root logger.
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s  %(levelname)s  %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        handlers=[
+            logging.FileHandler(LOG_DIR / f"{datetime.date.today()}.log"),
+            logging.StreamHandler(),
+        ],
+    )
 
     parser = argparse.ArgumentParser(
         prog="scorerole",

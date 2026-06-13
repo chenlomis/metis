@@ -308,11 +308,13 @@ def _collect_hard_filters(Q_STYLE) -> dict:
 
     target_roles = questionary.text("  Target roles:", style=Q_STYLE).ask() or ""
 
-    work_mode = questionary.select(
+    print()
+    print("  Work mode: select all that apply  (leave blank = no preference)")
+    work_mode = questionary.checkbox(
         "  Work mode:",
-        choices=["Remote-first", "Hybrid OK", "On-site OK", "No preference"],
+        choices=["Remote-first", "Hybrid OK", "On-site OK"],
         style=Q_STYLE,
-    ).ask() or "No preference"
+    ).ask() or []
 
     print()
     print("  Relocation: leave blank = current location only")
@@ -391,18 +393,13 @@ def _collect_soft_preferences(Q_STYLE) -> dict:
     industry_targets = questionary.text("  Industries to move toward:", style=Q_STYLE).ask() or ""
 
     print()
-    print("  Target base salary: your aspirational number, leave blank to skip")
-    base_salary_target = questionary.text("  Target base salary (USD):", style=Q_STYLE).ask() or ""
-
-    print()
     print("  Anything else Claude should know? e.g. 'Staff-scope despite Senior title'")
     calibration = questionary.text("  Anything else:", style=Q_STYLE).ask() or ""
 
     return {
-        "company_stage":       company_stage,
-        "industry_targets":    [i.strip() for i in industry_targets.split(",") if i.strip()],
-        "base_salary_target":  base_salary_target.replace(",", "").replace("$", "").strip(),
-        "calibration":         calibration.strip(),
+        "company_stage":    company_stage,
+        "industry_targets": [i.strip() for i in industry_targets.split(",") if i.strip()],
+        "calibration":      calibration.strip(),
     }
 
 
@@ -418,9 +415,30 @@ def _collect_preferences(console, Q_STYLE) -> dict:
         "  and your personal rules — things Claude can't reliably infer.\n"
     )
 
-    hard   = _collect_hard_filters(Q_STYLE)
-    asp    = _collect_aspirations(Q_STYLE)
-    soft   = _collect_soft_preferences(Q_STYLE)
+    hard = _collect_hard_filters(Q_STYLE)
+    # ── Summary line after hard filters ─────────────────────────────────────
+    _roles_str = ", ".join(hard["target_roles"][:2]) + ("…" if len(hard["target_roles"]) > 2 else "")
+    _wm_str    = ", ".join(hard.get("work_mode") or []) or "no pref"
+    _sal_str   = f"  ·  ${hard['salary_floor']} floor" if hard.get("salary_floor") else ""
+    _db_str    = f"  ·  {len(hard['deal_breakers'])} deal-breaker{'s' if len(hard['deal_breakers']) != 1 else ''}" if hard.get("deal_breakers") else ""
+    print()
+    print(f"  ✓  Hard filters  ·  {_roles_str or '—'}  ·  {_wm_str}{_sal_str}{_db_str}")
+
+    asp = _collect_aspirations(Q_STYLE)
+    # ── Summary line after aspirations ──────────────────────────────────────
+    _track_label = {"ic": "IC track", "management": "Management track", "flexible": "Flexible"}.get(asp["track"], asp["track"])
+    _co_str = ", ".join(asp["company_types"][:2]) + ("…" if len(asp["company_types"]) > 2 else "") if asp["company_types"] else ""
+    print()
+    print(f"  ✓  Aspirations  ·  {_track_label}" + (f"  ·  {_co_str}" if _co_str else ""))
+
+    soft = _collect_soft_preferences(Q_STYLE)
+    # ── Summary line after soft preferences ─────────────────────────────────
+    _stage_str = ", ".join(soft["company_stage"]) if soft["company_stage"] else "any stage"
+    _ind_str   = ", ".join(soft["industry_targets"][:2]) + ("…" if len(soft["industry_targets"]) > 2 else "") if soft["industry_targets"] else ""
+    print()
+    print(f"  ✓  Preferences  ·  {_stage_str}" + (f"  ·  {_ind_str}" if _ind_str else ""))
+    print()
+
     return {**hard, **asp, **soft}
 
 
@@ -431,7 +449,8 @@ def _format_user_context(prefs: dict) -> str:
     lines.append("# Hard filters")
     if prefs.get("target_roles"):
         lines.append(f"Target roles: {', '.join(prefs['target_roles'])}")
-    lines.append(f"Work mode: {prefs.get('work_mode', 'No preference')}")
+    _wm = prefs.get("work_mode") or []
+    lines.append(f"Work mode: {', '.join(_wm) if _wm else 'no preference'}")
     reloc = prefs.get("relocation_cities") or []
     if reloc:
         lines.append(f"Open to relocation: yes — {', '.join(reloc)}")
@@ -455,8 +474,6 @@ def _format_user_context(prefs: dict) -> str:
         lines.append(f"Company stage: {', '.join(prefs['company_stage'])}")
     if prefs.get("industry_targets"):
         lines.append(f"Industries to move toward: {', '.join(prefs['industry_targets'])}")
-    if prefs.get("base_salary_target"):
-        lines.append(f"Target base salary: ${prefs['base_salary_target']}")
     if prefs.get("calibration"):
         lines += ["", "# Extra context", prefs["calibration"]]
 

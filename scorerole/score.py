@@ -44,6 +44,17 @@ def _build_score_system() -> str:
     """Build the scoring system prompt, loading the profile fresh each call."""
     profile = _load_profile()
     name = _candidate_name()
+
+    # Read scoring thresholds from profile.yaml; fall back to safe defaults.
+    apply_t, consider_t = 75, 55
+    try:
+        from .profile import load_profile_yaml
+        sc = (load_profile_yaml() or {}).get("scoring", {})
+        apply_t    = int(sc.get("apply_threshold",    apply_t))
+        consider_t = int(sc.get("consider_threshold", consider_t))
+    except Exception:
+        pass
+
     return f"""{profile}
 
 You are a job fit evaluator for {name}.
@@ -81,19 +92,13 @@ frictionPoints: 1 honest concern, same format. Use [] if no real friction.
 tags: Up to 4 highlight tags. "green" = clear JD↔background match, "amber" = caution or
       domain gap, "red" = hard blocker. ≤5 words each.
 
-Thresholds (calibrated for Staff/Principal PM, after title-level deduction):
-  score >= 75  →  apply
-  score 60-74  →  consider
-  score < 60   →  skipped
+Thresholds (from your profile.yaml scoring section):
+  score >= {apply_t}  →  apply
+  score {consider_t}–{apply_t - 1}  →  consider
+  score < {consider_t}   →  skipped
 
-Be honest. 75% IS strong at this level. Do not inflate.
+Be honest. {apply_t}% IS strong at this level. Do not inflate.
 Return ONLY valid JSON array — no markdown fences, no preamble."""
-
-
-# SCORE_SYSTEM kept as a module-level alias for any external callers,
-# but score_jobs_batch always calls _build_score_system() to pick up
-# the latest profile from disk.
-SCORE_SYSTEM = _build_score_system()
 
 
 def score_jobs_batch(client: anthropic.Anthropic, jobs: list[dict]) -> list[dict]:
