@@ -1,8 +1,10 @@
 # scorerole — Product Spec
 
-> Status: v0.1 — retroactively written from build history, updated June 2026.
-> For setup instructions see README.md. This document defines what the product
-> should do and how we know it's correct.
+> **LOCKED — v0.1 (June 2026) — tagged `spec-v0.1`**
+> This is the source of truth for what scorerole should do and how we know it's correct.
+> Code is checked against this spec, not the other way around.
+> Changes require explicit owner approval — do not edit as part of routine code changes.
+> For setup instructions see README.md.
 
 ---
 
