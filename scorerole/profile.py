@@ -39,12 +39,21 @@ def render_profile(data: dict) -> str:
     t  = data.get("target", {})
     sc = data.get("scoring", {})
 
-    name      = c.get("name", "Candidate")
-    location  = c.get("location", "")
-    remote    = "remote-friendly" if c.get("open_to_remote") else "on-site preferred"
-    reloc     = ", ".join(c.get("open_to_relocation", []))
-    level     = t.get("level", "")
-    roles     = ", ".join(t.get("roles", []))
+    name     = c.get("name", "Candidate")
+    location = c.get("location", "")
+
+    # Work mode: prefer the stored list (set by wizard); fall back to bool
+    work_mode_list = c.get("work_mode") or []
+    if work_mode_list:
+        remote = ", ".join(work_mode_list)
+    elif c.get("open_to_remote"):
+        remote = "remote-friendly"
+    else:
+        remote = "on-site preferred"
+
+    reloc      = ", ".join(c.get("open_to_relocation", []))
+    level      = t.get("level", "")
+    roles      = ", ".join(t.get("roles", []))
     industries = ", ".join(t.get("industries", []))
 
     apply_t    = sc.get("apply_threshold", 75)
@@ -60,6 +69,32 @@ def render_profile(data: dict) -> str:
         lines.append(f"OPEN TO RELOCATION: {reloc}")
     if industries:
         lines.append(f"PREFERRED INDUSTRIES: {industries}")
+
+    # Aspirations — track, direction, company types
+    asp = data.get("aspirations", {})
+    if asp:
+        lines += ["", "ASPIRATIONS:"]
+        if asp.get("track"):
+            lines.append(f"Track: {asp['track']}")
+        if asp.get("direction"):
+            lines.append(asp["direction"].strip())
+        if asp.get("company_types"):
+            lines.append(f"Drawn to: {', '.join(asp['company_types'])}")
+        if asp.get("avoid_company_types"):
+            lines.append(f"Avoid company types: {', '.join(asp['avoid_company_types'])}")
+
+    # Soft preferences — stage, industry nudges, aspirational salary
+    pref = data.get("preferences", {})
+    if pref:
+        lines += ["", "PREFERENCES (soft signals — nudge ranking, don't disqualify):"]
+        if pref.get("company_stage"):
+            lines.append(f"Stage preference: {', '.join(pref['company_stage'])}")
+        if pref.get("industry_targets"):
+            lines.append(f"Move toward: {', '.join(pref['industry_targets'])}")
+        if pref.get("industry_avoid"):
+            lines.append(f"Steer away from: {', '.join(pref['industry_avoid'])}")
+        if pref.get("base_salary_target_usd"):
+            lines.append(f"Target base salary: ${pref['base_salary_target_usd']:,}")
 
     lines += [
         "",

@@ -24,9 +24,16 @@ def load_seen_roles(ttl_days: int = 14) -> set:
             if datetime.datetime.fromisoformat(ts) > cutoff}
 
 
-def save_seen_roles(new_entries: dict):
-    """Merge new {hash: iso_timestamp} entries into the store."""
+def save_seen_roles(new_entries: dict, ttl_days: int = 14):
+    """Merge new {hash: iso_timestamp} entries into the store, pruning expired ones.
+
+    Prunes on every write so the file stays bounded to ~14 days of roles
+    rather than growing unboundedly over months of daily use.
+    """
     p = DATA_DIR / "seen_roles.json"
     existing = json.loads(p.read_text()) if p.exists() else {}
     existing.update(new_entries)
-    p.write_text(json.dumps(existing))
+    cutoff = (datetime.datetime.now(datetime.timezone.utc)
+              .replace(tzinfo=None) - datetime.timedelta(days=ttl_days)).isoformat()
+    pruned = {h: ts for h, ts in existing.items() if ts > cutoff}
+    p.write_text(json.dumps(pruned))

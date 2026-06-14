@@ -496,10 +496,17 @@ def _apply_prefs_to_profile(profile: dict, prefs: dict) -> None:
     if prefs.get("target_roles"):
         profile.setdefault("target", {})["roles"] = prefs["target_roles"]
 
-    # Work mode → open_to_remote
+    # Work mode → open_to_remote + store list so render_profile can use it verbatim.
+    # "Remote-first" or "Hybrid OK" → remote-open.
+    # "On-site OK" alone → on-site preferred (open_to_remote = False).
     work_mode = prefs.get("work_mode") or []
     if work_mode:
-        profile.setdefault("candidate", {})["open_to_remote"] = "Remote-first" in work_mode
+        cand = profile.setdefault("candidate", {})
+        cand["work_mode"] = work_mode   # store list for richer rendering
+        on_site_only = ("On-site OK" in work_mode
+                        and "Remote-first" not in work_mode
+                        and "Hybrid OK" not in work_mode)
+        cand["open_to_remote"] = not on_site_only
 
     # Relocation
     reloc = prefs.get("relocation_cities")

@@ -164,6 +164,30 @@ def score_jobs_batch(client: anthropic.Anthropic, jobs: list[dict]) -> list[dict
 
 
 def rank_jobs(jobs: list[dict]) -> list[dict]:
+    """Sort jobs by verdict + score, re-deriving verdicts from thresholds first.
+
+    Claude is instructed on thresholds but doesn't guarantee compliance —
+    re-validating here ensures a score of 62 is never promoted to "apply".
+    """
+    apply_t, consider_t = 75, 55
+    try:
+        from .profile import load_profile_yaml
+        sc = (load_profile_yaml() or {}).get("scoring", {})
+        apply_t    = int(sc.get("apply_threshold",    apply_t))
+        consider_t = int(sc.get("consider_threshold", consider_t))
+    except Exception:
+        pass
+
+    for job in jobs:
+        ev    = job.setdefault("eval", {})
+        score = ev.get("score", 0)
+        if score >= apply_t:
+            ev["verdict"] = "apply"
+        elif score >= consider_t:
+            ev["verdict"] = "consider"
+        else:
+            ev["verdict"] = "skipped"
+
     order = {"apply": 0, "consider": 1, "skipped": 2}
     return sorted(jobs, key=lambda j: (
         order.get(j["eval"].get("verdict", "skipped"), 3),
