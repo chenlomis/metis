@@ -1,4 +1,4 @@
-import os, re, datetime, logging
+import os, re, sys, datetime, logging
 from pathlib import Path
 from dotenv import load_dotenv
 import anthropic
@@ -70,20 +70,44 @@ def _parse_lookback(value: str) -> datetime.datetime | None:
     return dateparser.parse(value, settings={"RETURN_AS_TIMEZONE_AWARE": False})
 
 
+def _estimate_cost(n: int) -> str:
+    """Human-readable API cost range for scoring n jobs with claude-sonnet."""
+    lo, hi = n * 0.005, n * 0.015
+    return f"${lo:.2f}–${hi:.2f}"
+
+
+def _prompt_score_all(n_found: int, cap: int) -> bool:
+    """Interactively ask whether to score all roles. Returns True = score all."""
+    print(f"\n  ⚠  Found {n_found} new roles in your lookback window.")
+    print(f"     Your cap is {cap} (MAX_JOBS_PER_RUN in .env).")
+    print(f"     Scoring all {n_found}: ~{_estimate_cost(n_found)} estimated")
+    print(f"     (A Haiku pre-screen runs first to filter obvious mismatches —")
+    print(f"     actual cost is typically 40–60% lower than the estimate above.)")
+    print(f"     Roles beyond the cap stay unseen until their 14-day TTL expires.\n")
+    try:
+        ans = input(f"  Score all {n_found} roles? [y/N]: ").strip().lower()
+        return ans == "y"
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
 
-def run_pipeline(since_dt: datetime.datetime):
+def run_pipeline(since_dt: datetime.datetime, score_all: bool = False):
     """Fetch LinkedIn alert emails since since_dt, score unseen roles, deliver digest.
 
     seen_roles.json (14-day TTL) is the dedup gate — roles already scored
     within the last 14 days are skipped automatically.
+
+    score_all=True (--all flag) bypasses the cap and runs a Haiku pre-screen
+    before full Sonnet scoring to keep costs down.
     """
     log.info(f"=== Pipeline run starting — lookback since {since_dt.strftime('%Y-%m-%d')} ===")
     client     = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     seen_roles = load_seen_roles()
-    new_role_timestamps: dict = {}
 
     # Stage 1: Ingest
     threads = fetch_alerts(set(), since_dt)
@@ -110,23 +134,62 @@ def run_pipeline(since_dt: datetime.datetime):
                     and role_hash not in seen_roles):
                 seen_job_ids.add(job["job_id"])
                 seen_role_keys.add(role_key)
-                seen_roles.add(role_hash)
-                new_role_timestamps[role_hash] = (
-                    datetime.datetime.now(datetime.timezone.utc)
-                    .replace(tzinfo=None).isoformat()
-                )
+                seen_roles.add(role_hash)   # in-memory dedup only; disk write happens after cap
                 all_jobs.append(job)
 
     if not all_jobs:
         log.info("No new roles to evaluate — all already seen within the past 14 days.")
         return
 
-    if MAX_JOBS_PER_RUN > 0 and len(all_jobs) > MAX_JOBS_PER_RUN:
-        log.info(f"{len(all_jobs)} jobs found, capping at {MAX_JOBS_PER_RUN} "
-                 f"(set MAX_JOBS_PER_RUN=0 in .env to remove the cap)")
-        all_jobs = all_jobs[:MAX_JOBS_PER_RUN]
+    # ── Cap / prompt decision ────────────────────────────────────────────────
+    # IMPORTANT: new_role_timestamps is built AFTER this block so only the
+    # roles that will actually be scored get persisted to seen_roles.json.
+    # Previously, capped roles were mistakenly written to seen_roles.json and
+    # silently locked out for 14 days even though they were never evaluated.
+    n_found = len(all_jobs)
+    should_prescreen = False
+
+    if MAX_JOBS_PER_RUN > 0 and n_found > MAX_JOBS_PER_RUN:
+        if score_all:
+            # --all flag: skip prompt, but pre-screen to keep Sonnet spend down
+            log.info(f"{n_found} roles to evaluate (--all flag; Haiku pre-screen will filter)")
+            should_prescreen = True
+        elif sys.stdin.isatty():
+            # Interactive terminal: ask the user
+            wants_all = _prompt_score_all(n_found, MAX_JOBS_PER_RUN)
+            if wants_all:
+                log.info(f"Scoring all {n_found} roles (Haiku pre-screen will filter first)")
+                should_prescreen = True
+            else:
+                all_jobs = all_jobs[:MAX_JOBS_PER_RUN]
+                log.info(f"Capped at {MAX_JOBS_PER_RUN} roles")
+        else:
+            # Non-interactive (cron/launchd): cap silently, log a clear warning
+            log.warning(
+                f"{n_found} roles found but capped at {MAX_JOBS_PER_RUN} "
+                f"(non-interactive run). Use --all to score everything, "
+                f"or set MAX_JOBS_PER_RUN=0 in .env to remove the cap entirely."
+            )
+            all_jobs = all_jobs[:MAX_JOBS_PER_RUN]
     else:
-        log.info(f"{len(all_jobs)} unique roles to evaluate")
+        log.info(f"{n_found} unique roles to evaluate")
+
+    # Stage 1.5: Haiku pre-screen (title+company only — no JD fetch needed)
+    # Runs only when the user chose to go beyond the normal cap.
+    if should_prescreen:
+        from .score import prescreen_jobs_batch
+        all_jobs = prescreen_jobs_batch(client, all_jobs)
+        if not all_jobs:
+            log.info("Pre-screen filtered all roles — nothing left to score.")
+            return
+
+    # Persist NOW — only roles that survived the cap + pre-screen get written
+    # to seen_roles.json, so un-scored roles can reappear in future runs.
+    now_iso = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None).isoformat()
+    new_role_timestamps = {
+        _role_hash(j["title"], j["company"]): now_iso
+        for j in all_jobs
+    }
 
     # Stage 2: Enrich
     from .sources.linkedin import enrich_jobs
@@ -200,6 +263,12 @@ def main():
         "--lookback", default=DEFAULT_LOOKBACK, metavar="DURATION",
         help=f"How far back to fetch emails. Accepts: '3d', '7d', '2026-05-10'. "
              f"Default: {DEFAULT_LOOKBACK}",
+    )
+    parser.add_argument(
+        "--all", dest="score_all", action="store_true",
+        help="Score every role in the lookback window, ignoring MAX_JOBS_PER_RUN. "
+             "A Haiku pre-screen runs first to keep API costs down. "
+             "Useful for catch-up runs after a long gap or a reset.",
     )
 
     subparsers = parser.add_subparsers(dest="command")
@@ -300,7 +369,7 @@ def main():
             print(f"Could not parse --lookback '{args.lookback}'. "
                   f"Try: '3d', '7d', '2026-05-10'")
             raise SystemExit(1)
-        run_pipeline(since_dt=since_dt)
+        run_pipeline(since_dt=since_dt, score_all=args.score_all)
 
 
 if __name__ == "__main__":

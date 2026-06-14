@@ -7,7 +7,8 @@ log = logging.getLogger(__name__)
 # MODEL is read from pipeline.py at call time — passed in via the client object.
 # Keep a local reference for the score_jobs_batch call.
 import os
-MODEL = os.getenv("MODEL", "claude-sonnet-4-6")
+MODEL           = os.getenv("MODEL",           "claude-sonnet-4-6")
+PRESCREEN_MODEL = os.getenv("PRESCREEN_MODEL", "claude-haiku-4-5")
 
 # ---------------------------------------------------------------------------
 # Profile — priority order:
@@ -39,6 +40,116 @@ def _candidate_name() -> str:
         pass
     return "the candidate"
 
+
+# ---------------------------------------------------------------------------
+# Pre-screen — fast Haiku pass on title+company only (no JD fetch)
+# ---------------------------------------------------------------------------
+
+def _build_prescreen_context() -> str:
+    """Condensed profile snapshot for pre-screening — targeting criteria only."""
+    try:
+        from .profile import load_profile_yaml
+        data = load_profile_yaml() or {}
+    except Exception:
+        return ""
+
+    lines: list[str] = []
+    cand   = data.get("candidate", {})
+    target = data.get("target",    {})
+
+    name, title = cand.get("name", ""), cand.get("title", "")
+    parts = [p for p in [name, title] if p]
+    if parts:
+        lines.append("Candidate: " + ", ".join(parts))
+
+    roles = target.get("roles", [])
+    if roles:
+        lines.append("Targeting: " + ", ".join(roles))
+
+    level = cand.get("seniority", "") or target.get("level", "")
+    if level:
+        lines.append(f"Seniority: {level}")
+
+    deal_breakers = data.get("deal_breakers", [])
+    if deal_breakers:
+        lines.append("Hard no: " + "; ".join(str(d) for d in deal_breakers[:4]))
+
+    return "\n".join(lines)
+
+
+def prescreen_jobs_batch(client: anthropic.Anthropic, jobs: list[dict]) -> list[dict]:
+    """Fast Haiku pre-screen on title+company only — filters obvious mismatches before
+    JD enrichment and full Sonnet scoring.
+
+    Returns the subset of jobs worth scoring.  Falls back to the full list if
+    the API call fails or the response cannot be parsed.
+    """
+    if not jobs:
+        return jobs
+
+    context = _build_prescreen_context()
+    if not context:
+        log.warning("Pre-screen: no profile context — skipping filter")
+        return jobs
+
+    job_lines = "\n".join(
+        f"{i + 1}. {j['title']} at {j['company']}"
+        for i, j in enumerate(jobs)
+    )
+
+    try:
+        response = client.messages.create(
+            model=PRESCREEN_MODEL,
+            max_tokens=max(128, len(jobs) * 8),
+            system=(
+                f"{context}\n\n"
+                "Quick relevance filter. For each numbered job output only the number "
+                "and Y or N — nothing else.\n"
+                "Y = plausibly relevant to this candidate's targets and background.\n"
+                "N = clear mismatch (wrong function, obviously wrong seniority, "
+                "or matches a hard-no rule).\n"
+                "When uncertain, say Y."
+            ),
+            messages=[{"role": "user", "content": job_lines}],
+        )
+    except Exception as exc:
+        log.warning(f"Pre-screen API call failed ({exc}) — skipping filter, proceeding with all roles")
+        return jobs
+
+    raw   = response.content[0].text.strip()
+    usage = response.usage
+    log.info(
+        f"Pre-screen ({PRESCREEN_MODEL}) — "
+        f"input: {usage.input_tokens} tok, output: {usage.output_tokens} tok"
+    )
+
+    # Parse lines like "1. Y", "2. N", "3 Y", "4) N", etc.
+    passed: list[dict] = []
+    n_filtered         = 0
+    matched: set[int]  = set()
+    for line in raw.splitlines():
+        m = re.match(r"(\d+)[.):\s]+([YN])", line.strip(), re.IGNORECASE)
+        if m:
+            idx     = int(m.group(1)) - 1
+            verdict = m.group(2).upper()
+            if 0 <= idx < len(jobs) and idx not in matched:
+                matched.add(idx)
+                if verdict == "Y":
+                    passed.append(jobs[idx])
+                else:
+                    n_filtered += 1
+
+    if not passed and n_filtered == 0:
+        log.warning("Pre-screen: response couldn't be parsed — proceeding with all roles")
+        return jobs
+
+    log.info(f"Pre-screen: {len(passed)}/{len(jobs)} passed ({n_filtered} filtered out)")
+    return passed
+
+
+# ---------------------------------------------------------------------------
+# Full scoring (Sonnet)
+# ---------------------------------------------------------------------------
 
 def _build_score_system() -> str:
     """Build the scoring system prompt, loading the profile fresh each call."""
