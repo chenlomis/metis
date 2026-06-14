@@ -23,6 +23,9 @@ dependencies = [
 [project.scripts]
 scorerole = "scorerole.pipeline:main"
 
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["scorerole*"]
