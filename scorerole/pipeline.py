@@ -202,14 +202,20 @@ def run_pipeline(since_dt: datetime.datetime, score_all: bool = False):
     # Stage 4: Deliver digest email
     run_date = datetime.datetime.now().strftime("%B %d, %Y")
     html = render_html(all_jobs, run_date)
-    send_digest(html, run_date)
+    try:
+        send_digest(html, run_date)
+    except Exception:
+        log.error("Pipeline finished scoring but failed to deliver digest — check SMTP settings in .env")
+        raise SystemExit(1)
 
     # Persist — update seen_roles so the same role isn't scored again for 14 days
     save_seen_roles(new_role_timestamps)
 
     apply_n    = sum(1 for j in all_jobs if j["eval"].get("verdict") == "apply")
     consider_n = sum(1 for j in all_jobs if j["eval"].get("verdict") == "consider")
-    log.info(f"=== Done — {len(all_jobs)} evaluated: {apply_n} apply, {consider_n} consider ===")
+    filtered_n = sum(1 for j in all_jobs if j["eval"].get("verdict") == "filtered")
+    filter_note = f", {filtered_n} filtered by deal-breaker" if filtered_n else ""
+    log.info(f"=== Done — {len(all_jobs)} evaluated: {apply_n} apply, {consider_n} consider{filter_note} ===")
 
 
 def debug_emails():
@@ -287,18 +293,6 @@ def main():
         help="Optional: LinkedIn export PDF, bio, or any supplementary text file.",
     )
 
-    # config subcommand
-    config_p = subparsers.add_parser(
-        "config",
-        help="Open a config file in your editor (profile or env).",
-    )
-    config_p.add_argument(
-        "file", nargs="?", default="profile",
-        choices=["profile", "env"],
-        help="'profile' opens ~/.job_pipeline/profile.yaml (default); "
-             "'env' opens .env in the project directory.",
-    )
-
     # reset subcommand
     reset_p = subparsers.add_parser("reset", help="Clear seen-role state so all roles reprocess.")
     reset_p.add_argument("--force",   action="store_true", help="Skip confirmation prompt.")
@@ -309,22 +303,7 @@ def main():
 
     args = parser.parse_args()
 
-    if args.command == "config":
-        from .init_cmd import open_in_editor
-        if args.file == "env":
-            target = Path(__file__).parent.parent / ".env"
-            if not target.exists():
-                example = Path(__file__).parent.parent / ".env.example"
-                print(f".env not found — opening .env.example instead.")
-                target = example
-        else:
-            target = DATA_DIR / "profile.yaml"
-            if not target.exists():
-                print("No profile found. Run `scorerole init` first.")
-                raise SystemExit(1)
-        open_in_editor(target)
-
-    elif args.command == "init":
+    if args.command == "init":
         _validate_env(require_gmail=False)   # only needs API key to parse resume
         from .init_cmd import run_init
         run_init(

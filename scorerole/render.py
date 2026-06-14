@@ -202,12 +202,16 @@ def build_digest_html(jobs: list[dict], run_date: str) -> str:
     apply    = [j for j in jobs if j["eval"].get("verdict") == "apply"]
     consider = [j for j in jobs if j["eval"].get("verdict") == "consider"]
     skips    = [j for j in jobs if j["eval"].get("verdict") == "skipped"]
+    filtered = [j for j in jobs if j["eval"].get("verdict") == "filtered"]
+    # Filtered roles (deal_breaker violations) are excluded from all sections;
+    # only a footer count is shown so the user knows they were caught.
+    scored   = [j for j in jobs if j["eval"].get("verdict") != "filtered"]
 
     # --- Stat row ---
     stat_row = (
         f'<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:14px">'
         f'<tr>'
-        f'{_stat_cell(len(jobs),    "Roles evaluated", "#5F5E5A")}'
+        f'{_stat_cell(len(scored),  "Roles evaluated", "#5F5E5A")}'
         f'<td width="6">&nbsp;</td>'
         f'{_stat_cell(len(apply),   "Apply now",       "#3B6D11")}'
         f'<td width="6">&nbsp;</td>'
@@ -294,12 +298,16 @@ def build_digest_html(jobs: list[dict], run_date: str) -> str:
         )
 
     # --- Footer ---
+    filtered_note = (
+        f' &middot; {len(filtered)} filtered by deal&#8209;breaker'
+        if filtered else ""
+    )
     footer = (
         f'<table width="100%" cellpadding="0" cellspacing="0" border="0">'
         f'<tr><td height="1" style="background:{_C_BORDER};font-size:0;line-height:0">&nbsp;</td></tr>'
         f'<tr><td style="padding-top:12px;font-size:11px;color:#aaa;text-align:center;'
         f'font-family:{_FONT}">scorerole &middot; powered by Claude '
-        f'&middot; {len(jobs)} roles evaluated</td></tr>'
+        f'&middot; {len(scored)} roles evaluated{filtered_note}</td></tr>'
         f'</table>'
     )
 
@@ -336,7 +344,14 @@ def send_digest(html: str, run_date: str):
     msg["From"]    = GMAIL_ADDRESS
     msg["To"]      = RECIPIENT_EMAIL
     msg.attach(MIMEText(html, "html"))
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
-        smtp.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
-        smtp.send_message(msg)
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+            smtp.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
+            smtp.send_message(msg)
+    except smtplib.SMTPAuthenticationError as e:
+        log.error("DIGEST NOT DELIVERED — Gmail authentication failed. Check GMAIL_APP_PASSWORD in .env: %s", e)
+        raise
+    except smtplib.SMTPException as e:
+        log.error("DIGEST NOT DELIVERED — SMTP error: %s", e)
+        raise
     log.info(f"Digest sent to {RECIPIENT_EMAIL}")

@@ -259,6 +259,33 @@ class TestRankJobs:
         assert j75["eval"]["verdict"] == "apply"
         assert j74["eval"]["verdict"] == "consider"
 
+    def test_filtered_verdict_preserved(self):
+        """A deal_breaker violation (verdict='filtered', score=0) must not be
+        reclassified as 'skipped' just because score=0."""
+        from scorerole.score import rank_jobs
+        job = {
+            "title": "Director of Tobacco", "company": "Big Tobacco", "location": "NY",
+            "eval": {"score": 0, "verdict": "filtered",
+                     "leveragePoints": [], "frictionPoints": [],
+                     "tags": [{"text": "deal breaker: industry", "sentiment": "red"}]},
+        }
+        result = rank_jobs([job])
+        assert result[0]["eval"]["verdict"] == "filtered"
+
+    def test_filtered_roles_sorted_last(self):
+        """Filtered roles must sort after skipped."""
+        from scorerole.score import rank_jobs
+        jobs = [
+            self._make_job("Filtered", 0, "filtered"),
+            self._make_job("Skipped",  30, "skipped"),
+            self._make_job("Apply",    80, "apply"),
+        ]
+        # patch filtered verdict so rank_jobs preserves it
+        jobs[0]["eval"]["verdict"] = "filtered"
+        ranked = rank_jobs(jobs)
+        assert ranked[0]["eval"]["verdict"] == "apply"
+        assert ranked[-1]["eval"]["verdict"] == "filtered"
+
 
 # ---------------------------------------------------------------------------
 # score.py — partial JSON recovery

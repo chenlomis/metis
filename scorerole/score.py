@@ -77,6 +77,37 @@ def _build_prescreen_context() -> str:
     return "\n".join(lines)
 
 
+def _estimate_sonnet_cost(jobs: list[dict]) -> float:
+    """Rough upper-bound cost estimate for scoring n jobs with Sonnet."""
+    return len(jobs) * 0.015
+
+
+def _recover_partial_json(raw: str) -> list[dict]:
+    """Salvage individual job objects from a truncated JSON array.
+
+    Walks the raw string tracking brace depth so each complete {...} block
+    can be parsed independently, returning whatever objects are valid.
+    """
+    objects: list[dict] = []
+    depth, start = 0, None
+    for i, ch in enumerate(raw):
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and start is not None:
+                try:
+                    obj = json.loads(raw[start : i + 1])
+                    if isinstance(obj, dict):
+                        objects.append(obj)
+                except json.JSONDecodeError:
+                    pass
+                start = None
+    return objects
+
+
 def prescreen_jobs_batch(client: anthropic.Anthropic, jobs: list[dict]) -> list[dict]:
     """Fast Haiku pre-screen on title+company only — filters obvious mismatches before
     JD enrichment and full Sonnet scoring.
@@ -113,7 +144,11 @@ def prescreen_jobs_batch(client: anthropic.Anthropic, jobs: list[dict]) -> list[
             messages=[{"role": "user", "content": job_lines}],
         )
     except Exception as exc:
-        log.warning(f"Pre-screen API call failed ({exc}) — skipping filter, proceeding with all roles")
+        log.warning(
+            "Pre-screen API call failed (%s) — skipping filter, proceeding with all %d roles. "
+            "Estimated Sonnet cost: ~$%.4f",
+            exc, len(jobs), _estimate_sonnet_cost(jobs),
+        )
         return jobs
 
     raw   = response.content[0].text.strip()
@@ -140,7 +175,11 @@ def prescreen_jobs_batch(client: anthropic.Anthropic, jobs: list[dict]) -> list[
                     n_filtered += 1
 
     if not passed and n_filtered == 0:
-        log.warning("Pre-screen: response couldn't be parsed — proceeding with all roles")
+        log.warning(
+            "Pre-screen: response couldn't be parsed — proceeding with all %d roles. "
+            "Estimated Sonnet cost: ~$%.4f",
+            len(jobs), _estimate_sonnet_cost(jobs),
+        )
         return jobs
 
     log.info(f"Pre-screen: {len(passed)}/{len(jobs)} passed ({n_filtered} filtered out)")
@@ -174,7 +213,7 @@ Given a batch of job listings, return a JSON array — one object per job, same 
 [
   {{
     "score": <integer 0-100>,
-    "verdict": "apply" | "consider" | "skipped",
+    "verdict": "apply" | "consider" | "skipped" | "filtered",
     "leveragePoints": ["<short phrase ≤5 words>", ...],
     "frictionPoints": ["<short phrase ≤5 words>", ...],
     "tags": [
@@ -183,6 +222,13 @@ Given a batch of job listings, return a JSON array — one object per job, same 
   }},
   ...
 ]
+
+DEAL-BREAKER RULE (apply before scoring anything else):
+  If a role clearly violates any item in the DEAL BREAKERS list above — based on the
+  job title, company, industry, or JD content — set score=0, verdict="filtered", and
+  add exactly one red tag naming the triggered rule (e.g., {{"text": "deal breaker: mgmt only", "sentiment": "red"}}).
+  Set leveragePoints=[] and frictionPoints=[].
+  A deal-breaker violation must NEVER produce verdict "apply", "consider", or "skipped".
 
 leveragePoints: 1-2 match explanations. Lead with a 2-4 word topic label, em-dash (—), then a
   tight evidence clause. ~12 words total. No "JD needs" prefix — write naturally.
@@ -207,6 +253,7 @@ Thresholds (from your profile.yaml scoring section):
   score >= {apply_t}  →  apply
   score {consider_t}–{apply_t - 1}  →  consider
   score < {consider_t}   →  skipped
+  deal_breaker violated  →  filtered (score=0, overrides all thresholds)
 
 Be honest. {apply_t}% IS strong at this level. Do not inflate.
 Return ONLY valid JSON array — no markdown fences, no preamble."""
@@ -264,13 +311,22 @@ def score_jobs_batch(client: anthropic.Anthropic, jobs: list[dict]) -> list[dict
         if isinstance(evals, dict):
             evals = [evals]
     except json.JSONDecodeError:
-        log.warning("Batch score JSON parse failed — all jobs marked skip")
-        evals = []
+        evals = _recover_partial_json(raw)
+        if evals:
+            log.warning(
+                "Batch score JSON was truncated — recovered %d/%d objects via partial parse",
+                len(evals), len(jobs),
+            )
+        else:
+            log.error(
+                "Batch score JSON parse failed entirely — all %d jobs marked skipped. "
+                "Re-run with a smaller batch or check API token limits.",
+                len(jobs),
+            )
 
+    _error_eval = {"score": 0, "verdict": "skipped", "leveragePoints": [], "frictionPoints": ["Scoring parse error"], "tags": []}
     for i, job in enumerate(jobs):
-        job["eval"] = evals[i] if i < len(evals) else {
-            "score": 0, "verdict": "skipped", "leveragePoints": [], "frictionPoints": ["Scoring parse error"], "tags": []
-        }
+        job["eval"] = evals[i] if i < len(evals) else _error_eval
     return jobs
 
 
@@ -292,14 +348,18 @@ def rank_jobs(jobs: list[dict]) -> list[dict]:
     for job in jobs:
         ev    = job.setdefault("eval", {})
         score = ev.get("score", 0)
-        if score >= apply_t:
+        # "filtered" is set by Claude when a deal_breaker is violated — preserve it;
+        # don't let a score of 0 accidentally demote it to "skipped".
+        if ev.get("verdict") == "filtered":
+            pass
+        elif score >= apply_t:
             ev["verdict"] = "apply"
         elif score >= consider_t:
             ev["verdict"] = "consider"
         else:
             ev["verdict"] = "skipped"
 
-    order = {"apply": 0, "consider": 1, "skipped": 2}
+    order = {"apply": 0, "consider": 1, "skipped": 2, "filtered": 3}
     return sorted(jobs, key=lambda j: (
         order.get(j["eval"].get("verdict", "skipped"), 3),
         -j["eval"].get("score", 0),

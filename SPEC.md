@@ -256,6 +256,9 @@ Footer: "scorerole · powered by Claude · N roles evaluated"
 **Exit criteria for digest quality:**
 - [ ] Every role in "Apply" has score ≥ 75; every role in "Consider" has score 55–74
   (verdict drift from Claude is corrected before rendering)
+- [ ] Roles violating a deal_breaker do not appear in Apply, Consider, or Skipped sections
+- [ ] Roles filtered by deal_breaker or salary_floor appear only as a footer count
+  ("X roles filtered — deal_breaker or salary mismatch")
 - [ ] Leverage points follow conclusion-first format: `"topic — evidence clause"`;
   no "JD needs X → candidate has Y" phrasing
 - [ ] Friction is either a real concern or an empty array; never placeholder text
@@ -291,7 +294,7 @@ Users can tune scorerole's behaviour without touching code.
 | Requirement | Target | Notes |
 |---|---|---|
 | Setup time (new user) | < 15 minutes | From clone to first digest |
-| Run time (20 roles) | < 3 minutes | Dominated by JD enrichment (HTTP) + Sonnet call |
+| Run time (20 roles) | < 3 minutes (target 60–90s) | Dominated by JD enrichment (HTTP) + Sonnet call. >10 min = investigate. |
 | API cost (20-role run) | < $0.30 | ~$0.05–0.15 per 10 roles with claude-sonnet-4-6 |
 | API cost (catch-up, 100 roles with pre-screen) | < $1.50 | Haiku pre-screen cuts ~50% before Sonnet |
 | Secrets | Never committed | `.env` always in `.gitignore`; profile in `~/.job_pipeline/` |
@@ -300,16 +303,14 @@ Users can tune scorerole's behaviour without touching code.
 
 ---
 
-## 9. Open Questions for Owner
+## 9. Open Questions — Resolved
 
-Items that need a decision before they can become acceptance criteria:
-
-| # | Question | Impact |
+| # | Question | Decision |
 |---|---|---|
-| Q1 | What is the acceptable latency for digest delivery after `scorerole` runs? | Non-functional target |
-| Q2 | Should deal_breakers auto-filter (skip scoring entirely) or apply a score penalty? | Scoring logic |
-| Q3 | What is the intended scope of "extensible to other job alerts"? (Indeed, Greenhouse RSS, manual CSV?) | Roadmap priority |
-| Q4 | Is salary_floor_usd a hard filter (skip if known salary is below floor) or a soft signal? | Scoring logic |
-| Q5 | What does "good enough" pre-screen precision mean? Is missing 1 in 10 apply-worthy roles acceptable? | Haiku model selection |
-| Q6 | Should `scorerole config` be re-added as a direct alias to open profile/env in editor? | CLI surface |
-| Q7 | Is there a second persona beyond the primary job seeker? (e.g., someone setting this up for a family member) | Onboarding UX |
+| Q1 | Acceptable run latency? | 60–90s is fine for 20 roles. >10 min = investigate. No optimization needed now. |
+| Q2 | deal_breakers: filter or penalise? | **Hard filter.** Roles violating a deal_breaker must not appear in the digest. Claude assigns `verdict="filtered"` when a deal_breaker is clearly violated; filtered roles are excluded before rendering. Future: configurable penalty weight for users who prefer soft filtering. |
+| Q3 | Scope of extensible sources? | **Tier A (email-based, same IMAP approach):** Indeed, Glassdoor alerts. **Tier B (HTTP scraping / RSS):** VC portfolio boards (a16z Jobs, etc.), Greenhouse RSS. Tier A is a near-term extension; Tier B is a separate engineering track. |
+| Q4 | salary_floor_usd: hard gate or soft signal? | **Hard gate with negotiation buffer.** If JD states a salary clearly below `salary_floor_usd` (< 90% of floor), filter the role. If salary is within 10% below floor, score normally but add an amber "salary near floor" tag. If JD doesn't mention salary, proceed to scoring. |
+| Q5 | Pre-screen precision bar? | Acceptable. User's LinkedIn alerts are already filtered to senior+ roles, so Haiku's main job is catching wrong-function mismatches. Missing 1 in 10 is acceptable given the fallback (uncapped `seen_roles` keeps unscored roles available). |
+| Q6 | Re-add `scorerole config`? | **No.** `init` covers all user-facing configuration; `.env` covers secrets/runtime tuning. No meaningful third category exists. Companion was correct to remove it. |
+| Q7 | Second persona? | **No.** Senior Companion is a separate project with no intended overlap. scorerole is single-user only for v0.1. |
