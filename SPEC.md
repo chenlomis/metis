@@ -1,21 +1,23 @@
 # scorerole — Product Spec
 
-> Status: v0.1 draft — retroactively written from build history. Items marked
-> `[?]` need owner input before they can be used as acceptance criteria.
+> Status: v0.1 — retroactively written from build history, updated June 2026.
+> For setup instructions see README.md. This document defines what the product
+> should do and how we know it's correct.
 
 ---
 
 ## 1. Problem Statement
 
-Job seekers receive dozens of job alert emails per week. Reviewing each posting
-individually — reading the JD, comparing it to your background, deciding if it's
-worth applying — takes 2–5 minutes per role. At 50 roles/week that's 2–4 hours of
-low-signal scanning before any actual application work begins.
+Job seekers receive dozens of job alert emails containing hundreds of potentially
+relevant roles. Reviewing each individually — going through the JD, comparing it with
+background, and deciding if it's worthwhile to apply — not only consumes time but also
+limited attention. At 50 roles/week that's 2–4 hours of low-signal scanning before any
+actual application work begins.
 
 **scorerole** automates the screening step. It reads your job alert emails, scores
-each role against a structured profile of your background and preferences, and
-delivers a ranked digest that surfaces only the roles worth your time — with enough
-context (match rationale, friction points) to make a quick apply/skip decision.
+each role against a structured profile of your background and preferences, and delivers
+a ranked digest that surfaces only the roles worth your time — with enough context
+(match rationale, friction points) to make a quick apply/skip decision.
 
 ---
 
@@ -23,294 +25,306 @@ context (match rationale, friction points) to make a quick apply/skip decision.
 
 | ✅ In scope | ❌ Out of scope |
 |---|---|
-| Ingesting LinkedIn job alert emails via IMAP | Browsing or scraping job boards directly |
-| Scoring roles against a user-defined profile | Auto-applying to jobs (HITL required for submission) |
-| Delivering a ranked HTML digest by email | Tracking application status post-apply |
-| Profile management via interactive CLI wizard | Multi-user / team / SaaS features |
-| Configurable lookback window and score thresholds | Real-time / streaming alerts |
-| Extensible source layer for future job feeds | `[?]` — specific other sources TBD |
+| Ingesting LinkedIn job alert emails via IMAP | Auto-applying to jobs (HITL required for any submission) |
+| Scoring roles against a user-defined profile | Tracking application status post-apply |
+| Delivering a ranked HTML digest by email | Multi-user / team / SaaS features |
+| Profile setup and editing via interactive CLI | Real-time / streaming alerts |
+| Configurable lookback, cap, and score thresholds | |
+| Extensible source layer (see §9 Q3 for roadmap) | |
 
 ---
 
 ## 3. User Persona
 
-**Primary:** A mid-to-senior individual contributor actively job searching, comfortable
-with terminal tools, who generates 20–200 LinkedIn job alert emails per week and finds
-manual screening a time drain. Values precision over recall — a missed great role is
-worse than a cluttered digest.
-
-`[?]` Secondary personas (e.g., recruiters using it for candidate sourcing, teams
-sharing an instance) are out of scope for v0.1 but the architecture should not
-actively block them.
+**Primary:** Entry-level to mid-senior individual contributors actively job searching,
+relying on LinkedIn job alerts as their primary discovery platform, comfortable with
+lightweight CLI commands, who find manual screening a time drain.
 
 ---
 
 ## 4. Core User Flows
 
-### Flow 1 — First-time Setup
-
-**Goal:** A new user goes from zero to receiving their first scored digest.
-
-```
-1. Clone repo + install dependencies  (pip install -e .)
-2. Copy .env.example → .env; fill in:
-     - ANTHROPIC_API_KEY
-     - GMAIL_ADDRESS + GMAIL_APP_PASSWORD (App Password, not account password)
-     - RECIPIENT_EMAIL
-3. Run: scorerole init
-     Step 1 — Provide resume (PDF, DOCX, or TXT path)
-     Step 2 — Optionally provide LinkedIn export or supplementary bio
-     Step 3 — Set preferences: work mode, salary floor, remote policy
-     Step 4 — Claude extracts structured profile → user reviews → approves or edits
-4. Run: scorerole
-     → fetches LinkedIn alert emails from last 3 days
-     → scores roles against profile
-     → sends HTML digest to RECIPIENT_EMAIL
-```
-
-**Exit criteria:**
-- [ ] User can complete setup without reading source code
-- [ ] `scorerole init` completes without error given a valid PDF resume
-- [ ] A digest email is received within 5 minutes of running `scorerole` for the first time
-- [ ] Digest contains at least one role if LinkedIn alert emails exist in the lookback window
-- [ ] Digest is readable on mobile Gmail (max 600px width, no broken layout)
-
-**Key error paths:**
-- Missing `.env` key → clear error message naming the missing variable and where to get it
-- No LinkedIn emails in Gmail → "No emails in lookback window" message; no crash
-- Resume file not found → prompt to re-enter path; no crash
-- Claude API unreachable → error with suggestion to check key + network; exit code 1
-
 ---
 
-### Flow 2 — Daily / Recurring Use
+### Flow 1 — Profile Setup (`scorerole init`)
 
-**Goal:** User receives a fresh digest each morning (manually or via cron).
+**Goal:** A new user completes setup in under 5 minutes and has a working profile
+ready to score against.
 
-```
-1. (Optional) Cron/launchd runs: scorerole --lookback 1d
-   OR user runs manually: scorerole
-2. Pipeline fetches new alert emails since last lookback cutoff
-3. Dedup filters roles already scored in the past 14 days
-4. Scores remaining new roles (≤ MAX_JOBS_PER_RUN; default 20)
-5. Sends digest
-```
-
-**Exit criteria:**
-- [ ] Roles already seen in a previous digest do not reappear in subsequent runs
-  within the 14-day TTL window
-- [ ] Roles beyond the cap are NOT written to `seen_roles.json` — they reappear
-  in the next run (regression gate for the role-burial bug)
-- [ ] Running `scorerole` twice in a row with no new emails produces "No new roles"
-  message, not a second empty digest
-- [ ] Cron / non-interactive run never blocks on a prompt; caps silently and logs
-
----
-
-### Flow 3 — Large Catch-Up Run
-
-**Goal:** User hasn't run in several days or resets after a gap; wants to process
-a backlog without silently missing roles or spending unexpectedly.
+#### 1a — First-time Setup
 
 ```
-1. User runs: scorerole --lookback 14d
-   OR: scorerole reset && scorerole --all --lookback 14d
-2. Pipeline finds N > MAX_JOBS_PER_RUN new roles
-3. Interactive prompt: "Found N roles. Score all? ~$X.XX estimated [y/N]"
-4. y → Haiku pre-screen filters obvious mismatches
-      → Sonnet scores survivors
-      → Digest delivered
-   N → Scores first MAX_JOBS_PER_RUN; remainder stay unseen (not buried)
-```
+1. Install
+     pip install -e .
 
-**Exit criteria:**
-- [ ] User sees role count + cost estimate before any API call is made
-- [ ] Choosing `n` at the prompt scores exactly `MAX_JOBS_PER_RUN` roles; the rest
-  remain available in future runs
-- [ ] Choosing `y` scores more than `MAX_JOBS_PER_RUN` roles in a single digest
-- [ ] `--all` flag bypasses the prompt entirely (for scripting / confidence)
-- [ ] Non-TTY run (cron) never shows the prompt; caps and logs a warning
+2. Configure credentials
+     Copy .env.example → .env and fill in three values:
 
----
+     ANTHROPIC_API_KEY      Developer API key (separate from your Claude.ai subscription).
+                            Get one at: console.anthropic.com
+     GMAIL_ADDRESS          Your Gmail address.
+     GMAIL_APP_PASSWORD     A Gmail App Password — NOT your account password.
+                            Requires 2FA. Generate at: myaccount.google.com/apppasswords
+     RECIPIENT_EMAIL        Where to send the digest (normally your own email).
 
-### Flow 4 — Profile Update
+3. Create your profile
+     scorerole init
 
-**Goal:** User's situation has changed (new job preference, different salary floor,
-updated resume). They update their profile without losing previously scored data.
+     Step 1 — Resume
+               Provide the path to your resume (PDF, DOCX, or TXT).
+               Claude extracts your experience, education, and strengths.
 
-```
-Option A — Quick edits (no re-extraction):
-  scorerole init → "Quick edit" → review/edit menu
-  → edit individual sections (strengths, deal breakers, etc.)
+     Step 2 — LinkedIn profile (optional)
+               Provide your LinkedIn profile URL or paste your profile text.
+               Supplements the resume extraction.
 
-Option B — Preference refresh only:
-  scorerole init → "Update prefs" → re-answer Step 3 only
-  → applied on top of existing extracted profile
+     Step 3 — Career context
+               Answer guided questions covering:
+               • Work mode (remote / hybrid / on-site) and location preferences
+               • Target roles and seniority level
+               • Career aspirations and direction
+               • Deal breakers (roles that should never appear in your digest)
+               • Minimum salary floor
 
-Option C — Direct YAML edit:
-  scorerole init → "Open in editor"
-  OR: open ~/.job_pipeline/profile.yaml in any editor
+     Step 4 — Review and save
+               Review the extracted profile. Edit any section before saving.
+               Profile is saved to ~/.job_pipeline/profile.yaml.
 
-Option D — Full restart (new resume):
-  scorerole init → "Start fresh"
-  → full 4-step wizard; overwrites existing profile
+4. Run
+     scorerole  (see Flow 2)
 ```
 
 **Exit criteria:**
+- [ ] End-to-end first-time setup completes in under 5 minutes
+- [ ] `scorerole init` completes without error given a valid PDF, DOCX, or TXT resume
+- [ ] Profile is saved to `~/.job_pipeline/profile.yaml` after step 4
+- [ ] Missing `.env` key → error names the missing variable and links to where to get it
+- [ ] Resume file not found → re-prompts for path; no crash
+- [ ] Claude API key invalid → clear error before any wizard steps run
+
+#### 1b — Profile Update (existing profile)
+
+When `scorerole init` detects an existing profile, it shows a mode menu instead of
+restarting the full wizard:
+
+```
+Quick edit    — jump to section-by-section review; edit any field; no API call
+Open in editor — open ~/.job_pipeline/profile.yaml directly in your system editor
+Start fresh   — full 4-step wizard with a new resume; overwrites existing profile
+```
+
+**Exit criteria:**
+- [ ] Mode menu appears automatically when a profile already exists
+- [ ] Quick edit does not call Claude or consume API tokens
+- [ ] "Start fresh" requires an explicit menu selection; cannot be triggered accidentally
+- [ ] The latest saved version always overrides the previous one
 - [ ] Profile changes take effect on the very next `scorerole` run
-- [ ] Quick edit does not re-call Claude or consume API tokens
-- [ ] "Start fresh" requires explicit choice; cannot be triggered accidentally
-- [ ] After any profile update, `scorerole` uses the new profile (not a cached version)
 
 ---
 
-### Flow 5 — Troubleshooting / Reset
+### Flow 2 — Running the Pipeline (`scorerole`)
 
-**Goal:** User notices missing roles, stale state, or unexpected dedup behaviour.
-They want to inspect what's happening and reset cleanly.
+**Goal:** User runs `scorerole` and receives a ranked digest of new roles worth reviewing.
 
 ```
-Inspect email parsing:
-  scorerole debug → dumps most recent LinkedIn email body to
-  ~/.job_pipeline/debug_email.txt; prints first 2000 chars to terminal
+scorerole [--lookback DURATION] [--all]
+```
 
-Clear dedup state (keep profile):
-  scorerole reset → clears seen_roles.json
-  → next run re-evaluates all roles in the lookback window
+**Default behaviour:**
+```
+→ Fetches LinkedIn alert emails from the past 3 days
+  (default; customisable via --lookback flag or DEFAULT_LOOKBACK in .env)
+→ Skips roles already evaluated in the past 14 days
+→ Evaluates up to 20 new roles
+  (default cap; customisable via MAX_JOBS_PER_RUN in .env)
+→ Sends HTML digest to RECIPIENT_EMAIL
+```
 
-Nuclear reset (clear everything):
-  scorerole reset --profile
-  → clears seen_roles.json + profile.yaml
-  → user must run scorerole init before next run
+**When more than 20 new roles are found:**
+```
+→ User is notified interactively:
+    "Found 47 new roles. Evaluating first 20.
+     Remaining 27 will appear in your next run.
+     To evaluate all now: scorerole --all  (~$0.24–$0.71 estimated)"
+→ Roles beyond the cap are NOT marked as seen — they appear in the next run
+```
+
+**With `--all` flag:**
+```
+scorerole --all [--lookback DURATION]
+→ Bypasses the per-run cap (does NOT bypass the 14-day dedup gate)
+→ Haiku pre-screens all roles on title+company to filter obvious mismatches cheaply
+→ Estimated API cost is shown before scoring begins
+→ Sonnet scores the survivors; digest is delivered
+```
+
+**When no new roles are found:**
+```
+→ "No new roles to evaluate — all already seen within the past 14 days."
+→ No digest sent; no error; exit 0
 ```
 
 **Exit criteria:**
-- [ ] `scorerole debug` produces output even if no jobs were found; never crashes
-- [ ] `scorerole reset` prompts for confirmation before deleting anything
-- [ ] After `scorerole reset`, a same-day `scorerole` run re-scores roles that were
-  previously skipped due to the TTL gate
-- [ ] `scorerole reset --profile` followed by `scorerole` (without init) prints a
-  clear error pointing to `scorerole init`, not a stack trace
+- [ ] Roles seen in a previous digest do not reappear within the 14-day window
+- [ ] Roles beyond the cap are NOT written to `seen_roles.json`; they reappear next run
+- [ ] Running `scorerole` twice with no new emails shows "no new roles", not empty digest
+- [ ] User is notified when the role count exceeds the cap (interactive runs)
+- [ ] `--all` shows a cost estimate before making any scoring API calls
+- [ ] Cron / non-interactive runs never block on a prompt; they cap silently and log
+- [ ] scorerole does not re-evaluate previously seen roles unless `scorerole reset` is run
+- [ ] Digest has a default visual style; visual customisation requires editing `render.py`
 
 ---
 
-## 5. Profile Schema — What the Profile Captures
+### Flow 3 — Reset & Troubleshoot (`scorerole reset`, `scorerole debug`)
 
-The profile (`~/.job_pipeline/profile.yaml`) is the central artifact. It informs
-every scoring decision.
+**Goal:** User needs to inspect what's happening or clear state after a gap or issue.
 
-| Section | What it captures | Source |
-|---|---|---|
-| `candidate` | Name, current title, location, work mode, seniority | Resume + wizard |
-| `target` | Desired roles, level, industries | Wizard Step 3 |
-| `aspirations` | Career track (IC/mgmt), direction, company types to seek/avoid | Wizard Step 3 |
-| `preferences` | Company stage, industry targets, base salary target | Wizard Step 3 |
-| `scoring` | Apply/consider thresholds, level-mismatch deduction | Auto-set; editable |
-| `experience` | Role-by-role history with highlights | Extracted from resume |
-| `education` | Degrees, institutions | Extracted from resume |
-| `strengths` | 3–6 differentiating capabilities | Extracted + user-editable |
-| `green_flags` | Things that boost a role's score | User-defined |
-| `yellow_flags` | Cautions worth noting but not disqualifying | User-defined |
-| `red_flags` | Soft negatives | User-defined |
-| `deal_breakers` | Hard disqualifiers (auto-filters or heavy score penalty) | User-defined |
-| `salary_floor_usd` | Minimum acceptable base salary | Wizard Step 3 |
-| `notes` | Free-text context sent verbatim to Claude | User-defined |
+```
+scorerole debug
+  → Fetches and dumps the most recent LinkedIn alert email body
+  → Saves to ~/.job_pipeline/debug_email.txt; prints first 2000 chars to terminal
+  → Useful for diagnosing why expected roles aren't appearing
 
-**Exit criteria for profile quality:**
-- [ ] A profile extracted from a real resume produces a scoring prompt that a human
-  would recognize as an accurate summary of that person's background
-- [ ] Missing optional sections do not crash scoring; they are silently omitted
-- [ ] A profile with only `candidate` + `experience` still produces meaningful scores
-  (graceful degradation)
+scorerole reset
+  → Clears seen_roles.json (dedup state only; profile is preserved)
+  → Prompts for confirmation before deleting
+  → Next run re-evaluates all roles within the lookback window
+
+scorerole reset --profile
+  → Also deletes ~/.job_pipeline/profile.yaml
+  → scorerole init must be run before the next pipeline run
+```
+
+**Exit criteria:**
+- [ ] `scorerole debug` produces output regardless of whether jobs were found; never crashes
+- [ ] `scorerole reset` prompts for confirmation; does not delete without it
+- [ ] After `scorerole reset`, a same-day run re-evaluates previously seen roles
+- [ ] `scorerole reset --profile` + `scorerole` without init → clear error pointing to
+  `scorerole init`, not a Python traceback
 
 ---
 
-## 6. Digest Output — What "Good" Looks Like
+## 5. Profile Schema
 
-The digest is the primary user-facing output. It is an HTML email.
+All fields are user-editable — either through `scorerole init` or by editing
+`~/.job_pipeline/profile.yaml` directly.
+
+| Section | What it captures |
+|---|---|
+| `candidate` | Name, current title, location, work mode, seniority |
+| `target` | Desired roles, target level, industries |
+| `aspirations` | Career track (IC vs. management), direction, company types to seek or avoid |
+| `preferences` | Company stage, industry targets, aspirational base salary |
+| `scoring` | Apply / consider thresholds; level-mismatch score deduction |
+| `experience` | Role-by-role history with achievement highlights |
+| `education` | Degrees and institutions |
+| `strengths` | 3–6 differentiating capabilities |
+| `green_flags` | Signals that boost a role's score |
+| `yellow_flags` | Cautions worth surfacing but not disqualifying |
+| `red_flags` | Soft negatives |
+| `deal_breakers` | Hard disqualifiers — roles violating these are filtered from the digest entirely and shown only as a footer count |
+| `salary_floor_usd` | Minimum acceptable base salary (hard gate — see §9 Q4) |
+| `notes` | Free-text context passed verbatim to Claude at scoring time |
+
+**Notes:**
+- Missing optional sections are silently omitted; they do not crash scoring
+- A minimal profile with only `candidate` + `experience` still produces meaningful scores
+- Per-criterion score weighting is not yet implemented; all criteria are currently
+  weighted equally by Claude. The `notes` field can be used to emphasise priorities
+  in natural language until explicit weighting is added.
+
+---
+
+## 6. Digest Output
+
+The digest is an HTML email. The default style is fixed; visual customisation
+requires editing `render.py` or the React Email template (`render.ts`).
 
 **Structure:**
 ```
-Header: "Personalized Job Alert Digest — [date]"
-Stat row: [N roles evaluated] [N apply] [N consider]
-Legend: green=strength match, amber=caution, red=concern
+Header:   "Personalized Job Alert Digest — [date]"
+Stat row: [N roles evaluated]  [N apply]  [N consider]
+Legend:   green = strength match · amber = proceed with awareness · red = real concern
 
-Section: Apply   (score ≥ 75)
-  [Job card × N]
-    Title + score pill
-    Company · Location
-    ↑ Leverage: [1–2 match points, conclusion-first format]
-    ↓ Friction: [0–1 honest concern; empty if none]
-    Tags: up to 4 colour-coded highlight tags
-    [View posting →]
+── Apply  (score ≥ 75) ──────────────────────────────────────────────────
+  Title                                                          [score%]
+  Company · Location
+  ↑ Leverage:  topic — evidence clause (1–2 points)
+  ↓ Friction:  topic — concern clause  (0–1; omitted if none)
+  [tag]  [tag]  [tag]
+                                                       [View posting →]
 
-Section: Consider   (score 55–74)
-  [Job card × N]
+── Consider  (score 55–74) ──────────────────────────────────────────────
+  [same card layout]
 
-Section: Skipped   (score < 55)
-  [2-column compact grid, title + top friction tag only]
+── Skipped  (score < 55) ────────────────────────────────────────────────
+  [compact 2-column grid: title · company · location · top friction tag]
 
-Footer: "scorerole · powered by Claude · N roles evaluated"
+── Footer ───────────────────────────────────────────────────────────────
+  scorerole · powered by Claude · N roles evaluated
+  [· N filtered by deal-breaker]  ← shown only when roles were filtered
 ```
 
-**Exit criteria for digest quality:**
-- [ ] Every role in "Apply" has score ≥ 75; every role in "Consider" has score 55–74
-  (verdict drift from Claude is corrected before rendering)
-- [ ] Roles violating a deal_breaker do not appear in Apply, Consider, or Skipped sections
-- [ ] Roles filtered by deal_breaker or salary_floor appear only as a footer count
-  ("X roles filtered — deal_breaker or salary mismatch")
-- [ ] Leverage points follow conclusion-first format: `"topic — evidence clause"`;
-  no "JD needs X → candidate has Y" phrasing
-- [ ] Friction is either a real concern or an empty array; never placeholder text
-  ("none", "n/a", "no concerns")
-- [ ] Digest renders correctly at 600px width (no overflow, no broken table layout)
-- [ ] "View posting →" links resolve to the correct LinkedIn job page
-- [ ] Digest is delivered within `[?]` minutes of running `scorerole`
+**Exit criteria:**
+- [ ] Every "Apply" role has score ≥ 75; every "Consider" role has score 55–74
+  (re-validated in code before rendering — Claude's verdict is not trusted directly)
+- [ ] Roles violating a deal_breaker appear only in the footer count, never in sections
+- [ ] Leverage points use conclusion-first format: `"topic — evidence clause"`
+  Never: `"JD needs X → candidate has Y"`
+- [ ] Friction is a specific, honest concern or absent; never `"none"`, `"n/a"`, etc.
+- [ ] Digest renders at 600px max width with no overflow or broken layout
+- [ ] "View posting →" links resolve to the correct LinkedIn job URL
+- [ ] Digest delivered within a few minutes of running `scorerole`
+  (target: 60–90 seconds for a 20-role run)
 
 ---
 
 ## 7. Configurability
 
-Users can tune scorerole's behaviour without touching code.
+All user-facing configuration lives in two places: `.env` (runtime and secrets) and
+`profile.yaml` (scoring criteria). No code changes required for the settings below.
 
-| What | How | Default | Notes |
+| What to configure | How | Default | Notes |
 |---|---|---|---|
-| How far back to fetch emails | `--lookback 3d` or `DEFAULT_LOOKBACK` in `.env` | `3d` | Also accepts `7d`, `2026-05-10`, `yesterday` |
-| Max roles per run | `MAX_JOBS_PER_RUN` in `.env` | `20` | `0` = no cap |
-| Score everything (bypass cap) | `--all` flag | off | Triggers Haiku pre-screen |
-| Apply threshold | `profile.yaml → scoring.apply_threshold` | `75` | Roles at or above this score → "Apply" |
-| Consider threshold | `profile.yaml → scoring.consider_threshold` | `55` | Roles between this and apply → "Consider" |
-| Level-mismatch penalty | `profile.yaml → scoring.level_mismatch_deduction` | `10` | Deducted when title lacks seniority signal |
-| Scoring model | `MODEL` in `.env` | `claude-sonnet-4-6` | Full scoring |
-| Pre-screen model | `PRESCREEN_MODEL` in `.env` | `claude-haiku-4-5` | Haiku filter pass |
+| Lookback window | `--lookback` flag or `DEFAULT_LOOKBACK` in `.env` | `3d` | Accepts `7d`, `14d`, `2026-06-01`, `yesterday` |
+| Max roles per run | `MAX_JOBS_PER_RUN` in `.env` | `20` | Set to `0` for no cap |
+| Score all roles (bypass cap) | `--all` flag | off | Bypasses the per-run cap only. Does NOT bypass the 14-day dedup gate. Use `scorerole reset` to clear dedup state. |
+| Apply threshold | `scoring.apply_threshold` in `profile.yaml` | `75` | Roles at or above → "Apply" |
+| Consider threshold | `scoring.consider_threshold` in `profile.yaml` | `55` | Roles between thresholds → "Consider"; below → "Skipped" |
+| Level-mismatch penalty | `scoring.level_mismatch_deduction` in `profile.yaml` | `10` | Deducted when job title lacks a seniority signal (Staff / Lead / Director / VP / etc.) |
 
-`[?]` Future: per-criterion weighting (e.g., "weight remote policy 2x").
-`[?]` Future: minimum salary filter applied before scoring (not just as a score signal).
+**Planned but not yet implemented:**
+- Per-criterion score weighting (e.g., weight remote policy 2×)
+- `--max N` flag for a one-off cap override without editing `.env`
+- Salary floor hard-filter (Q4): filter roles whose listed salary is clearly below
+  `salary_floor_usd`; add amber tag when within 10% buffer
 
 ---
 
 ## 8. Non-Functional Requirements
 
-| Requirement | Target | Notes |
-|---|---|---|
-| Setup time (new user) | < 15 minutes | From clone to first digest |
-| Run time (20 roles) | < 3 minutes (target 60–90s) | Dominated by JD enrichment (HTTP) + Sonnet call. >10 min = investigate. |
-| API cost (20-role run) | < $0.30 | ~$0.05–0.15 per 10 roles with claude-sonnet-4-6 |
-| API cost (catch-up, 100 roles with pre-screen) | < $1.50 | Haiku pre-screen cuts ~50% before Sonnet |
-| Secrets | Never committed | `.env` always in `.gitignore`; profile in `~/.job_pipeline/` |
-| Failure mode | Loud + recoverable | SMTP failure exits code 1; parse failures fall back gracefully |
-| Test coverage | Core logic only | Email parsing, dedup, ranking, JSON recovery, profile rendering |
+| Requirement | Target |
+|---|---|
+| First-time setup | < 5 minutes from install to first digest |
+| Per-run time | 60–90s for 20 roles. > 10 min warrants investigation. |
+| API cost (20 roles) | < $0.30 |
+| API cost (100 roles with Haiku pre-screen) | < $1.50 |
+| Sensitive files | `.env` and `~/.job_pipeline/profile.yaml` are never committed to git |
+| Errors | Config errors exit with a clear message and a specific fix instruction. SMTP delivery failures exit with code 1 and a log message. Parse failures fall back gracefully (partial JSON recovery; no silent data loss). |
 
 ---
 
-## 9. Open Questions — Resolved
+## 9. Decisions Log
 
-| # | Question | Decision |
+Rationale for non-obvious product decisions:
+
+| # | Decision | Rationale |
 |---|---|---|
-| Q1 | Acceptable run latency? | 60–90s is fine for 20 roles. >10 min = investigate. No optimization needed now. |
-| Q2 | deal_breakers: filter or penalise? | **Hard filter.** Roles violating a deal_breaker must not appear in the digest. Claude assigns `verdict="filtered"` when a deal_breaker is clearly violated; filtered roles are excluded before rendering. Future: configurable penalty weight for users who prefer soft filtering. |
-| Q3 | Scope of extensible sources? | **Tier A (email-based, same IMAP approach):** Indeed, Glassdoor alerts. **Tier B (HTTP scraping / RSS):** VC portfolio boards (a16z Jobs, etc.), Greenhouse RSS. Tier A is a near-term extension; Tier B is a separate engineering track. |
-| Q4 | salary_floor_usd: hard gate or soft signal? | **Hard gate with negotiation buffer.** If JD states a salary clearly below `salary_floor_usd` (< 90% of floor), filter the role. If salary is within 10% below floor, score normally but add an amber "salary near floor" tag. If JD doesn't mention salary, proceed to scoring. |
-| Q5 | Pre-screen precision bar? | Acceptable. User's LinkedIn alerts are already filtered to senior+ roles, so Haiku's main job is catching wrong-function mismatches. Missing 1 in 10 is acceptable given the fallback (uncapped `seen_roles` keeps unscored roles available). |
-| Q6 | Re-add `scorerole config`? | **No.** `init` covers all user-facing configuration; `.env` covers secrets/runtime tuning. No meaningful third category exists. Companion was correct to remove it. |
-| Q7 | Second persona? | **No.** Senior Companion is a separate project with no intended overlap. scorerole is single-user only for v0.1. |
+| Q1 | Run latency: 60–90s for 20 roles is acceptable. > 10 min = investigate. | Dominated by sequential JD HTTP fetches; parallelisation is possible but not needed yet. |
+| Q2 | `deal_breakers` are hard filters, not score penalties. | A deal-breaker violation means the role should never appear in the digest, period. Future: opt-in soft-filter mode for users who prefer a penalty. |
+| Q3 | Future sources: Tier A (IMAP email — Indeed, Glassdoor); Tier B (HTTP/RSS — VC boards like a16z). | Tier A reuses the existing IMAP parser. Tier B is a separate engineering track with different auth and scraping concerns. |
+| Q4 | `salary_floor_usd` is a hard gate with a 10% negotiation buffer. | If listed salary < 90% of floor → filter. If 90–99% of floor → score normally, add amber "salary near floor" tag. If no salary listed → score normally. |
+| Q5 | Haiku pre-screen precision bar is acceptable as-is. | User's LinkedIn alerts are already filtered to senior+ roles; Haiku mainly catches wrong-function mismatches. Missing 1 in 10 is acceptable since uncapped roles remain in the dedup pool. |
+| Q6 | `scorerole config` not re-added. | `scorerole init` and `.env` cover all configuration surfaces. No meaningful third category. |
+| Q7 | Single-user only for v0.1. | No secondary persona. Senior Companion is a separate unrelated project. |
