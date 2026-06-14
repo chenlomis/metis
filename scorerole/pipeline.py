@@ -121,9 +121,9 @@ def run_pipeline(since_dt: datetime.datetime):
         log.info("No new roles to evaluate — all already seen within the past 14 days.")
         return
 
-    if len(all_jobs) > MAX_JOBS_PER_RUN:
+    if MAX_JOBS_PER_RUN > 0 and len(all_jobs) > MAX_JOBS_PER_RUN:
         log.info(f"{len(all_jobs)} jobs found, capping at {MAX_JOBS_PER_RUN} "
-                 f"(set MAX_JOBS_PER_RUN in .env to change)")
+                 f"(set MAX_JOBS_PER_RUN=0 in .env to remove the cap)")
         all_jobs = all_jobs[:MAX_JOBS_PER_RUN]
     else:
         log.info(f"{len(all_jobs)} unique roles to evaluate")
