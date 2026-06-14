@@ -34,7 +34,32 @@ a ranked digest that surfaces only the roles worth your time — with enough con
 
 ---
 
-## 3. User Persona
+## 3. Data & Privacy
+
+scorerole is a local CLI tool. It does not run a server, collect analytics, or send
+data to any third party beyond what is listed below.
+
+| What | Where it goes | Why |
+|---|---|---|
+| Resume text | Anthropic API | Profile extraction during `scorerole init` |
+| Full profile content (background, experience, strengths, deal_breakers) | Anthropic API | Sent as the scoring system prompt on every `scorerole` run |
+| Job metadata (title, company, location) + JD text (up to ~1,500 chars per role) | Anthropic API | Sent as the scoring batch message on every `scorerole` run |
+| Rendered HTML digest | User's own Gmail (via SMTP) | Digest delivery |
+| JD page fetches | LinkedIn.com (public HTTP) | JD enrichment; fetched from the user's own IP address |
+
+**Nothing else.** No usage telemetry, no crash reporting, no third-party analytics.
+Anthropic's data handling is governed by their [API usage policies](https://www.anthropic.com/legal/aup).
+
+Sensitive files that must never be committed to git:
+- `.env` — contains Gmail App Password and Anthropic API key
+- `~/.job_pipeline/profile.yaml` — contains resume-derived career data
+
+Both are excluded by `.gitignore`. The repository contains only code and sanitised
+example files (`examples/profile_*.yaml` use fictional personas with no real data).
+
+---
+
+## 5. User Persona
 
 **Primary:** Entry-level to mid-senior individual contributors actively job searching,
 relying on LinkedIn job alerts as their primary discovery platform, comfortable with
@@ -42,7 +67,7 @@ lightweight CLI commands, who find manual screening a time drain.
 
 ---
 
-## 4. Core User Flows
+## 6. Core User Flows
 
 ---
 
@@ -130,6 +155,24 @@ Start fresh   — full 4-step wizard with a new resume; overwrites existing prof
 scorerole [--lookback DURATION] [--all]
 ```
 
+**Input format — LinkedIn job alert emails**
+
+scorerole reads emails from three LinkedIn sender addresses:
+- `jobalerts-noreply@linkedin.com` — standard "Your job alert for X" digests
+- `jobs-noreply@linkedin.com` — "Company is hiring" recommendation emails
+- `jobs-listings@linkedin.com` — "Jobs you might like" digests
+
+Two parsing strategies handle different email layouts:
+- **Plain-text:** anchors on the literal string `"View job: https://www.linkedin.com/comm/jobs/view/{ID}/"` and extracts the three lines above it (title, company, location)
+- **HTML fallback:** scans for LinkedIn job URLs in `<a href>` tags when no plain-text anchor is found
+
+**Failure mode if LinkedIn changes their email format:** 0 roles are parsed; no error
+is raised; the pipeline exits with "No new roles to evaluate." This is the #1 first-failure
+mode for new users. Diagnostic: run `scorerole debug` to inspect the raw email body and
+check whether the expected URL pattern is present.
+
+---
+
 **Default behaviour:**
 ```
 → Fetches LinkedIn alert emails from the past 3 days
@@ -205,7 +248,7 @@ scorerole reset --profile
 
 ---
 
-## 5. Profile Schema
+## 7. Profile Schema
 
 All fields are user-editable — either through `scorerole init` or by editing
 `~/.job_pipeline/profile.yaml` directly.
@@ -236,7 +279,7 @@ All fields are user-editable — either through `scorerole init` or by editing
 
 ---
 
-## 6. Digest Output
+## 8. Digest Output
 
 The digest is an HTML email. The default style is fixed; visual customisation
 requires editing `render.py` or the React Email template (`render.ts`).
@@ -280,7 +323,7 @@ Legend:   green = strength match · amber = proceed with awareness · red = real
 
 ---
 
-## 7. Configurability
+## 9. Configurability
 
 All user-facing configuration lives in two places: `.env` (runtime and secrets) and
 `profile.yaml` (scoring criteria). No code changes required for the settings below.
@@ -302,7 +345,7 @@ All user-facing configuration lives in two places: `.env` (runtime and secrets) 
 
 ---
 
-## 8. Non-Functional Requirements
+## 10. Non-Functional Requirements
 
 | Requirement | Target |
 |---|---|
@@ -315,7 +358,7 @@ All user-facing configuration lives in two places: `.env` (runtime and secrets) 
 
 ---
 
-## 9. Decisions Log
+## 11. Decisions Log
 
 Rationale for non-obvious product decisions:
 
@@ -328,3 +371,5 @@ Rationale for non-obvious product decisions:
 | Q5 | Haiku pre-screen precision bar is acceptable as-is. | User's LinkedIn alerts are already filtered to senior+ roles; Haiku mainly catches wrong-function mismatches. Missing 1 in 10 is acceptable since uncapped roles remain in the dedup pool. |
 | Q6 | `scorerole config` not re-added. | `scorerole init` and `.env` cover all configuration surfaces. No meaningful third category. |
 | Q7 | Single-user only for v0.1. | No secondary persona. Senior Companion is a separate unrelated project. |
+| Q8 | Crash / failure recovery — known limitation in v0.1. | `seen_roles.json` is only written after a successful digest delivery. Any failure before that point (scoring error, SMTP failure, crash) leaves roles unmarked. A re-run re-fetches and re-scores the same roles, incurring additional API cost. This behaviour prioritises delivery guarantee (never mark a role seen if the user didn't receive the digest) over cost efficiency. **Future mitigation:** save the rendered HTML to disk on SMTP failure so the user can resend without re-scoring (ARCHITECTURE.md T-07). |
+| Q9 | `profile.yaml` schema versioning — not handled in v0.1. | No `schema_version` field exists. Missing fields fail gracefully (silently omitted from scoring prompt). Renamed or restructured fields would silently produce incorrect scoring with no warning. If scorerole is updated and the profile schema changes, re-run `scorerole init → Quick edit` to review and fill in any new fields. **Future:** add `schema_version` to profile.yaml; detect version mismatch on load and prompt for migration. |
