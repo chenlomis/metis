@@ -232,11 +232,10 @@ it at install time — the JSON is the source of truth.
 
 ### P1 — Would break things silently
 
-**T-01: score_jobs_batch() makes a single large API call**
-With 200+ roles (after pre-screen), a single Sonnet call risks hitting `max_tokens=4096`
-for the response. `_recover_partial_json()` salvages truncated arrays, but roles beyond
-the truncation point get marked as "skipped" silently. Mitigation: chunk into batches of
-25–30 for large runs.
+**~~T-01: score_jobs_batch() makes a single large API call~~** *(resolved June 2026)*
+Chunking into ≤15 roles/call with `_SCORE_CHUNK_SIZE = 15` and `max_tokens = 8192`
+eliminates the truncation risk. `_recover_partial_json()` remains as a safety net.
+Closed.
 
 **T-02: enrich_jobs() is sequential**
 JD fetches run one at a time with a 0.4s delay. 100 jobs = ~60 seconds of HTTP time
@@ -278,6 +277,11 @@ Consider persisting the rendered HTML locally on SMTP failure for manual resend.
 The M-04 fix checks for `candidate`, `target`, `experience` but not their sub-fields
 (e.g., `candidate.name`, `target.roles`). A profile with empty dicts for those sections
 passes validation but would produce a nearly-blank scoring prompt.
+
+**~~T-12: _build_prescreen_context() hardcoded candidate function to "Product Management"~~** *(resolved June 2026)*
+Pre-screen context now reads `target.roles[0]` from `profile.yaml` so non-PM profiles
+(ML engineers, designers) get the correct function signal for Haiku filtering.
+Closed.
 
 ### P3 — Future extensibility
 
