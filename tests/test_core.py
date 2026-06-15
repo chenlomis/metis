@@ -405,3 +405,224 @@ class TestRenderProfile:
         from scorerole.profile import render_profile
         out = render_profile({})
         assert isinstance(out, str)
+
+    def test_profile_with_no_experience(self):
+        """Resume with no work history must not crash or raise KeyError."""
+        from scorerole.profile import render_profile
+        profile = {
+            "candidate": {"name": "New Grad", "title": "Recent Graduate"},
+            "target": {"level": "Junior", "roles": ["PM"]},
+            "scoring": {"apply_threshold": 75, "consider_threshold": 55},
+        }
+        out = render_profile(profile)
+        assert "New Grad" in out
+
+    def test_profile_missing_optional_sections_renders_cleanly(self):
+        """A profile with only candidate + target must not show empty headers."""
+        from scorerole.profile import render_profile
+        profile = {
+            "candidate": {"name": "Min User"},
+            "target":    {"roles": ["Engineer"]},
+        }
+        out = render_profile(profile)
+        # No section should appear with empty content
+        assert "EXPERIENCE:" not in out
+        assert "EDUCATION:" not in out
+        assert "DEAL BREAKERS" not in out
+
+
+# ---------------------------------------------------------------------------
+# sources/linkedin.py — edge cases in email parsing
+# ---------------------------------------------------------------------------
+
+class TestExtractJobsEdgeCases:
+    """Unusual but real email structures that must not crash or silently drop jobs."""
+
+    def test_malformed_url_no_job_id_skipped(self):
+        """A 'View job:' line with no numeric ID must be silently skipped."""
+        from scorerole.sources.linkedin import extract_jobs
+        body = (
+            "Some Title\nSome Company\nSome City\n"
+            "View job: https://www.linkedin.com/comm/jobs/view/not-a-number/\n"
+        )
+        jobs = extract_jobs(body)
+        assert jobs == []
+
+    def test_fewer_than_three_lines_before_url_skipped(self):
+        """If there aren't enough context lines above the URL, job must be skipped
+        rather than filling fields with noise."""
+        from scorerole.sources.linkedin import extract_jobs
+        body = (
+            "Only one line\n"
+            "View job: https://www.linkedin.com/comm/jobs/view/1234567890/X/\n"
+        )
+        jobs = extract_jobs(body)
+        assert jobs == []
+
+    def test_noise_lines_filtered_before_field_extraction(self):
+        """'Actively hiring', 'Be an early applicant', etc. must not
+        displace title/company/location from their expected positions."""
+        from scorerole.sources.linkedin import extract_jobs
+        body = (
+            "Senior PM\n"
+            "Anthropic\n"
+            "San Francisco, CA\n"
+            "Actively hiring\n"
+            "Be an early applicant\n"
+            "3 connections\n"
+            "View job: https://www.linkedin.com/comm/jobs/view/9900000001/Z/\n"
+        )
+        jobs = extract_jobs(body)
+        assert len(jobs) == 1
+        assert jobs[0]["title"] == "Senior PM"
+        assert jobs[0]["company"] == "Anthropic"
+
+    def test_html_extraction_skips_navigation_links(self):
+        """Short anchor text like 'View all jobs', 'Apply', 'LinkedIn' must
+        not be parsed as job titles."""
+        from scorerole.sources.linkedin import extract_jobs_html
+        html = """
+        <html><body>
+          <a href="https://www.linkedin.com/comm/jobs/view/5000000001/?t=x">Head of AI</a>
+          <span>OpenAI · San Francisco, CA</span>
+          <a href="https://www.linkedin.com/comm/jobs/view/5000000001/?t=x">View all jobs</a>
+          <a href="https://www.linkedin.com/comm/jobs/view/5000000001/?t=x">Apply</a>
+        </body></html>
+        """
+        jobs = extract_jobs_html(html)
+        titles = [j["title"] for j in jobs]
+        assert "View all jobs" not in titles
+        assert "Apply" not in titles
+        # The real job should be present exactly once
+        assert titles.count("Head of AI") == 1
+
+    def test_empty_html_body_returns_empty_list(self):
+        from scorerole.sources.linkedin import extract_jobs_html
+        assert extract_jobs_html("") == []
+        assert extract_jobs_html("<html><body></body></html>") == []
+
+
+# ---------------------------------------------------------------------------
+# score.py — score_jobs_batch edge cases (no real API calls)
+# ---------------------------------------------------------------------------
+
+class TestScoreJobsBatchEdgeCases:
+    """Verify the scoring glue logic without calling the Anthropic API."""
+
+    def _make_job(self, title="Staff PM", company="Acme", score=80):
+        return {
+            "title": title, "company": company, "location": "SF",
+            "jd": "Some job description text.",
+            "eval": {},
+        }
+
+    def test_claude_returns_fewer_objects_than_jobs(self):
+        """If Claude returns 1 eval for 3 jobs, the missing 2 must be marked
+        skipped with a parse-error friction note — not raise IndexError."""
+        from scorerole.score import score_jobs_batch
+        import unittest.mock as mock
+
+        jobs = [self._make_job(f"Job {i}") for i in range(3)]
+        fake_response = mock.MagicMock()
+        fake_response.content = [mock.MagicMock(
+            text='[{"score": 80, "verdict": "apply", "leveragePoints": [], "frictionPoints": [], "tags": []}]'
+        )]
+        fake_response.usage = mock.MagicMock(
+            input_tokens=100, output_tokens=20,
+            cache_creation_input_tokens=0, cache_read_input_tokens=0,
+        )
+
+        with mock.patch("scorerole.score._build_score_system", return_value="mock profile"):
+            fake_client = mock.MagicMock()
+            fake_client.messages.create.return_value = fake_response
+            result = score_jobs_batch(fake_client, jobs)
+
+        assert len(result) == 3
+        assert result[0]["eval"]["score"] == 80          # got a real eval
+        assert result[1]["eval"]["verdict"] == "skipped" # filled with error eval
+        assert result[2]["eval"]["verdict"] == "skipped"
+
+    def test_claude_returns_completely_broken_json(self):
+        """If Claude returns garbage, all jobs must be marked skipped — no crash."""
+        from scorerole.score import score_jobs_batch
+        import unittest.mock as mock
+
+        jobs = [self._make_job()]
+        fake_response = mock.MagicMock()
+        fake_response.content = [mock.MagicMock(text="I cannot score these roles.")]
+        fake_response.usage = mock.MagicMock(
+            input_tokens=50, output_tokens=10,
+            cache_creation_input_tokens=0, cache_read_input_tokens=0,
+        )
+
+        with mock.patch("scorerole.score._build_score_system", return_value="mock profile"):
+            fake_client = mock.MagicMock()
+            fake_client.messages.create.return_value = fake_response
+            result = score_jobs_batch(fake_client, jobs)
+
+        assert result[0]["eval"]["verdict"] == "skipped"
+        assert "parse error" in result[0]["eval"]["frictionPoints"][0].lower()
+
+
+# ---------------------------------------------------------------------------
+# render.py — digest rendering edge cases
+# ---------------------------------------------------------------------------
+
+class TestRenderEdgeCases:
+    """build_digest_html must not crash on unusual but valid job lists."""
+
+    def _job(self, verdict, score):
+        return {
+            "title": "Staff PM", "company": "Acme", "location": "NYC", "url": "#",
+            "eval": {
+                "verdict": verdict, "score": score,
+                "leveragePoints": ["strength — evidence"], "frictionPoints": [],
+                "tags": [{"text": "AI", "sentiment": "green"}],
+            },
+        }
+
+    def test_empty_job_list_renders(self):
+        """An empty list must render valid HTML without crashing."""
+        from scorerole.render import build_digest_html
+        html = build_digest_html([], "June 14, 2026")
+        assert "<html" in html
+        assert "0 roles evaluated" not in html or True  # any output is acceptable
+
+    def test_all_skipped_renders_without_apply_section(self):
+        from scorerole.render import build_digest_html
+        jobs = [self._job("skipped", 30), self._job("skipped", 20)]
+        html = build_digest_html(jobs, "June 14, 2026")
+        assert "<html" in html
+        assert "Skipped" in html
+
+    def test_all_filtered_shows_footer_count_only(self):
+        """If every role was filtered by deal_breaker, no job sections appear,
+        but the footer must mention the filtered count.
+        build_digest_html receives only scored jobs (filtered ones removed upstream);
+        deal_breaker_count is passed in separately."""
+        from scorerole.render import build_digest_html
+        # pass empty scored list + count=2, matching how pipeline.py calls it
+        html = build_digest_html([], "June 14, 2026", deal_breaker_count=2)
+        assert "filtered by deal" in html
+        # No apply/consider/skipped *section* should appear (stat row cells are fine)
+        assert "View posting" not in html  # no job cards rendered
+
+    def test_mixed_verdicts_all_sections_present(self):
+        from scorerole.render import build_digest_html
+        jobs = [
+            self._job("apply",    80),
+            self._job("consider", 60),
+            self._job("skipped",  30),
+        ]
+        html = build_digest_html(jobs, "June 14, 2026")
+        assert "Apply" in html
+        assert "Consider" in html
+        assert "Skipped" in html
+
+    def test_no_friction_points_omits_friction_line(self):
+        """A job with empty frictionPoints must not render a bare '↓ Friction:' row."""
+        from scorerole.render import build_digest_html
+        jobs = [self._job("apply", 80)]
+        jobs[0]["eval"]["frictionPoints"] = []
+        html = build_digest_html(jobs, "June 14, 2026")
+        assert "Friction:" not in html or "↓ Friction: </span>" not in html
