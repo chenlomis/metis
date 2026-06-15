@@ -46,40 +46,36 @@ def _candidate_name() -> str:
 # ---------------------------------------------------------------------------
 
 def _build_prescreen_context() -> str:
-    """Condensed profile snapshot for pre-screening — targeting criteria only."""
+    """Minimal profile context for pre-screening.
+
+    Intentionally excludes seniority level and target role titles — the pre-screen
+    only sees title+company (no JD), so it cannot reliably assess scope. A "Senior PM"
+    role may be staff-scope in practice; filtering on level here causes false negatives.
+    Only deal-breakers that are inferable from title+company alone are included.
+    """
     try:
         from .profile import load_profile_yaml
         data = load_profile_yaml() or {}
     except Exception:
         return ""
 
-    lines: list[str] = []
-    cand   = data.get("candidate", {})
-    target = data.get("target",    {})
-
-    name, title = cand.get("name", ""), cand.get("title", "")
-    parts = [p for p in [name, title] if p]
-    if parts:
-        lines.append("Candidate: " + ", ".join(parts))
-
-    roles = target.get("roles", [])
-    if roles:
-        lines.append("Targeting: " + ", ".join(roles))
-
-    level = cand.get("seniority", "") or target.get("level", "")
-    if level:
-        lines.append(f"Seniority: {level}")
+    lines: list[str] = ["Candidate function: Product Management"]
 
     deal_breakers = data.get("deal_breakers", [])
     if deal_breakers:
-        lines.append("Hard no: " + "; ".join(str(d) for d in deal_breakers[:4]))
+        lines.append("Hard no (flag if obviously matched by title/company): "
+                     + "; ".join(str(d) for d in deal_breakers[:6]))
 
     return "\n".join(lines)
 
 
-def _estimate_sonnet_cost(jobs: list[dict]) -> float:
-    """Rough upper-bound cost estimate for scoring n jobs with Sonnet."""
-    return len(jobs) * 0.015
+def estimate_cost(n: int) -> str:
+    """Human-readable Sonnet cost range for scoring n jobs (upper bound before pre-screen).
+
+    Exported so pipeline.py can reference this single source of truth for cost estimates.
+    """
+    lo, hi = n * 0.005, n * 0.015
+    return f"${lo:.2f}–${hi:.2f}"
 
 
 def _recover_partial_json(raw: str) -> list[dict]:
@@ -131,15 +127,18 @@ def prescreen_jobs_batch(client: anthropic.Anthropic, jobs: list[dict]) -> list[
     try:
         response = client.messages.create(
             model=PRESCREEN_MODEL,
-            max_tokens=max(128, len(jobs) * 8),
+            max_tokens=max(256, len(jobs) * 12),  # ~12 tok/job: "1. Y\n" with headroom
             system=(
                 f"{context}\n\n"
-                "Quick relevance filter. For each numbered job output only the number "
+                "Quick function filter. For each numbered job output only the number "
                 "and Y or N — nothing else.\n"
-                "Y = plausibly relevant to this candidate's targets and background.\n"
-                "N = clear mismatch (wrong function, obviously wrong seniority, "
-                "or matches a hard-no rule).\n"
-                "When uncertain, say Y."
+                "N = wrong function entirely: engineering, design, marketing, sales, "
+                "data science, finance, operations, or legal role — NOT a PM/product role. "
+                "OR the title+company obviously matches a hard-no deal-breaker above.\n"
+                "Y = everything else, including all seniority levels of PM/product roles "
+                "(IC, Senior, Lead, Staff, Principal, Director, VP). "
+                "Never filter on seniority — scope must be assessed from the JD, not the title.\n"
+                "When uncertain, Y."
             ),
             messages=[{"role": "user", "content": job_lines}],
         )
@@ -147,7 +146,7 @@ def prescreen_jobs_batch(client: anthropic.Anthropic, jobs: list[dict]) -> list[
         log.warning(
             "Pre-screen API call failed (%s) — skipping filter, proceeding with all %d roles. "
             "Estimated Sonnet cost: ~$%.4f",
-            exc, len(jobs), _estimate_sonnet_cost(jobs),
+            exc, len(jobs), estimate_cost(len(jobs)),
         )
         return jobs
 
@@ -159,9 +158,9 @@ def prescreen_jobs_batch(client: anthropic.Anthropic, jobs: list[dict]) -> list[
     )
 
     # Parse lines like "1. Y", "2. N", "3 Y", "4) N", etc.
-    passed: list[dict] = []
-    n_filtered         = 0
-    matched: set[int]  = set()
+    passed:   list[dict] = []
+    filtered: list[str]  = []
+    matched:  set[int]   = set()
     for line in raw.splitlines():
         m = re.match(r"(\d+)[.):\s]+([YN])", line.strip(), re.IGNORECASE)
         if m:
@@ -172,17 +171,19 @@ def prescreen_jobs_batch(client: anthropic.Anthropic, jobs: list[dict]) -> list[
                 if verdict == "Y":
                     passed.append(jobs[idx])
                 else:
-                    n_filtered += 1
+                    filtered.append(f"{jobs[idx]['title']} at {jobs[idx]['company']}")
 
-    if not passed and n_filtered == 0:
+    if not passed and not filtered:
         log.warning(
             "Pre-screen: response couldn't be parsed — proceeding with all %d roles. "
             "Estimated Sonnet cost: ~$%.4f",
-            len(jobs), _estimate_sonnet_cost(jobs),
+            len(jobs), estimate_cost(len(jobs)),
         )
         return jobs
 
-    log.info(f"Pre-screen: {len(passed)}/{len(jobs)} passed ({n_filtered} filtered out)")
+    log.info("Pre-screen: %d/%d passed (%d filtered out)", len(passed), len(jobs), len(filtered))
+    if filtered:
+        log.info("Pre-screen filtered:\n  " + "\n  ".join(filtered))
     return passed
 
 
@@ -259,7 +260,12 @@ Be honest. {apply_t}% IS strong at this level. Do not inflate.
 Return ONLY valid JSON array — no markdown fences, no preamble."""
 
 
-def score_jobs_batch(client: anthropic.Anthropic, jobs: list[dict]) -> list[dict]:
+_SCORE_CHUNK_SIZE = 15   # max jobs per Sonnet call (~15 × 300 tok ≈ 4,500 out, fits in 8192)
+_MAX_OUTPUT_TOKENS = 8192
+
+
+def _score_chunk(client: anthropic.Anthropic, jobs: list[dict], system_prompt: str) -> list[dict]:
+    """Score one chunk of jobs. Returns evals list (may be shorter than jobs on truncation)."""
     job_blocks = "\n\n---\n\n".join(
         "JOB {n}: {title} at {company} ({location})\n{jd_line}".format(
             n=i + 1,
@@ -277,14 +283,8 @@ def score_jobs_batch(client: anthropic.Anthropic, jobs: list[dict]) -> list[dict
 
     response = client.messages.create(
         model=MODEL,
-        max_tokens=4096,
-        system=[
-            {
-                "type": "text",
-                "text": _build_score_system(),
-                "cache_control": {"type": "ephemeral"},
-            }
-        ],
+        max_tokens=_MAX_OUTPUT_TOKENS,
+        system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
         messages=[{
             "role": "user",
             "content": (
@@ -297,10 +297,11 @@ def score_jobs_batch(client: anthropic.Anthropic, jobs: list[dict]) -> list[dict
 
     usage = response.usage
     log.info(
-        f"Scoring — input: {usage.input_tokens} tokens "
-        f"(cache_write: {getattr(usage, 'cache_creation_input_tokens', 0)}, "
-        f"cache_read: {getattr(usage, 'cache_read_input_tokens', 0)}), "
-        f"output: {usage.output_tokens} tokens"
+        "Scoring — input: %d tokens (cache_write: %d, cache_read: %d), output: %d tokens",
+        usage.input_tokens,
+        getattr(usage, "cache_creation_input_tokens", 0),
+        getattr(usage, "cache_read_input_tokens", 0),
+        usage.output_tokens,
     )
 
     raw = re.sub(
@@ -310,23 +311,42 @@ def score_jobs_batch(client: anthropic.Anthropic, jobs: list[dict]) -> list[dict
         evals = json.loads(raw)
         if isinstance(evals, dict):
             evals = [evals]
+        return evals
     except json.JSONDecodeError:
         evals = _recover_partial_json(raw)
         if evals:
             log.warning(
-                "Batch score JSON was truncated — recovered %d/%d objects via partial parse",
+                "Chunk score JSON truncated — recovered %d/%d objects via partial parse",
                 len(evals), len(jobs),
             )
         else:
             log.error(
-                "Batch score JSON parse failed entirely — all %d jobs marked skipped. "
-                "Re-run with a smaller batch or check API token limits.",
+                "Chunk score JSON parse failed entirely — %d jobs marked skipped.",
                 len(jobs),
             )
+        return evals
 
-    _error_eval = {"score": 0, "verdict": "skipped", "leveragePoints": [], "frictionPoints": ["Scoring parse error"], "tags": []}
-    for i, job in enumerate(jobs):
-        job["eval"] = evals[i] if i < len(evals) else _error_eval
+
+def score_jobs_batch(client: anthropic.Anthropic, jobs: list[dict]) -> list[dict]:
+    """Score all jobs, chunking into batches of _SCORE_CHUNK_SIZE to avoid output truncation."""
+    system_prompt = _build_score_system()
+    _error_eval   = {
+        "score": 0, "verdict": "skipped",
+        "leveragePoints": [], "frictionPoints": ["Scoring parse error"], "tags": [],
+    }
+
+    chunks = [jobs[i:i + _SCORE_CHUNK_SIZE] for i in range(0, len(jobs), _SCORE_CHUNK_SIZE)]
+    if len(chunks) > 1:
+        log.info("Scoring %d jobs in %d chunks of ≤%d", len(jobs), len(chunks), _SCORE_CHUNK_SIZE)
+
+    all_evals: list[dict] = []
+    for chunk in chunks:
+        evals = _score_chunk(client, chunk, system_prompt)
+        for i in range(len(chunk)):
+            all_evals.append(evals[i] if i < len(evals) else _error_eval)
+
+    for job, ev in zip(jobs, all_evals):
+        job["eval"] = ev
     return jobs
 
 

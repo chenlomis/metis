@@ -6,7 +6,7 @@ collects preferences interactively, extracts a structured profile
 with Claude, lets the user review and edit, then saves to
 ~/.job_pipeline/profile.yaml.
 """
-import os, sys, shutil, subprocess, logging
+import os, re, sys, shutil, subprocess, logging
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -166,9 +166,17 @@ def _safe_parse_yaml(raw: str) -> dict:
         )
         raw = "\n".join(lines[1:close])
 
+    _REQUIRED_SECTIONS = ("candidate", "target", "experience")
+
     try:
         result = yaml.safe_load(raw)
         if isinstance(result, dict):
+            missing = [k for k in _REQUIRED_SECTIONS if k not in result]
+            if missing:
+                raise ValueError(
+                    f"Claude-generated profile is missing required sections: {missing}. "
+                    "Try re-running extraction."
+                )
             return result
     except yaml.YAMLError:
         pass
@@ -180,6 +188,9 @@ def _safe_parse_yaml(raw: str) -> dict:
             result = yaml.safe_load("\n".join(lines[:cut]))
             if isinstance(result, dict) and result:
                 log.warning("YAML truncated; recovered partial profile (%d/%d lines)", cut, len(lines))
+                missing = [k for k in _REQUIRED_SECTIONS if k not in result]
+                if missing:
+                    log.warning("Recovered profile is missing sections: %s — re-run extraction if scoring looks off", missing)
                 return result
         except yaml.YAMLError:
             continue
@@ -331,15 +342,33 @@ def _collect_hard_filters(Q_STYLE) -> dict:
     deal_breakers = questionary.text("  Deal-breakers:", style=Q_STYLE).ask() or ""
 
     print()
-    print("  Min. base salary: numbers only, leave blank to let Claude estimate")
-    salary_floor = questionary.text("  Min. base salary (USD):", style=Q_STYLE).ask() or ""
+    print("  Min. base salary: enter a number like 150000 or 150,000  (leave blank to skip)")
+    salary_floor = ""
+    while True:
+        raw_salary = questionary.text("  Min. base salary (USD):", style=Q_STYLE).ask() or ""
+        cleaned = raw_salary.replace(",", "").replace("$", "").strip()
+        if not cleaned:
+            break
+        # Reject shorthand like "150k" — int() would silently fail downstream
+        if cleaned.lower().endswith("k"):
+            try:
+                salary_floor = str(int(float(cleaned[:-1]) * 1000))
+                break
+            except ValueError:
+                pass
+        try:
+            salary_floor = str(int(cleaned))
+            break
+        except ValueError:
+            print(f"  ⚠  Couldn't parse '{raw_salary}' as a number. "
+                  f"Try: 150000 or 150,000  (leave blank to skip)")
 
     return {
         "target_roles":      [r.strip() for r in target_roles.split(",") if r.strip()],
         "work_mode":         work_mode,
         "relocation_cities": relocation,
         "deal_breakers":     [d.strip() for d in deal_breakers.split(",") if d.strip()],
-        "salary_floor":      salary_floor.replace(",", "").replace("$", "").strip(),
+        "salary_floor":      salary_floor,
     }
 
 
@@ -395,12 +424,34 @@ def _collect_soft_preferences(Q_STYLE) -> dict:
     industry_targets = questionary.text("  Industries to move toward:", style=Q_STYLE).ask() or ""
 
     print()
+    print("  Domain flexibility: how should scorerole treat roles outside your core domain?")
+    domain_flex = questionary.select(
+        "  Domain experience gaps:",
+        choices=[
+            questionary.Choice(
+                "Flexible — credit transferable skills; domain gaps are friction, not dealbreakers",
+                value="flexible",
+            ),
+            questionary.Choice(
+                "Moderate — penalise significant domain gaps but don't disqualify",
+                value="moderate",
+            ),
+            questionary.Choice(
+                "Strict — only score highly if I have direct domain experience",
+                value="strict",
+            ),
+        ],
+        style=Q_STYLE,
+    ).ask() or "moderate"
+
+    print()
     print("  Anything else Claude should know? e.g. 'Staff-scope despite Senior title'")
     calibration = questionary.text("  Anything else:", style=Q_STYLE).ask() or ""
 
     return {
         "company_stage":    company_stage,
         "industry_targets": [i.strip() for i in industry_targets.split(",") if i.strip()],
+        "domain_flex":      domain_flex,
         "calibration":      calibration.strip(),
     }
 
@@ -517,10 +568,18 @@ def _apply_prefs_to_profile(profile: dict, prefs: dict) -> None:
     if prefs.get("deal_breakers") is not None:
         profile["deal_breakers"] = prefs["deal_breakers"]
 
-    # Salary floor
+    # Salary floor — salary_floor_usd is the single source of truth.
+    # If Claude's extraction also wrote a salary mention into deal_breakers, remove it
+    # so the two don't conflict (deal-breakers fire first and would override the explicit floor).
     if prefs.get("salary_floor"):
         try:
-            profile["salary_floor_usd"] = int(prefs["salary_floor"])
+            floor = int(prefs["salary_floor"])
+            profile["salary_floor_usd"] = floor
+            _salary_re = re.compile(r"salary|compensation|pay|base", re.IGNORECASE)
+            profile["deal_breakers"] = [
+                d for d in profile.get("deal_breakers", [])
+                if not _salary_re.search(str(d))
+            ]
         except (ValueError, TypeError):
             pass
 
@@ -540,7 +599,33 @@ def _apply_prefs_to_profile(profile: dict, prefs: dict) -> None:
     if prefs.get("industry_targets") is not None:
         pref["industry_targets"] = prefs["industry_targets"]
 
-    # Extra calibration notes — append to existing
+    # Domain flexibility — inject a scoring calibration note so Claude doesn't
+    # over-penalise domain gaps when the user prefers transferable-skills weighting.
+    _DOMAIN_FLEX_NOTES = {
+        "flexible": (
+            "Domain gaps are friction, not disqualifiers: deduct 5–15 points for missing "
+            "domain experience, but do not drop the score below 'consider' on that basis alone. "
+            "Credit transferable PM skills, technical depth, and adjacent domain experience at full weight."
+        ),
+        "moderate": (
+            "Domain gaps are a soft signal: deduct up to 20 points for significant domain "
+            "distance, but always credit transferable skills and technical background."
+        ),
+        "strict": (
+            "Domain experience is important: apply a meaningful penalty (20–30 points) when "
+            "the candidate lacks direct experience in the role's primary domain."
+        ),
+    }
+    domain_flex = prefs.get("domain_flex", "")
+    if domain_flex and domain_flex in _DOMAIN_FLEX_NOTES:
+        flex_note = _DOMAIN_FLEX_NOTES[domain_flex]
+        existing  = (profile.get("notes") or "").strip()
+        # Replace any prior domain-flex note (line starting with "Domain gaps") before appending.
+        existing_lines = [l for l in existing.splitlines() if not l.startswith("Domain gaps")]
+        existing = "\n".join(existing_lines).strip()
+        profile["notes"] = (existing + "\n\n" + flex_note).strip() if existing else flex_note
+
+    # Extra free-text calibration notes — append to existing
     if prefs.get("calibration"):
         existing = (profile.get("notes") or "").strip()
         profile["notes"] = (existing + "\n\n" + prefs["calibration"]).strip() if existing else prefs["calibration"]
@@ -604,15 +689,15 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
         mode = questionary.select(
             "  What do you want to do?",
             choices=[
-                questionary.Choice("Quick edit    — jump to review menu, no re-extraction",        value="quick"),
-                questionary.Choice("Update prefs  — re-answer Step 3, apply to existing profile",  value="update_prefs"),
-                questionary.Choice("Open in editor — edit profile.yaml directly",                  value="editor"),
-                questionary.Choice("Start fresh   — new resume, full re-extraction",               value="full"),
+                questionary.Choice("Quick edits   — jump to review menu, no re-extraction",  value="quick"),
+                questionary.Choice("Open in editor — edit profile.yaml directly",             value="editor"),
+                questionary.Choice("Start fresh   — new resume, full re-extraction",          value="full"),
+                questionary.Choice("Exit",                                                    value="exit"),
             ],
             style=Q_STYLE,
         ).ask()
 
-        if mode is None:
+        if mode is None or mode == "exit":
             sys.exit(0)
 
         if mode == "editor":
@@ -622,23 +707,6 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
         elif mode == "quick":
             profile = existing
             skip_extraction = True
-            console.print()
-            _show_profile(profile, console)
-            console.print()
-
-        elif mode == "update_prefs":
-            profile = existing
-            skip_extraction = True
-            console.print()
-            console.print(
-                "  [dim]Experience, strengths, and flags from your last extraction are preserved.[/dim]\n"
-                "  [dim]Your new answers below update goals, deal-breakers, and preferences.[/dim]"
-            )
-            console.print()
-            _show_profile(profile, console)
-            prefs = _collect_preferences(console, Q_STYLE)
-            user_context = _format_user_context(prefs)
-            _apply_prefs_to_profile(profile, prefs)
             console.print()
             _show_profile(profile, console)
             console.print()
@@ -793,12 +861,25 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
 
     while True:
         print()
-        print("  Arrow keys to navigate  ·  Enter to select  ·  Ctrl-C to cancel")
-        action = questionary.select(
-            "  Looks good?",
-            choices=review_choices,
-            style=Q_STYLE,
-        ).ask()
+        print("  Arrow keys to navigate  ·  Enter to select")
+        try:
+            action = questionary.select(
+                "  Looks good?",
+                choices=review_choices,
+                style=Q_STYLE,
+            ).ask()
+        except KeyboardInterrupt:
+            print()
+            try:
+                save_now = questionary.confirm(
+                    "  Save profile before exiting?", default=True, style=Q_STYLE
+                ).ask()
+            except KeyboardInterrupt:
+                save_now = False
+            if save_now:
+                break          # fall through to the save block below
+            print("  Exited without saving.")
+            sys.exit(0)
 
         if action is None or action == "save":
             break
@@ -822,7 +903,7 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
 
         elif action == "strengths":
             print()
-            print("  List your key strengths — each on its own line (semicolons separate them).")
+            print("  List your key strengths, separated by semicolons.")
             print("  Be specific: 'ML depth — trained 2k+ models, RLHF at DocuSign' beats 'ML skills'.")
             current_strengths = "; ".join(profile.get("strengths", []))
             new_val = questionary.text(
@@ -933,8 +1014,9 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
         console.print()
 
     # ── Save ──────────────────────────────────────────────────────────────────
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    DATA_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)  # restrict to owner
     PROFILE_PATH.write_text(yaml.dump(profile, allow_unicode=True, sort_keys=False))
+    PROFILE_PATH.chmod(0o600)   # profile contains salary, deal-breakers — owner-only
     console.print(f"\n  [green]✓[/green]  Saved to [dim]{PROFILE_PATH}[/dim]\n")
 
     # ── What next ─────────────────────────────────────────────────────────────
@@ -956,5 +1038,4 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
 
     console.print(
         "\n  [dim]Run `scorerole init` any time to update your profile.[/dim]\n"
-        "  [dim]Run `scorerole config profile` to open it in your editor.[/dim]\n"
     )

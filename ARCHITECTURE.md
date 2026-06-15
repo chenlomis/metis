@@ -134,6 +134,17 @@ Key `.env` fields:
   debug_email.txt    — written by scorerole debug
 ```
 
+**File permissions:** `~/.job_pipeline/` is created with `mode=0o700` (owner-only directory).
+`profile.yaml` and `seen_roles.json` are created with `mode=0o600` (owner-only read/write).
+Log files use the system default (typically 644) and may contain job titles/companies from
+warning messages — avoid sharing raw log output in bug reports without redaction.
+
+**What leaves the machine:** Resume text (during `scorerole init`) and the full profile
+(as a scoring system prompt on every run) are sent to the Anthropic API over HTTPS.
+Job titles, company names, and JD snippets (≤1,500 chars each) are sent with each scoring
+batch. Gmail credentials stay local — IMAP and SMTP connections go directly to Gmail (SSL).
+See README § Privacy for the full data flow table.
+
 ---
 
 ## Module Map
@@ -179,11 +190,10 @@ location from the title alone. A role that passes pre-screen but is 100% on-site
 a location the candidate can't work from still gets full Sonnet scoring. Not a bug,
 but a known precision gap.
 
-**T-05: scorerole config subcommand removed**
-The companion removed `scorerole config` (opening profile.yaml or .env in editor).
-This functionality is now only reachable through `scorerole init → Quick edits →
-Open in editor`. Re-adding a thin `scorerole config` as a direct alias to the editor
-would improve discoverability.
+**T-05: scorerole config subcommand not re-added (resolved)**
+`scorerole config` was removed; profile editing is handled through `scorerole init`
+(Quick edits / Open in editor modes). This is intentional — see SPEC Q6. No separate
+config subcommand is planned.
 
 **T-06: Digest duplication on reset + rerun**
 `scorerole reset` + `scorerole --all --lookback 14d` re-scores roles that were already
@@ -191,11 +201,12 @@ correctly scored and delivered in a prior digest. The user receives them again. 
 dedup across digest emails — the sent digest is the only record. Acceptable for a
 personal tool; worth noting for multi-user scenarios.
 
-**T-07: send_digest() re-raises SMTP exceptions**
-H-02 fix correctly surfaces SMTP errors, but `run_pipeline()` now exits with code 1
-on SMTP failure. If the digest is built and scored but email fails, the roles are still
-written to `seen_roles.json` — they won't be retried next run. Consider persisting the
-rendered HTML locally on SMTP failure so it can be resent.
+**T-07: SMTP failure leaves roles unseen — they retry on the next run**
+`save_seen_roles()` is called AFTER `send_digest()`. If SMTP raises → `SystemExit(1)` →
+`save_seen_roles` never runs → the roles remain unseen and will be re-scored on the next
+run. This is intentional (Q8 in SPEC): if delivery fails, you shouldn't lose the roles
+permanently. Downside: if SMTP is broken for many runs, you accumulate re-scoring costs.
+Consider persisting the rendered HTML locally on SMTP failure for manual resend.
 
 **T-08: init_cmd.py profile schema validation (M-04) only checks top-level keys**
 The M-04 fix checks for `candidate`, `target`, `experience` but not their sub-fields

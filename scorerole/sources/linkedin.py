@@ -1,4 +1,4 @@
-import re, json, imaplib, email, datetime, logging
+import re, json, imaplib, email, datetime, logging, time
 import httpx
 from bs4 import BeautifulSoup
 
@@ -231,10 +231,29 @@ def _fetch_one_jd(job: dict) -> tuple[str, str]:
     Returns (jd_text, apply_url). apply_url is the external ATS link
     (Greenhouse, Lever, Ashby, etc.) from the JSON-LD applyAction, or
     empty string for LinkedIn Easy Apply roles.
+
+    Retries up to 3 times with exponential backoff on transient errors (429/5xx).
     """
     try:
-        r = httpx.get(job["url"], headers=_BROWSER_HEADERS, timeout=12, follow_redirects=True)
-        if r.status_code != 200:
+        r = None
+        for attempt in range(3):
+            try:
+                r = httpx.get(job["url"], headers=_BROWSER_HEADERS, timeout=12, follow_redirects=True)
+            except httpx.TimeoutException:
+                log.warning("JD fetch timeout (attempt %d/3): %s at %s", attempt + 1, job["title"], job["url"])
+                if attempt < 2:
+                    time.sleep(2 ** attempt)
+                continue
+            if r.status_code == 200:
+                break
+            if r.status_code in (429, 500, 502, 503, 504):
+                log.warning("JD fetch HTTP %d (attempt %d/3): %s", r.status_code, attempt + 1, job["url"])
+                if attempt < 2:
+                    time.sleep(2 ** attempt)
+            else:
+                # Non-retryable status (403, 404, etc.)
+                return "", ""
+        if r is None or r.status_code != 200:
             return "", ""
         soup = BeautifulSoup(r.text, "html.parser")
         # LinkedIn embeds structured job data in JSON-LD
@@ -283,9 +302,8 @@ def enrich_jobs(jobs: list[dict]) -> list[dict]:
     return jobs
 
 
-def _fetch_emails(imap, search_criteria: str, max_recent: int,
-                  seen_ids: set | None = None) -> list[dict]:
-    """Shared fetch loop used by both alert functions."""
+def _fetch_emails(imap, search_criteria: str, max_recent: int) -> list[dict]:
+    """Fetch and parse emails matching search_criteria, up to max_recent most recent."""
     _, data = imap.search(None, search_criteria)
     all_ids = data[0].split()
     recent = all_ids[-max_recent:] if len(all_ids) > max_recent else all_ids
@@ -297,8 +315,6 @@ def _fetch_emails(imap, search_criteria: str, max_recent: int,
         msg_id = msg.get("Message-ID", "")
         if not msg_id:
             continue
-        if seen_ids is not None and msg_id in seen_ids:
-            continue
         body = _extract_text(msg)
         html  = _get_html_body(msg)
         if body or html:
@@ -306,22 +322,32 @@ def _fetch_emails(imap, search_criteria: str, max_recent: int,
     return threads
 
 
-def fetch_linkedin_alerts(seen_ids: set) -> list[dict]:
-    with imaplib.IMAP4_SSL("imap.gmail.com") as imap:
-        imap.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
-        imap.select("INBOX")
-        threads = _fetch_emails(imap, _LINKEDIN_SENDER_SEARCH, 30, seen_ids)
-    log.info(f"{len(threads)} new LinkedIn emails to process")
-    return threads
-
 
 def fetch_linkedin_alerts_since(since_dt: datetime.datetime) -> list[dict]:
     """Fetch all LinkedIn emails on or after since_dt. Read-only — ignores seen_ids."""
     date_str = since_dt.strftime("%d-%b-%Y")
     criteria = f'{_LINKEDIN_SENDER_SEARCH} SINCE "{date_str}"'
-    with imaplib.IMAP4_SSL("imap.gmail.com") as imap:
-        imap.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
-        imap.select("INBOX")
-        threads = _fetch_emails(imap, criteria, 100)
+    try:
+        with imaplib.IMAP4_SSL("imap.gmail.com") as imap:
+            try:
+                imap.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
+            except imaplib.IMAP4.error as e:
+                raise SystemExit(
+                    f"\n❌  Gmail login failed: {e}\n\n"
+                    f"   GMAIL_ADDRESS:      {GMAIL_ADDRESS or '(not set)'}\n"
+                    f"   GMAIL_APP_PASSWORD: {'(set)' if GMAIL_APP_PASSWORD else '(not set)'}\n\n"
+                    f"   Make sure GMAIL_APP_PASSWORD is a Gmail App Password (not your account password).\n"
+                    f"   Generate one at: https://myaccount.google.com/apppasswords\n"
+                    f"   Requires 2-Step Verification to be enabled on your Google account.\n"
+                ) from None
+            imap.select("INBOX")
+            threads = _fetch_emails(imap, criteria, 100)
+    except SystemExit:
+        raise
+    except OSError as e:
+        raise SystemExit(
+            f"\n❌  Could not connect to Gmail IMAP: {e}\n"
+            f"   Check your internet connection and try again.\n"
+        ) from None
     log.info(f"{len(threads)} LinkedIn emails matched for --since {date_str} rerun")
     return threads

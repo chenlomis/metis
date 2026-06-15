@@ -621,6 +621,153 @@ class TestScoreJobsBatchEdgeCases:
 
 
 # ---------------------------------------------------------------------------
+# score.py — chunking behaviour
+# ---------------------------------------------------------------------------
+
+class TestScoreJobsBatchChunking:
+    """score_jobs_batch must chunk large batches and merge results correctly."""
+
+    def _make_jobs(self, n: int):
+        return [
+            {"title": f"Job {i}", "company": "Acme", "location": "SF",
+             "jd": "Some job description.", "eval": {}}
+            for i in range(n)
+        ]
+
+    def _fake_response(self, n: int):
+        import unittest.mock as mock
+        evals = [
+            {"score": 70, "verdict": "consider",
+             "leveragePoints": [], "frictionPoints": [], "tags": []}
+            for _ in range(n)
+        ]
+        r = mock.MagicMock()
+        r.content = [mock.MagicMock(text=json.dumps(evals))]
+        r.usage = mock.MagicMock(
+            input_tokens=100, output_tokens=50,
+            cache_creation_input_tokens=0, cache_read_input_tokens=0,
+        )
+        return r
+
+    def test_small_batch_single_chunk(self):
+        """Fewer than _SCORE_CHUNK_SIZE jobs → exactly one API call."""
+        from scorerole.score import score_jobs_batch, _SCORE_CHUNK_SIZE
+        import unittest.mock as mock
+
+        jobs = self._make_jobs(_SCORE_CHUNK_SIZE - 1)
+        fake_client = mock.MagicMock()
+        fake_client.messages.create.return_value = self._fake_response(len(jobs))
+
+        with mock.patch("scorerole.score._build_score_system", return_value="mock"):
+            result = score_jobs_batch(fake_client, jobs)
+
+        assert fake_client.messages.create.call_count == 1
+        assert len(result) == len(jobs)
+
+    def test_large_batch_multiple_chunks(self):
+        """More than _SCORE_CHUNK_SIZE jobs → multiple API calls, all evals merged."""
+        from scorerole.score import score_jobs_batch, _SCORE_CHUNK_SIZE
+        import unittest.mock as mock
+
+        n = _SCORE_CHUNK_SIZE + 5  # guaranteed to require 2 chunks
+        jobs = self._make_jobs(n)
+
+        def side_effect(*args, **kwargs):
+            # Return evals matching the chunk size for each call
+            content = kwargs.get("messages", [{}])[0].get("content", "")
+            # Count "JOB N:" lines to infer chunk size
+            chunk_n = content.count("JOB ")
+            return self._fake_response(chunk_n)
+
+        fake_client = mock.MagicMock()
+        fake_client.messages.create.side_effect = side_effect
+
+        with mock.patch("scorerole.score._build_score_system", return_value="mock"):
+            result = score_jobs_batch(fake_client, jobs)
+
+        assert fake_client.messages.create.call_count == 2
+        assert len(result) == n
+        assert all(j["eval"]["score"] == 70 for j in result)
+
+    def test_chunk_truncation_fills_remainder_with_error_eval(self):
+        """If a chunk response is truncated (fewer evals than jobs), the missing
+        slots must get _error_eval — not IndexError."""
+        from scorerole.score import score_jobs_batch, _SCORE_CHUNK_SIZE
+        import unittest.mock as mock
+
+        jobs = self._make_jobs(5)
+        # API returns only 2 evals for a 5-job chunk
+        fake_client = mock.MagicMock()
+        fake_client.messages.create.return_value = self._fake_response(2)
+
+        with mock.patch("scorerole.score._build_score_system", return_value="mock"):
+            result = score_jobs_batch(fake_client, jobs)
+
+        assert result[0]["eval"]["score"] == 70   # real eval
+        assert result[1]["eval"]["score"] == 70   # real eval
+        assert result[2]["eval"]["verdict"] == "skipped"  # error eval
+        assert "parse error" in result[2]["eval"]["frictionPoints"][0].lower()
+
+
+# ---------------------------------------------------------------------------
+# init_cmd.py — salary floor / deal_breaker consistency
+# ---------------------------------------------------------------------------
+
+class TestApplyPrefsToProfile:
+    """_apply_prefs_to_profile must keep salary_floor_usd as the single source of truth."""
+
+    def _base_profile(self):
+        return {
+            "deal_breakers": [
+                "Base salary below $250,000",
+                "Role requires people management",
+            ],
+            "salary_floor_usd": 250000,
+        }
+
+    def test_salary_floor_update_removes_salary_deal_breaker(self):
+        """When salary_floor is updated, any salary mention in deal_breakers must be removed."""
+        from scorerole.init_cmd import _apply_prefs_to_profile
+        profile = self._base_profile()
+        _apply_prefs_to_profile(profile, {"salary_floor": "200000"})
+        assert profile["salary_floor_usd"] == 200000
+        # No salary-related deal-breaker should remain
+        salary_dbs = [d for d in profile["deal_breakers"] if "salary" in d.lower() or "compensation" in d.lower()]
+        assert salary_dbs == []
+
+    def test_non_salary_deal_breakers_preserved(self):
+        """Only salary-related deal-breakers are removed — others must survive."""
+        from scorerole.init_cmd import _apply_prefs_to_profile
+        profile = self._base_profile()
+        _apply_prefs_to_profile(profile, {"salary_floor": "200000"})
+        assert any("management" in d for d in profile["deal_breakers"])
+
+    def test_no_salary_deal_breaker_no_change(self):
+        """If deal_breakers has no salary mention, the list must be unchanged."""
+        from scorerole.init_cmd import _apply_prefs_to_profile
+        profile = {"deal_breakers": ["No management roles"], "salary_floor_usd": 200000}
+        _apply_prefs_to_profile(profile, {"salary_floor": "180000"})
+        assert profile["deal_breakers"] == ["No management roles"]
+        assert profile["salary_floor_usd"] == 180000
+
+    def test_domain_flex_flexible_injects_calibration_note(self):
+        """domain_flex='flexible' must inject the domain-gap friction note into profile.notes."""
+        from scorerole.init_cmd import _apply_prefs_to_profile
+        profile = {"notes": "Existing calibration text."}
+        _apply_prefs_to_profile(profile, {"domain_flex": "flexible"})
+        assert "Domain gaps are friction" in profile["notes"]
+        assert "Existing calibration text." in profile["notes"]
+
+    def test_domain_flex_replaces_prior_domain_note(self):
+        """Re-running init with a different domain_flex must replace the old domain note."""
+        from scorerole.init_cmd import _apply_prefs_to_profile
+        profile = {"notes": "Domain gaps are friction, not disqualifiers: old text."}
+        _apply_prefs_to_profile(profile, {"domain_flex": "strict"})
+        assert "Domain gaps are friction" not in profile["notes"]
+        assert "meaningful penalty" in profile["notes"]
+
+
+# ---------------------------------------------------------------------------
 # render.py — digest rendering edge cases
 # ---------------------------------------------------------------------------
 

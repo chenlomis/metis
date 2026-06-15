@@ -102,8 +102,10 @@ ready to score against.
                Claude extracts your experience, education, and strengths.
 
      Step 2 — LinkedIn profile (optional)
-               Provide your LinkedIn profile URL or paste your profile text.
-               Supplements the resume extraction.
+               Export your LinkedIn profile as a PDF (LinkedIn → Me → Settings & Privacy
+               → Data Privacy → Get a copy of your data → Profile → Request archive).
+               LinkedIn usually emails the download link within minutes.
+               This step can be skipped — press Enter at the path prompt to continue.
 
      Step 3 — Career context
                Answer guided questions covering:
@@ -112,6 +114,7 @@ ready to score against.
                • Career aspirations and direction
                • Deal breakers (roles that should never appear in your digest)
                • Minimum salary floor
+               • Domain flexibility (how hard to penalise roles outside your core domain)
 
      Step 4 — Review and save
                Review the extracted profile. Edit any section before saving.
@@ -123,11 +126,11 @@ ready to score against.
 
 **Exit criteria:**
 - [ ] End-to-end first-time setup completes in under 5 minutes
-- [ ] `scorerole init` completes without error given a valid PDF, DOCX, or TXT resume
-- [ ] Profile is saved to `~/.job_pipeline/profile.yaml` after step 4
-- [ ] Missing `.env` key → error names the missing variable and links to where to get it
-- [ ] Resume file not found → re-prompts for path; no crash
-- [ ] Claude API key invalid → clear error before any wizard steps run
+- [x] `scorerole init` completes without error given a valid PDF, DOCX, or TXT resume
+- [x] Profile is saved to `~/.job_pipeline/profile.yaml` after step 4
+- [x] Missing `.env` key → error names the missing variable and links to where to get it
+- [x] Resume file not found → re-prompts for path; no crash
+- [ ] Claude API key invalid → clear error before any wizard steps run *(known limitation — presence is validated upfront; key validity is only confirmed when Claude is first called in step 4)*
 
 #### 1b — Profile Update (existing profile)
 
@@ -210,14 +213,15 @@ scorerole --all [--lookback DURATION]
 ```
 
 **Exit criteria:**
-- [ ] Roles seen in a previous digest do not reappear within the 14-day window
-- [ ] Roles beyond the cap are NOT written to `seen_roles.json`; they reappear next run
-- [ ] Running `scorerole` twice with no new emails shows "no new roles", not empty digest
-- [ ] User is notified when the role count exceeds the cap (interactive runs)
-- [ ] `--all` shows a cost estimate before making any scoring API calls
-- [ ] Cron / non-interactive runs never block on a prompt; they cap silently and log
-- [ ] scorerole does not re-evaluate previously seen roles unless `scorerole reset` is run
-- [ ] Digest has a default visual style; visual customisation requires editing `render.py`
+- [x] Roles seen in a previous digest do not reappear within the 14-day window
+- [x] Roles beyond the cap are NOT written to `seen_roles.json`; they reappear next run
+- [x] Running `scorerole` twice with no new emails shows "no new roles", not empty digest
+- [x] User is notified when the role count exceeds the cap (interactive runs)
+- [x] `--all` shows a cost estimate before making any scoring API calls
+- [x] Cron / non-interactive runs never block on a prompt; they cap silently and log
+- [x] scorerole does not re-evaluate previously seen roles unless `scorerole reset` is run
+- [x] Digest has a default visual style; visual customisation requires editing `render.py`
+- [x] No digest sent when all roles are filtered by deal-breakers (exits cleanly with log message)
 
 ---
 
@@ -242,11 +246,10 @@ scorerole reset --profile
 ```
 
 **Exit criteria:**
-- [ ] `scorerole debug` produces output regardless of whether jobs were found; never crashes
-- [ ] `scorerole reset` prompts for confirmation; does not delete without it
-- [ ] After `scorerole reset`, a same-day run re-evaluates previously seen roles
-- [ ] `scorerole reset --profile` + `scorerole` without init → clear error pointing to
-  `scorerole init`, not a Python traceback
+- [ ] `scorerole debug` produces output regardless of whether jobs were found; never crashes *(partial — IMAP auth failure during debug produces a clean error message, but no output file)*
+- [x] `scorerole reset` prompts for confirmation; does not delete without it
+- [x] After `scorerole reset`, a same-day run re-evaluates previously seen roles
+- [x] `scorerole reset --profile` + `scorerole` without init → clean error pointing to `scorerole init`, not a Python traceback
 
 ---
 
@@ -312,15 +315,16 @@ Legend:   green = strength match · amber = proceed with awareness · red = real
 ```
 
 **Exit criteria:**
-- [ ] Every "Apply" role has score ≥ 75; every "Consider" role has score 55–74
+- [x] Every "Apply" role has score ≥ 75; every "Consider" role has score 55–74
   (re-validated in code before rendering — Claude's verdict is not trusted directly)
-- [ ] Roles violating a deal_breaker appear only in the footer count, never in sections
+- [x] Roles violating a deal_breaker appear only in the footer count, never in sections
 - [ ] Leverage points use conclusion-first format: `"topic — evidence clause"`
-  Never: `"JD needs X → candidate has Y"`
+  Never: `"JD needs X → candidate has Y"` *(prompted via scoring instructions; not enforced post-render)*
 - [ ] Friction is a specific, honest concern or absent; never `"none"`, `"n/a"`, etc.
-- [ ] Digest renders at 600px max width with no overflow or broken layout
-- [ ] "View posting →" links resolve to the correct LinkedIn job URL
-- [ ] Digest delivered within a few minutes of running `scorerole`
+  *(prompted; not post-processed — `[]` is enforced but `["none"]` is not caught)*
+- [x] Digest renders at 600px max width with no overflow or broken layout
+- [x] "View posting →" links resolve to the correct LinkedIn job URL
+- [x] Digest delivered within a few minutes of running `scorerole`
   (target: 60–90 seconds for a 20-role run)
 
 ---
@@ -352,7 +356,7 @@ All user-facing configuration lives in two places: `.env` (runtime and secrets) 
 | Requirement | Target |
 |---|---|
 | First-time setup | < 5 minutes from install to first digest |
-| Per-run time | 60–90s for 20 roles. > 10 min warrants investigation. |
+| Per-run time | 60–90s for 20 roles. > 10 min warrants investigation. Scoring is chunked (≤15 roles/call) to stay within Sonnet's 8,192-token output ceiling; large batches (30–45 roles) add one extra API call but remain well within the time budget. |
 | API cost (20 roles) | < $0.30 |
 | API cost (100 roles with Haiku pre-screen) | < $1.50 |
 | Sensitive files | `.env` and `~/.job_pipeline/profile.yaml` are never committed to git |
@@ -369,9 +373,15 @@ Rationale for non-obvious product decisions:
 | Q1 | Run latency: 60–90s for 20 roles is acceptable. > 10 min = investigate. | Dominated by sequential JD HTTP fetches; parallelisation is possible but not needed yet. |
 | Q2 | `deal_breakers` are hard filters, not score penalties. | A deal-breaker violation means the role should never appear in the digest, period. Future: opt-in soft-filter mode for users who prefer a penalty. |
 | Q3 | Future sources: Tier A (IMAP email — Indeed, Glassdoor); Tier B (HTTP/RSS — VC boards like a16z). | Tier A reuses the existing IMAP parser. Tier B is a separate engineering track with different auth and scraping concerns. |
-| Q4 | `salary_floor_usd` is a hard gate with a 10% negotiation buffer. | If listed salary < 90% of floor → filter. If 90–99% of floor → score normally, add amber "salary near floor" tag. If no salary listed → score normally. |
-| Q5 | Haiku pre-screen precision bar is acceptable as-is. | User's LinkedIn alerts are already filtered to senior+ roles; Haiku mainly catches wrong-function mismatches. Missing 1 in 10 is acceptable since uncapped roles remain in the dedup pool. |
+| Q4 | `salary_floor_usd` is the single source of truth for the salary hard gate. | `salary_floor_usd` in `profile.yaml` is the authoritative floor. When the user updates salary via `scorerole init`, any salary mention in `deal_breakers[]` is automatically removed to prevent conflict (deal-breakers are applied before the `salary_floor_usd` check, so a stale deal-breaker would silently override the user's explicit floor). Planned: if listed salary < 90% of floor → filter; if 90–99% → score normally, add amber "salary near floor" tag. Not yet implemented — currently `salary_floor_usd` is sent to Claude as context and Claude applies it with its own judgment. |
+| Q5 | Haiku pre-screen filters on function only — not seniority level. | The pre-screen sees only title+company (no JD). It cannot reliably assess scope: a "Senior PM" role may be Staff-scope in practice. Pre-screen filters only wrong-function roles (engineering, marketing, design, sales) and obvious deal-breaker matches. All PM/product roles at any seniority level pass through to full Sonnet scoring, where scope is assessed against the JD. Missing 1 in 10 function-mismatches is acceptable; false negatives on level are not. |
 | Q6 | `scorerole config` not re-added. | `scorerole init` and `.env` cover all configuration surfaces. No meaningful third category. |
 | Q7 | Single-user only for v0.1. | No secondary persona. Senior Companion is a separate unrelated project. |
 | Q8 | Crash / failure recovery — known limitation in v0.1. | `seen_roles.json` is only written after a successful digest delivery. Any failure before that point (scoring error, SMTP failure, crash) leaves roles unmarked. A re-run re-fetches and re-scores the same roles, incurring additional API cost. This behaviour prioritises delivery guarantee (never mark a role seen if the user didn't receive the digest) over cost efficiency. **Future mitigation:** save the rendered HTML to disk on SMTP failure so the user can resend without re-scoring (ARCHITECTURE.md T-07). |
 | Q9 | `profile.yaml` schema versioning — not handled in v0.1. | No `schema_version` field exists. Missing fields fail gracefully (silently omitted from scoring prompt). Renamed or restructured fields would silently produce incorrect scoring with no warning. If scorerole is updated and the profile schema changes, re-run `scorerole init → Quick edit` to review and fill in any new fields. **Future:** add `schema_version` to profile.yaml; detect version mismatch on load and prompt for migration. |
+| Q10 | Relocation choices in wizard are US-only — known limitation. | `_RELOCATION_CITIES` is a hardcoded list of 9 US metros. International users can express relocation preferences by editing `profile.yaml` directly (`candidate.open_to_relocation: ["London, UK", "Toronto, ON"]`). A free-text "Other" field in the wizard is a planned UX improvement. |
+| Q11 | Easy Apply vs. external ATS is invisible in the digest — by design for v0.1. | `apply_url` (the external ATS link from LinkedIn JSON-LD) is fetched and stored in the job dict but not surfaced in the digest card. Both Easy Apply and external-ATS roles display the same "View posting →" LinkedIn link. Surfacing the distinction (e.g. a "Direct apply" badge on cards with an ATS link) is planned for a future digest version. |
+| Q12 | Deal-breaker filtering relies on Claude's judgment, not deterministic matching. | The `verdict="filtered"` is set by the scoring model based on profile deal-breaker text. An ambiguous role might occasionally slip through. Deterministic keyword matching against `deal_breakers[]` is a future option for users who need guaranteed filtering. |
+| Q13 | Gmail INBOX assumed — label-filtered emails not supported. | The IMAP search targets the INBOX folder. If a user has a Gmail filter that labels LinkedIn job alerts and archives them, `scorerole` will find 0 emails. Workaround: disable the archive action on that Gmail filter, or adjust the filter to keep matching emails in INBOX. |
+| Q14 | Scoring API errors (network, rate limit) produce a traceback — known limitation in v0.1. | No retry logic on `score_jobs_batch`. A transient API error during scoring exits with a traceback. JD enrichment work is lost; re-running re-fetches and re-scores. A single retry with exponential backoff is planned. |
+| Q15 | Long `notes` / AI-instructions field is hard to edit in-wizard. | `questionary.text` is a single-line input. Editing a multi-sentence `notes` value is awkward. Workaround: use `scorerole init → Open in editor` to edit `profile.yaml` directly for any long free-text field. |

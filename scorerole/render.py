@@ -1,4 +1,4 @@
-import os, json, logging, smtplib, subprocess, tempfile
+import os, stat, json, logging, smtplib, subprocess, tempfile
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from pathlib import Path
@@ -84,11 +84,17 @@ def _section_header(label: str, count_text: str, bar_color: str, label_color: st
 
 
 def _job_card(job: dict, bg: str, pill_bg: str, pill_color: str) -> str:
-    ev        = job["eval"]
-    score     = ev.get("score", 0)
-    tags_html = _render_tags(ev.get("tags", []))
-    rationale = _leverage_friction(ev.get("leveragePoints", []), ev.get("frictionPoints", []))
-    link_url  = job.get("url", "#")
+    ev          = job["eval"]
+    score       = ev.get("score", 0)
+    tags_html   = _render_tags(ev.get("tags", []))
+    rationale   = _leverage_friction(ev.get("leveragePoints", []), ev.get("frictionPoints", []))
+    link_url    = job.get("url", "#")
+    alumni      = job.get("alumni_count")
+    alumni_html = (
+        f'<span style="font-size:11px;color:{_C_MUTED};font-family:{_FONT}">'
+        f'{alumni} alumni</span>'
+        if alumni else ""
+    )
     return (
         f'<table width="100%" cellpadding="0" cellspacing="0" border="0" '
         f'style="background:{bg};border:1px solid {_C_BORDER};border-radius:4px">'
@@ -110,9 +116,9 @@ def _job_card(job: dict, bg: str, pill_bg: str, pill_color: str) -> str:
         f'{rationale}'
         # Row 4 — tags
         f'<div style="margin-bottom:10px">{tags_html}</div>'
-        # Row 5 — footer: view link right-aligned
+        # Row 5 — footer: alumni count left, view link right
         f'<table width="100%" cellpadding="0" cellspacing="0" border="0"><tr>'
-        f'<td style="font-size:11px;color:#aaa;font-family:{_FONT}">&nbsp;</td>'
+        f'<td style="font-size:11px;color:{_C_MUTED};font-family:{_FONT}">{alumni_html}</td>'
         f'<td style="text-align:right">'
         f'<a href="{link_url}" style="font-size:12px;font-weight:500;color:#185FA5;'
         f'text-decoration:none;border:1px solid #ddd;padding:5px 12px;'
@@ -151,7 +157,7 @@ def _score_range(jobs: list[dict]) -> str:
     return f"{lo}–{hi}% match · {n} role{'s' if n != 1 else ''}"
 
 
-def build_digest_payload(jobs: list[dict], run_date: str) -> dict:
+def build_digest_payload(jobs: list[dict], run_date: str, deal_breaker_count: int = 0) -> dict:
     result_jobs = []
     for job in jobs:
         ev = job.get("eval", {})
@@ -167,19 +173,28 @@ def build_digest_payload(jobs: list[dict], run_date: str) -> dict:
             "alumniCount":    job.get("alumni_count"),
             "postingUrl":     job.get("url", "#"),
         })
-    return {"date": run_date, "totalEvaluated": len(jobs), "jobs": result_jobs}
+    return {
+        "date":             run_date,
+        "totalEvaluated":   len(jobs),
+        "dealBreakerCount": deal_breaker_count,
+        "jobs":             result_jobs,
+    }
 
 
-def render_html(jobs: list[dict], run_date: str) -> str:
+def render_html(jobs: list[dict], run_date: str, deal_breaker_count: int = 0) -> str:
     pipeline_dir  = Path(__file__).parent.parent  # scorerole/ → project root
     ts_node       = pipeline_dir / "node_modules" / ".bin" / "ts-node"
     render_script = pipeline_dir / "render.ts"
 
     if ts_node.exists() and render_script.exists():
-        payload = build_digest_payload(jobs, run_date)
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+        payload = build_digest_payload(jobs, run_date, deal_breaker_count)
+        # ts-node reads the payload file after Python closes the fd, so we use mkstemp
+        # (delete=False equivalent) and restrict permissions before writing any data.
+        fd, payload_path = tempfile.mkstemp(suffix=".json")
+        os.chmod(fd, stat.S_IRUSR | stat.S_IWUSR)  # 0o600 — contains scored job data
+        with os.fdopen(fd, "w") as f:               # fdopen takes ownership of fd
             json.dump(payload, f)
-            payload_path = f.name
+        # fd is now closed; payload_path is written. Clean up regardless of what follows.
         try:
             result = subprocess.run(
                 [str(ts_node), str(render_script), payload_path],
@@ -195,23 +210,22 @@ def render_html(jobs: list[dict], run_date: str) -> str:
             Path(payload_path).unlink(missing_ok=True)
 
     log.info("HTML rendered via Python fallback")
-    return build_digest_html(jobs, run_date)
+    return build_digest_html(jobs, run_date, deal_breaker_count)
 
 
-def build_digest_html(jobs: list[dict], run_date: str) -> str:
+def build_digest_html(jobs: list[dict], run_date: str, deal_breaker_count: int = 0) -> str:
+    # `jobs` contains only scored roles (apply / consider / skipped).
+    # Deal-breaker filtered roles are removed upstream in pipeline.py before render;
+    # their count is passed in as deal_breaker_count and shown only in the footer.
     apply    = [j for j in jobs if j["eval"].get("verdict") == "apply"]
     consider = [j for j in jobs if j["eval"].get("verdict") == "consider"]
     skips    = [j for j in jobs if j["eval"].get("verdict") == "skipped"]
-    filtered = [j for j in jobs if j["eval"].get("verdict") == "filtered"]
-    # Filtered roles (deal_breaker violations) are excluded from all sections;
-    # only a footer count is shown so the user knows they were caught.
-    scored   = [j for j in jobs if j["eval"].get("verdict") != "filtered"]
 
     # --- Stat row ---
     stat_row = (
         f'<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:14px">'
         f'<tr>'
-        f'{_stat_cell(len(scored),  "Roles evaluated", "#5F5E5A")}'
+        f'{_stat_cell(len(jobs),    "Roles evaluated", "#5F5E5A")}'
         f'<td width="6">&nbsp;</td>'
         f'{_stat_cell(len(apply),   "Apply now",       "#3B6D11")}'
         f'<td width="6">&nbsp;</td>'
@@ -233,9 +247,7 @@ def build_digest_html(jobs: list[dict], run_date: str) -> str:
         f'{_dot("#BA7517")}'
         f'<td style="font-size:12px;color:{_C_MUTED};padding:0 12px 0 5px;font-family:{_FONT}">Proceed with awareness</td>'
         f'{_dot("#A32D2D")}'
-        f'<td style="font-size:12px;color:{_C_MUTED};padding:0 12px 0 5px;font-family:{_FONT}">Real concern</td>'
-        f'{_dot("#D85A30")}'
-        f'<td style="font-size:12px;color:{_C_MUTED};padding:0 0 0 5px;font-family:{_FONT}">Domain gap</td>'
+        f'<td style="font-size:12px;color:{_C_MUTED};padding:0 0 0 5px;font-family:{_FONT}">Real concern</td>'
         f'</tr></table>'
     )
 
@@ -299,15 +311,16 @@ def build_digest_html(jobs: list[dict], run_date: str) -> str:
 
     # --- Footer ---
     filtered_note = (
-        f' &middot; {len(filtered)} filtered by deal&#8209;breaker'
-        if filtered else ""
+        f' &middot; <span style="color:#A32D2D">'
+        f'{deal_breaker_count} filtered by deal&#8209;breaker</span>'
+        if deal_breaker_count else ""
     )
     footer = (
         f'<table width="100%" cellpadding="0" cellspacing="0" border="0">'
         f'<tr><td height="1" style="background:{_C_BORDER};font-size:0;line-height:0">&nbsp;</td></tr>'
         f'<tr><td style="padding-top:12px;font-size:11px;color:#aaa;text-align:center;'
         f'font-family:{_FONT}">scorerole &middot; powered by Claude '
-        f'&middot; {len(scored)} roles evaluated{filtered_note}</td></tr>'
+        f'&middot; {len(jobs)} roles evaluated{filtered_note}</td></tr>'
         f'</table>'
     )
 
