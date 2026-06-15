@@ -59,7 +59,14 @@ def _build_prescreen_context() -> str:
     except Exception:
         return ""
 
-    lines: list[str] = ["Candidate function: Product Management"]
+    target_roles = data.get("target", {}).get("roles", [])
+    # Use first target role as the function signal; fall back to PM for legacy profiles.
+    function_hint = target_roles[0] if target_roles else "Product Management"
+    lines: list[str] = [
+        f"Candidate is seeking: {function_hint} (and similar roles at same level).",
+        "Filter ONLY if the role is a completely different function "
+        "(e.g., candidate seeks ML Engineering but role is Marketing or Finance).",
+    ]
 
     deal_breakers = data.get("deal_breakers", [])
     if deal_breakers:
