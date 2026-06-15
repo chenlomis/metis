@@ -1019,6 +1019,35 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
     PROFILE_PATH.chmod(0o600)   # profile contains salary, deal-breakers — owner-only
     console.print(f"\n  [green]✓[/green]  Saved to [dim]{PROFILE_PATH}[/dim]\n")
 
+    # ── Scheduling ────────────────────────────────────────────────────────────
+    from .schedule_cmd import load_schedule, run_schedule_wizard
+    existing_schedule = load_schedule()
+    if existing_schedule:
+        from .schedule_cmd import FREQUENCY_OPTIONS
+        freq  = existing_schedule.get("frequency", "?")
+        label = FREQUENCY_OPTIONS.get(freq, {}).get("label", freq)
+        console.print(
+            f"\n  [dim]Automated schedule already active: {label} at {existing_schedule.get('time', '?')}[/dim]"
+        )
+        change = questionary.confirm(
+            "  Update the schedule?", default=False, style=Q_STYLE
+        ).ask()
+        if change:
+            run_schedule_wizard()
+    else:
+        console.print()
+        setup_schedule = questionary.confirm(
+            "  Set up automated digests? scorerole can email you on a schedule without manual runs.",
+            default=True,
+            style=Q_STYLE,
+        ).ask()
+        if setup_schedule:
+            run_schedule_wizard()
+        else:
+            console.print(
+                "  [dim]You can set this up later with: scorerole schedule --set[/dim]"
+            )
+
     # ── What next ─────────────────────────────────────────────────────────────
     next_action = questionary.select(
         "  What next?",
@@ -1037,5 +1066,5 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
         open_in_editor(env_example if env_example.exists() else PROFILE_PATH.parent)
 
     console.print(
-        "\n  [dim]Run `scorerole init` any time to update your profile.[/dim]\n"
+        "\n  [dim]Run `scorerole init` any time to update your profile or schedule.[/dim]\n"
     )

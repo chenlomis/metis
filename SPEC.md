@@ -32,6 +32,7 @@ a ranked digest that surfaces only the roles worth your time — with enough con
 | Delivering a ranked HTML digest by email | Multi-user / team / SaaS features |
 | Profile setup and editing via interactive CLI | Real-time / streaming alerts |
 | Configurable lookback, cap, and score thresholds | |
+| Automated scheduling via OS job (launchd / crontab) | |
 | Extensible source layer (see §9 Q3 for roadmap) | |
 
 ---
@@ -225,7 +226,68 @@ scorerole --all [--lookback DURATION]
 
 ---
 
-### Flow 3 — Reset & Troubleshoot (`scorerole reset`, `scorerole debug`)
+### Flow 3 — Automated Scheduling (`scorerole schedule`)
+
+**Goal:** User sets up a recurring digest that runs without any manual command.
+
+```
+Set up during init (recommended for new users):
+  scorerole init
+  → At the end of the wizard, asks "Set up automated digests?"
+  → If yes: runs the scheduling wizard inline
+
+Or at any time:
+  scorerole schedule --set
+```
+
+**Scheduling wizard:**
+```
+1. How often?
+     • Daily
+     • Twice a week (Mon & Thu)
+     • Weekly (choose day)
+
+2. At what time?  [HH:MM 24-hour format, default 08:00]
+
+3. Install
+     macOS  → writes launchd plist to ~/Library/LaunchAgents/com.scorerole.digest.plist
+              and loads it via launchctl (no admin rights required)
+     Linux  → adds a tagged line to the user's crontab (crontab -l / crontab -)
+     Config → saved to ~/.job_pipeline/schedule.json
+```
+
+**Inspecting and updating the schedule:**
+```
+scorerole schedule
+  → Shows: frequency, time, --lookback used, binary path, OS job status
+  → Warns if the binary path (baked in at install time) no longer exists
+
+scorerole schedule --set
+  → Re-runs the wizard; replaces the existing schedule cleanly
+
+scorerole schedule --remove
+  → Unloads the OS job, deletes the plist/crontab entry, clears schedule.json
+```
+
+**What the scheduled job does:**
+The OS job calls `scorerole --lookback Xd` where `Xd` is derived from the
+frequency (daily → 1d, twice-weekly → 4d, weekly → 7d). It is exactly
+equivalent to the user running that command manually — the same dedup gate,
+cap, and delivery path apply.
+
+**Exit criteria:**
+- [x] After `scorerole schedule --set`, the launchd plist exists and is loaded
+- [x] `scorerole schedule` shows the active schedule and OS job health
+- [x] `scorerole schedule --remove` clears both the OS job and `schedule.json`
+- [x] Re-running `scorerole schedule --set` replaces the existing schedule without orphaning the old plist
+- [x] If the venv binary has moved, `scorerole schedule` warns clearly
+- [x] The scheduling wizard is offered (but not required) at the end of `scorerole init`
+- [x] Existing `scorerole` and `scorerole --all` manual runs are unaffected
+- [ ] Missed runs (machine was asleep) are silently skipped — no backfill *(known; see ARCHITECTURE.md T-11)*
+
+---
+
+### Flow 4 — Reset & Troubleshoot (`scorerole reset`, `scorerole debug`)
 
 **Goal:** User needs to inspect what's happening or clear state after a gap or issue.
 
@@ -343,6 +405,8 @@ All user-facing configuration lives in two places: `.env` (runtime and secrets) 
 | Consider threshold | `scoring.consider_threshold` in `profile.yaml` | `55` | Roles between thresholds → "Consider"; below → "Skipped" |
 | Level-mismatch penalty | `scoring.level_mismatch_deduction` in `profile.yaml` | `10` | Deducted when job title lacks a seniority signal (Staff / Lead / Director / VP / etc.) |
 
+| Automated digest schedule | `scorerole schedule --set` | off | Daily / twice-weekly (Mon+Thu) / weekly. Installs a launchd job (macOS) or crontab entry (Linux). Config stored in `~/.job_pipeline/schedule.json`. |
+
 **Planned but not yet implemented:**
 - Per-criterion score weighting (e.g., weight remote policy 2×)
 - `--max N` flag for a one-off cap override without editing `.env`
@@ -385,3 +449,5 @@ Rationale for non-obvious product decisions:
 | Q13 | Gmail INBOX assumed — label-filtered emails not supported. | The IMAP search targets the INBOX folder. If a user has a Gmail filter that labels LinkedIn job alerts and archives them, `scorerole` will find 0 emails. Workaround: disable the archive action on that Gmail filter, or adjust the filter to keep matching emails in INBOX. |
 | Q14 | Scoring API errors (network, rate limit) produce a traceback — known limitation in v0.1. | No retry logic on `score_jobs_batch`. A transient API error during scoring exits with a traceback. JD enrichment work is lost; re-running re-fetches and re-scores. A single retry with exponential backoff is planned. |
 | Q15 | Long `notes` / AI-instructions field is hard to edit in-wizard. | `questionary.text` is a single-line input. Editing a multi-sentence `notes` value is awkward. Workaround: use `scorerole init → Open in editor` to edit `profile.yaml` directly for any long free-text field. |
+| Q16 | Scheduled job bakes in the venv binary path at install time. | The launchd plist and crontab line store the absolute path to `scorerole` (inside the venv). If the venv is recreated, the path becomes stale and the scheduled run fails silently. Mitigation: `scorerole schedule` detects this and warns. Fix: `scorerole schedule --set` reinstalls with the current binary. An alternative (using `env scorerole`) would require the venv to be on PATH at launchd start time, which is unreliable across macOS versions. Absolute path is more predictable. |
+| Q17 | Twice-weekly uses Monday and Thursday specifically. | Chosen to space digests evenly across the work week (3 days apart). This gives 4-day lookback coverage with minimal overlap. Users who prefer different days can run `scorerole schedule --set` and select "Weekly" for a custom single day, then run again for their second day — though this creates two independent plist entries, which is not yet supported in v0.1. Alternative: edit `schedule.json` and re-run `scorerole schedule --set` to regenerate the plist. |

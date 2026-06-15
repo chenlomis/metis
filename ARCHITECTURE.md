@@ -158,7 +158,73 @@ See README § Privacy for the full data flow table.
 | `render.py` | HTML digest building, SMTP delivery |
 | `profile.py` | Profile YAML loader + `render_profile()` for scoring prompt |
 | `state.py` | `seen_roles.json` read/write/prune, `_role_hash()` |
-| `init_cmd.py` | `scorerole init` wizard (4-step, re-runnable) |
+| `init_cmd.py` | `scorerole init` wizard (4-step, re-runnable); offers schedule setup at end |
+| `schedule_cmd.py` | Schedule install/remove/show; builds launchd plist (macOS) or crontab line (Linux) |
+
+---
+
+## Automated Scheduling
+
+### Overview
+
+scorerole can run unattended via an OS-level scheduled job so digests arrive
+without any manual command. The schedule is configured either:
+
+- **during `scorerole init`** — offered at the end of the wizard; re-runnable
+- **at any time via `scorerole schedule --set`** — standalone setup or update
+
+### OS integration
+
+| Platform | Mechanism | File |
+|---|---|---|
+| macOS | launchd user agent | `~/Library/LaunchAgents/com.scorerole.digest.plist` |
+| Linux | user crontab | entry added/removed via `crontab -l / crontab -` |
+| Windows | unsupported | use Task Scheduler manually |
+
+The launchd plist uses `StartCalendarInterval` so the job fires at the
+configured wall-clock time. It does **not** backfill if the machine was asleep
+or off at that time. The plist encodes:
+- absolute path to the scorerole binary (from the active venv at install time)
+- `WorkingDirectory` pointing to the project root (where `.env` lives)
+- `--lookback` derived from frequency: daily → `1d`, twice-weekly → `4d`, weekly → `7d`
+- stdout/stderr redirected to `~/.job_pipeline/logs/scheduled.log`
+
+### Subcommand pattern
+
+Follows the same argparse conventions as the other subcommands:
+
+```
+scorerole schedule              # show current schedule + OS job health check
+scorerole schedule --set        # interactive wizard (install or replace)
+scorerole schedule --remove     # unload OS job, delete plist + schedule.json
+```
+
+### Persistence
+
+`~/.job_pipeline/schedule.json` (mode 0o600) is the human-readable config:
+
+```json
+{
+  "frequency":     "twice_weekly",
+  "time":          "08:00",
+  "scorerole_bin": "/Users/lomischen/job-alert-pipeline/venv/bin/scorerole",
+  "working_dir":   "/Users/lomischen/job-alert-pipeline",
+  "installed_at":  "2026-06-15T08:00:00",
+  "platform":      "Darwin"
+}
+```
+
+`scorerole schedule` reads this to display status and detect stale binary paths
+without needing to query launchctl. The plist/crontab is always derived from
+it at install time — the JSON is the source of truth.
+
+### Key constraints
+
+- No root or admin required — launchd user agents run in the `gui/<uid>` domain
+- Venv path is baked into the plist at install time; if the venv is moved,
+  `scorerole schedule` warns and `scorerole schedule --set` reinstalls cleanly
+- `run_pipeline()` is entirely unchanged — the scheduled job is `scorerole --lookback Xd`
+- SMTP failure behavior (T-07) applies equally to scheduled runs
 
 ---
 
@@ -224,3 +290,10 @@ but only LinkedIn IMAP parsing is implemented. The `fetch_alerts()` router in
 Profile path, data dir, and credentials are all single-user. Each user needs their own
 install. Parameterizing `DATA_DIR` and allowing `--profile-dir` flag would enable
 shared infra.
+
+**T-11 (P3): Scheduled runs silently skip missed windows**
+`StartCalendarInterval` fires at wall-clock time only. If the machine is off or
+asleep at that time, the job is skipped — not queued. For a Monday+Thursday schedule,
+sleeping through Thursday means the next run is Monday (7-day gap instead of 4-day).
+Workaround: run `scorerole --lookback 7d` manually after a gap, or widen
+`DEFAULT_LOOKBACK` in `.env` for scheduled runs.

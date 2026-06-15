@@ -401,6 +401,25 @@ def main():
     reset_p.add_argument("--force",   action="store_true", help="Skip confirmation prompt.")
     reset_p.add_argument("--profile", action="store_true", help="Also delete your scoring profile (~/.job_pipeline/profile.yaml).")
 
+    # schedule subcommand
+    schedule_p = subparsers.add_parser(
+        "schedule",
+        help="Install, inspect, or remove the automated digest schedule.",
+        description=(
+            "Without flags: show the current schedule.\n"
+            "  scorerole schedule --set      interactive setup (or update)\n"
+            "  scorerole schedule --remove   remove the scheduled job"
+        ),
+    )
+    schedule_p.add_argument(
+        "--set", dest="schedule_set", action="store_true",
+        help="Run the interactive setup wizard to install or replace the schedule.",
+    )
+    schedule_p.add_argument(
+        "--remove", dest="schedule_remove", action="store_true",
+        help="Remove the scheduled job and clear ~/.job_pipeline/schedule.json.",
+    )
+
     # debug subcommand
     subparsers.add_parser("debug", help="Dump the most recent LinkedIn alert email for inspection.")
 
@@ -438,6 +457,19 @@ def main():
         print(f"Cleared: {names}")
         if args.profile and (DATA_DIR / "profile.yaml") in existing:
             print("Run `scorerole init` to rebuild your scoring profile.")
+
+    elif args.command == "schedule":
+        from .schedule_cmd import show_schedule, run_schedule_wizard, remove_schedule
+        if getattr(args, "schedule_remove", False):
+            removed = remove_schedule()
+            if removed:
+                print("  Schedule removed.")
+            else:
+                print("  No schedule was configured.")
+        elif getattr(args, "schedule_set", False):
+            run_schedule_wizard()
+        else:
+            show_schedule()
 
     elif args.command == "debug":
         _validate_env()
