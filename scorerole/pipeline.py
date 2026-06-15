@@ -70,17 +70,12 @@ def _parse_lookback(value: str) -> datetime.datetime | None:
     return dateparser.parse(value, settings={"RETURN_AS_TIMEZONE_AWARE": False})
 
 
-def _estimate_cost(n: int) -> str:
-    """Human-readable API cost range for scoring n jobs with claude-sonnet."""
-    lo, hi = n * 0.005, n * 0.015
-    return f"${lo:.2f}–${hi:.2f}"
-
-
 def _prompt_score_all(n_found: int, cap: int) -> bool:
     """Interactively ask whether to score all roles. Returns True = score all."""
+    from .score import estimate_cost
     print(f"\n  ⚠  Found {n_found} new roles in your lookback window.")
     print(f"     Your cap is {cap} (MAX_JOBS_PER_RUN in .env).")
-    print(f"     Scoring all {n_found}: ~{_estimate_cost(n_found)} estimated")
+    print(f"     Scoring all {n_found}: ~{estimate_cost(n_found)} estimated")
     print(f"     (A Haiku pre-screen runs first to filter obvious mismatches —")
     print(f"     actual cost is typically 40–60% lower than the estimate above.)")
     print(f"     Roles beyond the cap stay unseen until their 14-day TTL expires.\n")
@@ -90,6 +85,177 @@ def _prompt_score_all(n_found: int, cap: int) -> bool:
     except (EOFError, KeyboardInterrupt):
         print()
         return False
+
+
+# ---------------------------------------------------------------------------
+# Pipeline stages (private — called in sequence by run_pipeline)
+# ---------------------------------------------------------------------------
+
+def _stage_ingest(since_dt: datetime.datetime, seen_roles: set) -> list[dict] | None:
+    """Fetch LinkedIn alert emails and return deduplicated new jobs.
+
+    Applies three dedup layers:
+      1. job_id exact duplicate within this run
+      2. title+company key (same role, different location email)
+      3. role_hash in seen_roles (14-day cross-run TTL gate)
+
+    Returns:
+      None           — no LinkedIn emails found in the lookback window
+      []  (empty)    — emails found but all roles already seen within 14 days
+      [...]           — new, unseen roles ready for cap + scoring
+    """
+    threads = fetch_alerts(since_dt)
+    if not threads:
+        log.info("No emails in lookback window. Done.")
+        return None
+
+    all_jobs: list[dict] = []
+    seen_job_ids:   set[str]   = set()
+    seen_role_keys: set[tuple] = set()
+
+    for t in threads:
+        jobs_from_thread = extract_jobs(t["body"])
+        # Recommendation emails ("Company is hiring" / "Similar jobs") have no plain-text
+        # "View job:" line — fall back to HTML link extraction.
+        if not jobs_from_thread and t.get("html"):
+            jobs_from_thread = extract_jobs_html(t["html"])
+            if jobs_from_thread:
+                log.info(f"HTML extraction found {len(jobs_from_thread)} jobs in recommendation email")
+        for job in jobs_from_thread:
+            role_key  = (job["title"].lower().strip(), job["company"].lower().strip())
+            role_hash = _role_hash(job["title"], job["company"])
+            if (job["job_id"] not in seen_job_ids
+                    and role_key not in seen_role_keys
+                    and role_hash not in seen_roles):
+                seen_job_ids.add(job["job_id"])
+                seen_role_keys.add(role_key)
+                seen_roles.add(role_hash)   # in-memory dedup; disk write deferred until after cap
+                all_jobs.append(job)
+
+    return all_jobs
+
+
+def _stage_cap(
+    all_jobs: list[dict],
+    score_all: bool,
+    client,                  # anthropic.Anthropic — passed through to prescreen if needed
+) -> tuple[list[dict], bool]:
+    """Apply the per-run cap and optionally run the Haiku pre-screen.
+
+    Returns (jobs_to_score, did_prescreen).
+
+    Cap logic (in priority order):
+      --all flag            → skip prompt, run Haiku pre-screen, score everything that survives
+      interactive TTY       → ask user; if yes, run pre-screen; if no, cap to MAX_JOBS_PER_RUN
+      non-interactive cron  → cap silently, log warning
+
+    IMPORTANT: This function must be called BEFORE building new_role_timestamps so that
+    only the final survivors get persisted to seen_roles.json (role-burial fix).
+    """
+    n_found = len(all_jobs)
+    should_prescreen = False
+
+    # Show cost estimate upfront when --all is used (spec requirement).
+    if score_all:
+        from .score import estimate_cost
+        print(
+            f"\n  --all: {n_found} role{'s' if n_found != 1 else ''} in window. "
+            f"Estimated cost: ~{estimate_cost(n_found)}\n"
+            f"  (Haiku pre-screen will filter obvious mismatches — actual cost typically lower.)\n"
+        )
+
+    if MAX_JOBS_PER_RUN > 0 and n_found > MAX_JOBS_PER_RUN:
+        if score_all:
+            log.info(f"{n_found} roles to evaluate (--all flag; Haiku pre-screen will filter)")
+            should_prescreen = True
+        elif sys.stdin.isatty():
+            wants_all = _prompt_score_all(n_found, MAX_JOBS_PER_RUN)
+            if wants_all:
+                log.info(f"Scoring all {n_found} roles (Haiku pre-screen will filter first)")
+                should_prescreen = True
+            else:
+                all_jobs = all_jobs[:MAX_JOBS_PER_RUN]
+                log.info(f"Capped at {MAX_JOBS_PER_RUN} roles")
+        else:
+            log.warning(
+                f"{n_found} roles found but capped at {MAX_JOBS_PER_RUN} "
+                f"(non-interactive run). Use --all to score everything, "
+                f"or set MAX_JOBS_PER_RUN=0 in .env to remove the cap entirely."
+            )
+            all_jobs = all_jobs[:MAX_JOBS_PER_RUN]
+    else:
+        log.info(f"{n_found} unique roles to evaluate")
+
+    if should_prescreen:
+        from .score import prescreen_jobs_batch
+        all_jobs = prescreen_jobs_batch(client, all_jobs)
+
+    return all_jobs, should_prescreen
+
+
+def _stage_enrich_and_score(jobs: list[dict], client) -> list[dict]:
+    """Fetch JD text for each job (enrich) then score + rank with Sonnet.
+
+    Returns ranked jobs with 'eval' key populated.
+    Raises SystemExit if the profile is missing.
+    """
+    from .sources.linkedin import enrich_jobs
+    jobs = enrich_jobs(jobs)
+
+    try:
+        jobs = score_jobs_batch(client, jobs)
+    except FileNotFoundError:
+        raise SystemExit(
+            "\n❌  No scoring profile found.\n"
+            "   Run `scorerole init` to create one from your resume.\n"
+        )
+
+    return rank_jobs(jobs)
+
+
+def _stage_split_filtered(jobs: list[dict]) -> tuple[list[dict], int]:
+    """Separate deal-breaker-filtered roles from scoreable ones.
+
+    Filtered roles must not appear in digest sections — only in the footer count.
+    Their hashes are already recorded in new_role_timestamps (built before this call)
+    so they ARE marked seen and won't reappear next run.
+
+    Returns (scored_jobs, n_filtered).
+    """
+    filtered = [j for j in jobs if j["eval"].get("verdict") == "filtered"]
+    scored   = [j for j in jobs if j["eval"].get("verdict") != "filtered"]
+    if filtered:
+        log.info("%d role(s) filtered by deal-breaker — excluded from digest sections", len(filtered))
+    return scored, len(filtered)
+
+
+def _stage_deliver(
+    scored_jobs: list[dict],
+    n_filtered: int,
+    new_role_timestamps: dict,
+) -> None:
+    """Render the HTML digest and deliver it via SMTP.
+
+    Raises SystemExit(1) on SMTP failure (so seen_roles.json is NOT written — the roles
+    remain unseen and will be re-scored on the next run, per SPEC §8 / T-07).
+    On success, persists new_role_timestamps to seen_roles.json.
+    """
+    run_date = datetime.datetime.now().strftime("%B %d, %Y")
+    html = render_html(scored_jobs, run_date, deal_breaker_count=n_filtered)
+    try:
+        send_digest(html, run_date)
+    except Exception:
+        log.error("Pipeline finished scoring but failed to deliver digest — check SMTP settings in .env")
+        raise SystemExit(1)
+
+    save_seen_roles(new_role_timestamps)
+
+    apply_n    = sum(1 for j in scored_jobs if j["eval"].get("verdict") == "apply")
+    consider_n = sum(1 for j in scored_jobs if j["eval"].get("verdict") == "consider")
+    filter_note = f", {n_filtered} filtered by deal-breaker" if n_filtered else ""
+    log.info(
+        f"=== Done — {len(scored_jobs)} evaluated: {apply_n} apply, {consider_n} consider{filter_note} ==="
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -109,113 +275,50 @@ def run_pipeline(since_dt: datetime.datetime, score_all: bool = False):
     client     = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     seen_roles = load_seen_roles()
 
-    # Stage 1: Ingest
-    threads = fetch_alerts(set(), since_dt)
-    if not threads:
-        log.info("No emails in lookback window. Done.")
-        return
-
-    all_jobs: list[dict] = []
-    seen_job_ids:   set[str]   = set()
-    seen_role_keys: set[tuple] = set()  # within-run dedup (same role, different location)
-    for t in threads:
-        jobs_from_thread = extract_jobs(t["body"])
-        # Recommendation emails ("Company is hiring" / "Similar jobs") have no plain-text
-        # "View job:" line — fall back to HTML link extraction
-        if not jobs_from_thread and t.get("html"):
-            jobs_from_thread = extract_jobs_html(t["html"])
-            if jobs_from_thread:
-                log.info(f"HTML extraction found {len(jobs_from_thread)} jobs in recommendation email")
-        for job in jobs_from_thread:
-            role_key  = (job["title"].lower().strip(), job["company"].lower().strip())
-            role_hash = _role_hash(job["title"], job["company"])
-            if (job["job_id"] not in seen_job_ids
-                    and role_key not in seen_role_keys
-                    and role_hash not in seen_roles):
-                seen_job_ids.add(job["job_id"])
-                seen_role_keys.add(role_key)
-                seen_roles.add(role_hash)   # in-memory dedup only; disk write happens after cap
-                all_jobs.append(job)
-
+    # Stage 1: Ingest + deduplicate
+    all_jobs = _stage_ingest(since_dt, seen_roles)
+    if all_jobs is None:
+        return   # "No emails in lookback window" already logged inside _stage_ingest
     if not all_jobs:
         log.info("No new roles to evaluate — all already seen within the past 14 days.")
         return
 
-    # ── Cap / prompt decision ────────────────────────────────────────────────
-    # IMPORTANT: new_role_timestamps is built AFTER this block so only the
-    # roles that will actually be scored get persisted to seen_roles.json.
-    # Previously, capped roles were mistakenly written to seen_roles.json and
-    # silently locked out for 14 days even though they were never evaluated.
-    n_found = len(all_jobs)
-    should_prescreen = False
+    # Stage 2: Apply cap, optionally run Haiku pre-screen
+    # new_role_timestamps is built AFTER this so only surviving roles get persisted.
+    # (Pre-fix: capped roles were written to seen_roles.json and locked out for 14 days
+    #  without ever being evaluated — the role-burial bug.)
+    all_jobs, _prescreened = _stage_cap(all_jobs, score_all, client)
+    if not all_jobs:
+        log.info("Pre-screen filtered all roles — nothing left to score.")
+        return
 
-    if MAX_JOBS_PER_RUN > 0 and n_found > MAX_JOBS_PER_RUN:
-        if score_all:
-            # --all flag: skip prompt, but pre-screen to keep Sonnet spend down
-            log.info(f"{n_found} roles to evaluate (--all flag; Haiku pre-screen will filter)")
-            should_prescreen = True
-        elif sys.stdin.isatty():
-            # Interactive terminal: ask the user
-            wants_all = _prompt_score_all(n_found, MAX_JOBS_PER_RUN)
-            if wants_all:
-                log.info(f"Scoring all {n_found} roles (Haiku pre-screen will filter first)")
-                should_prescreen = True
-            else:
-                all_jobs = all_jobs[:MAX_JOBS_PER_RUN]
-                log.info(f"Capped at {MAX_JOBS_PER_RUN} roles")
-        else:
-            # Non-interactive (cron/launchd): cap silently, log a clear warning
-            log.warning(
-                f"{n_found} roles found but capped at {MAX_JOBS_PER_RUN} "
-                f"(non-interactive run). Use --all to score everything, "
-                f"or set MAX_JOBS_PER_RUN=0 in .env to remove the cap entirely."
-            )
-            all_jobs = all_jobs[:MAX_JOBS_PER_RUN]
-    else:
-        log.info(f"{n_found} unique roles to evaluate")
-
-    # Stage 1.5: Haiku pre-screen (title+company only — no JD fetch needed)
-    # Runs only when the user chose to go beyond the normal cap.
-    if should_prescreen:
-        from .score import prescreen_jobs_batch
-        all_jobs = prescreen_jobs_batch(client, all_jobs)
-        if not all_jobs:
-            log.info("Pre-screen filtered all roles — nothing left to score.")
-            return
-
-    # Persist NOW — only roles that survived the cap + pre-screen get written
-    # to seen_roles.json, so un-scored roles can reappear in future runs.
     now_iso = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None).isoformat()
     new_role_timestamps = {
         _role_hash(j["title"], j["company"]): now_iso
         for j in all_jobs
     }
 
-    # Stage 2: Enrich
-    from .sources.linkedin import enrich_jobs
-    all_jobs = enrich_jobs(all_jobs)
+    # Stage 3: Enrich (fetch JDs) + score + rank
+    all_jobs = _stage_enrich_and_score(all_jobs, client)
 
-    # Stage 3: Score + rank
-    all_jobs = score_jobs_batch(client, all_jobs)
-    all_jobs = rank_jobs(all_jobs)
+    # Stage 4: Split deal-breaker filtered roles
+    scored_jobs, n_filtered = _stage_split_filtered(all_jobs)
 
-    # Stage 4: Deliver digest email
-    run_date = datetime.datetime.now().strftime("%B %d, %Y")
-    html = render_html(all_jobs, run_date)
-    try:
-        send_digest(html, run_date)
-    except Exception:
-        log.error("Pipeline finished scoring but failed to deliver digest — check SMTP settings in .env")
-        raise SystemExit(1)
+    if not scored_jobs:
+        if n_filtered:
+            log.info(
+                "All %d role(s) were filtered by deal-breaker rules — no digest sent.\n"
+                "If this seems wrong, run `scorerole init` → Quick edits → Deal-breakers "
+                "to review your rules.",
+                n_filtered,
+            )
+        else:
+            log.info("No scoreable roles after filtering — no digest sent.")
+        save_seen_roles(new_role_timestamps)
+        return
 
-    # Persist — update seen_roles so the same role isn't scored again for 14 days
-    save_seen_roles(new_role_timestamps)
-
-    apply_n    = sum(1 for j in all_jobs if j["eval"].get("verdict") == "apply")
-    consider_n = sum(1 for j in all_jobs if j["eval"].get("verdict") == "consider")
-    filtered_n = sum(1 for j in all_jobs if j["eval"].get("verdict") == "filtered")
-    filter_note = f", {filtered_n} filtered by deal-breaker" if filtered_n else ""
-    log.info(f"=== Done — {len(all_jobs)} evaluated: {apply_n} apply, {consider_n} consider{filter_note} ===")
+    # Stage 5: Render + deliver digest (persists seen_roles on success)
+    _stage_deliver(scored_jobs, n_filtered, new_role_timestamps)
 
 
 def debug_emails():
@@ -249,7 +352,7 @@ def main():
 
     # Set up logging here (not at module level) so importing pipeline
     # doesn't create directories or hijack the root logger.
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    LOG_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)  # restrict ~/.job_pipeline to owner
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s  %(levelname)s  %(message)s",
@@ -313,7 +416,7 @@ def main():
         )
 
     elif args.command == "reset":
-        targets = [SEEN_FILE, DATA_DIR / "seen_roles.json"]
+        targets = [SEEN_FILE]
         if args.profile:
             targets.append(DATA_DIR / "profile.yaml")
 

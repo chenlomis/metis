@@ -435,6 +435,62 @@ class TestRenderProfile:
 # sources/linkedin.py — edge cases in email parsing
 # ---------------------------------------------------------------------------
 
+class TestExtractJobsIndividualNotification:
+    """LinkedIn also sends single-job notification emails with the format:
+    '[Job Title] at [Company] – Your job alert for [query] in [City]'
+    These must parse correctly alongside the standard multi-job digest format.
+    """
+
+    _INDIVIDUAL_BODY = """\
+Your job alert for "senior product manager"
+
+Sr. Product Manager Tech, Product Quality
+Amazon
+Seattle, WA · Full-time
+3 company alumni
+View job: https://www.linkedin.com/comm/jobs/view/3901299999/ABC_def/?trackingId=ind1
+"""
+
+    _INDIVIDUAL_BODY_WITH_DASH = """\
+Lead Product Manager – Risk Platform
+BILL
+Sunnyvale, CA
+View job: https://www.linkedin.com/comm/jobs/view/3901288888/XYZ_abc/?trackingId=ind2
+"""
+
+    def test_single_job_notification_parsed(self):
+        from scorerole.sources.linkedin import extract_jobs
+        jobs = extract_jobs(self._INDIVIDUAL_BODY)
+        assert len(jobs) == 1
+        assert jobs[0]["title"]   == "Sr. Product Manager Tech, Product Quality"
+        assert jobs[0]["company"] == "Amazon"
+        assert jobs[0]["job_id"]  == "3901299999"
+
+    def test_alumni_count_in_individual_email(self):
+        from scorerole.sources.linkedin import extract_jobs
+        jobs = extract_jobs(self._INDIVIDUAL_BODY)
+        assert jobs[0]["alumni_count"] == 3
+
+    def test_title_with_dash_parsed_correctly(self):
+        """Em-dash in job title must not be mistaken for noise."""
+        from scorerole.sources.linkedin import extract_jobs
+        jobs = extract_jobs(self._INDIVIDUAL_BODY_WITH_DASH)
+        assert len(jobs) == 1
+        assert "Risk Platform" in jobs[0]["title"]
+        assert jobs[0]["company"] == "BILL"
+
+    def test_mixed_digest_and_individual_in_same_session(self):
+        """A run that ingests both a digest email and an individual notification
+        email must deduplicate correctly and return all unique jobs."""
+        from scorerole.sources.linkedin import extract_jobs
+        combined = _SAMPLE_ALERT_BODY + "\n" + self._INDIVIDUAL_BODY
+        jobs = extract_jobs(combined)
+        ids = [j["job_id"] for j in jobs]
+        # All 3 jobs unique
+        assert len(ids) == len(set(ids))
+        assert "3901299999" in ids
+
+
 class TestExtractJobsEdgeCases:
     """Unusual but real email structures that must not crash or silently drop jobs."""
 

@@ -47,6 +47,10 @@ python3.11 -m venv venv && source venv/bin/activate   # macOS ships 3.9; use 3.1
 pip install --upgrade pip
 pip install -e .
 
+# 1b. (Optional) Install Node dependencies for the rich React Email digest template
+#     Skip this if you don't have Node — a Python fallback renders the digest instead.
+npm install
+
 # 2. Configure credentials
 cp .env.example .env
 # Edit .env with your keys (see .env.example for all fields)
@@ -58,7 +62,7 @@ scorerole init
 scorerole
 ```
 
-That's it. After step 4, a digest email lands in your inbox within a minute.
+After step 4, a digest email lands in your inbox within a minute — **as long as there are LinkedIn alert emails in your lookback window.** If this is your first run and you've just set up alerts, no digest is sent (nothing to score yet). Try `scorerole --lookback 14d` to cast a wider net, or wait for your first daily alert email.
 
 ---
 
@@ -74,9 +78,11 @@ GMAIL_APP_PASSWORD=xxxx-xxxx-xxxx-xxxx
 
 # Optional — defaults shown
 RECIPIENT_EMAIL=you@gmail.com   # where to send the digest (defaults to GMAIL_ADDRESS)
-MAX_JOBS_PER_RUN=20             # cap per run to control API cost
+MAX_JOBS_PER_RUN=20             # cap per run to control API cost; 0 = no cap
 DEFAULT_LOOKBACK=3d             # how far back to fetch on each run
-MODEL=claude-sonnet-4-6         # Claude model to use for scoring
+MODEL=claude-sonnet-4-6         # Claude model for full scoring
+PRESCREEN_MODEL=claude-haiku-4-5  # model for the quick title/company pre-screen
+                                   # (only used when role count exceeds MAX_JOBS_PER_RUN)
 ```
 
 ### Scoring profile
@@ -111,14 +117,18 @@ See [`profile.template.yaml`](./profile.template.yaml) for the full schema with 
 | Command | What it does |
 |---|---|
 | `scorerole` | Fetch alerts → score → send digest (default: last 3 days) |
-| `scorerole --lookback 7d` | Same, but look back further. Accepts `7d`, `2026-05-10`, `yesterday` |
-| `scorerole init` | Interactive wizard: parse your resume, generate `~/.job_pipeline/profile.yaml` |
+| `scorerole --lookback 7d` | Same, but look back further. Accepts `7d`, `14d`, `2026-05-10`, `yesterday` |
+| `scorerole --all` | Score everything in the lookback window, bypassing the per-run cap. Shows a cost estimate and runs a Haiku pre-screen before charging the full Sonnet cost. |
+| `scorerole --all --lookback 14d` | Catch-up run — useful after a gap or after `scorerole reset` |
+| `scorerole init` | Interactive wizard: parse your resume, generate `~/.job_pipeline/profile.yaml`. Re-run any time to update your profile. |
 | `scorerole init --resume path/to/resume.pdf` | Skip the resume prompt |
 | `scorerole init --supplement path/to/linkedin.pdf` | Add a LinkedIn export or supplementary file |
-| `scorerole reset` | Clear dedup state so all roles reprocess on next run |
+| `scorerole reset` | Clear dedup state so all roles reprocess on next run (profile is kept) |
 | `scorerole reset --force` | Same, no confirmation prompt |
-| `scorerole reset --profile` | Also delete your scoring profile — useful for a clean start |
+| `scorerole reset --profile` | Also delete your scoring profile — requires `scorerole init` before next run |
 | `scorerole debug` | Dump the most recent LinkedIn alert email to `~/.job_pipeline/debug_email.txt` |
+
+> **When more than 20 new roles are found**, scorerole pauses and tells you how many there are and the estimated API cost. You can score all of them (with Haiku pre-screening to reduce cost), or proceed with the default cap. Roles beyond the cap stay available for the next run — they are not silently discarded.
 
 ---
 
@@ -133,7 +143,18 @@ scorerole reads emails that LinkedIn sends you — it doesn't scrape LinkedIn di
 
 LinkedIn sends one email per saved search per day, listing 5–10 new roles. scorerole reads all of them.
 
-> **Note:** scorerole only reads emails from `jobalerts-noreply@linkedin.com`. It does not access any other emails.
+> **Note:** scorerole reads emails from three LinkedIn senders:
+> - `jobalerts-noreply@linkedin.com` — standard "Your job alert for X" digests
+> - `jobs-noreply@linkedin.com` — "Company is hiring" / "Jobs similar to X" recommendation emails
+> - `jobs-listings@linkedin.com` — "Jobs you might like" (JYMBII) digests
+>
+> It does not access any other emails. Only the INBOX is searched.
+>
+> **Two LinkedIn email formats are supported:**
+> - **Multi-job digest** — subject "Lomis: your job alert for [Role]…" — lists several roles, each with a "View job: URL" line
+> - **Individual job notification** — subject "[Job Title] at [Company] – Your job alert" — a single role per email, in the same format
+>
+> Both formats are parsed by the same logic: scorerole finds each "View job:" anchor and reads the title, company, and location from the lines immediately above it. Titles with em-dashes (e.g. "Lead PM – Risk Platform") are handled correctly.
 
 ---
 
@@ -150,9 +171,22 @@ The optional `--supplement` flag in `scorerole init` accepts any file that adds 
 
 ## Privacy
 
-- **Your data stays local.** scorerole runs entirely on your machine. Nothing is stored on a server.
-- **Only job listings are sent to Claude.** Your resume and profile stay local; only job titles, company names, and JD text are included in scoring API calls.
-- **Your Gmail credentials never leave your machine.** IMAP login happens locally; no credentials are sent to any third party.
+scorerole runs entirely on your machine. Here is exactly what leaves it:
+
+| What | Sent where | When |
+|---|---|---|
+| Resume text (up to 12,000 chars) | Anthropic API | During `scorerole init` only — to extract your profile |
+| Your scoring profile (career history, strengths, deal-breakers, salary floor) | Anthropic API | Every `scorerole` run — used as the scoring system prompt |
+| Job titles, company names, JD text (≤1,500 chars per role) | Anthropic API | Every `scorerole` run — the roles being scored |
+| IMAP login | Gmail only (SSL) | Every run — to fetch LinkedIn emails |
+| SMTP login + digest HTML | Gmail only (SSL) | Every run — to deliver the digest email |
+
+**Nothing is sent to any other third party.** Your Gmail App Password and Anthropic API key never leave your machine. Anthropic's API data-handling policies apply to content sent to the scoring API — see [anthropic.com/privacy](https://www.anthropic.com/privacy).
+
+Data stored locally in `~/.job_pipeline/` (outside the repo, never committed):
+- `profile.yaml` — your extracted profile (permissions: 600, owner-readable only)
+- `seen_roles.json` — opaque MD5 hashes of scored roles + timestamps, 14-day TTL (permissions: 600)
+- `logs/YYYY-MM-DD.log` — pipeline run logs (may contain job titles/companies from warning messages)
 
 ---
 
@@ -184,6 +218,28 @@ profile.template.yaml   # Starter profile template
 
 ## Troubleshooting
 
+**"No emails in lookback window. Done." on first run**
+
+This is the most common first-run experience. It means scorerole connected to Gmail successfully but found no LinkedIn alert emails in the last 3 days.
+- If you just set up LinkedIn alerts, wait for the first daily email, then re-run.
+- Widen the search: `scorerole --lookback 14d`
+- Check that your alerts deliver to INBOX (not a label). Gmail filters that archive or label emails skip the INBOX search. Temporarily remove the "Skip Inbox" action from your LinkedIn filter.
+- Run `scorerole debug` to see the most recent LinkedIn email raw body — useful for confirming the email format is parseable.
+
+**`❌  Gmail login failed` / IMAP auth error**
+
+Two things must be true: (1) your Gmail account has 2-Step Verification turned on, and (2) you're using a Gmail App Password (not your account password). Generate one at [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords) — choose "Mail" and your device. Paste the 16-character password (spaces optional) into `.env` as `GMAIL_APP_PASSWORD`.
+
+Also verify IMAP is enabled: Gmail → Settings (gear icon) → See all settings → Forwarding and POP/IMAP tab → Enable IMAP → Save changes.
+
+**"No roles to evaluate" despite having alert emails**
+
+Run `scorerole debug` — it writes the raw email body to `~/.job_pipeline/debug_email.txt`. If the file is empty or the body looks different from a standard LinkedIn alert (e.g., it's a promotional email, not a job alert), scorerole can't parse it. Make sure your LinkedIn alert type is "Job recommendations" or "Your job alert for X" — not marketing emails.
+
+**`❌  No scoring profile found. Run scorerole init`**
+
+Run `scorerole init` to create your profile before running the digest.
+
 **`ERROR: Invalid requirement: '#'` during `pip install -e .`**
 
 This happens when a stale `scorerole.egg-info/` directory exists from a previous install (e.g. after `git pull` updating the dependency list). Delete it and reinstall:
@@ -196,10 +252,6 @@ pip install -e .
 **`scorerole: command not found` after install**
 
 Make sure your virtualenv is activated: `source venv/bin/activate`. Then try `pip install -e .` again.
-
-**`FileNotFoundError: No profile found — run scorerole init`**
-
-Run `scorerole init` to create your scoring profile before running the digest.
 
 ---
 
