@@ -99,6 +99,8 @@ Each pass has:
 
 **Signs of failure:** Generic rationale ("good cultural fit"); deal-breaker is over-broad and filters legitimate roles; top-scored roles are obviously wrong.
 
+**Developer lens (apply within this same pass):** Also walk the flow as a developer who wants to extend or contribute — where would they get stuck, what's undocumented, what's hard to change? Check: is `sources/__init__.py` the obvious place to add a new source? Does `ARCHITECTURE.md § Extensibility` cover the steps they'd need? Are extension points in the code obvious without reading every file? Signs of failure: a contributor would need to read `pipeline.py` end-to-end to figure out where to plug in a new source; extension steps are undocumented or contradict what's in the code.
+
 ### Documentation pass
 **Who:** A new user following README.md from scratch.
 **Checks:**

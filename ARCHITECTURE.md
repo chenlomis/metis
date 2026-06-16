@@ -106,7 +106,78 @@ delivered even if the rich renderer isn't set up.
 
 ---
 
-## Configuration Hierarchy
+## Extensibility Guide
+
+The three most likely extension points, and how to use them.
+
+### Adding a new job source (e.g., Indeed, Greenhouse RSS, Lever)
+
+The `sources/` package is the only layer that knows about email providers or HTTP feeds.
+Everything downstream (dedup, scoring, rendering) works on a list of `Job` dicts.
+
+**Steps:**
+
+1. Create `sources/<provider>.py`. Implement:
+   ```python
+   def fetch_jobs(since_dt: datetime) -> list[dict]:
+       """Return list of Job dicts: title, company, location, url, job_id, source."""
+   ```
+2. Register it in `sources/__init__.py` → `fetch_alerts()`. Add a condition on a new
+   `ALERT_SOURCE` env var (default: `"linkedin"`):
+   ```python
+   elif source == "indeed":
+       from .indeed import fetch_jobs
+       return fetch_jobs(since_dt)
+   ```
+3. Add `ALERT_SOURCE=indeed` to `.env.example`.
+4. Write a unit test in `tests/test_core.py` covering at least: empty result, single job,
+   dedup-key shape (`title + company` must be consistent with existing dedup logic).
+
+The pre-screen, JD enrichment, scoring, rendering, and delivery steps are unchanged —
+they only see the `Job` dict list, not the source.
+
+**What you don't need to touch:** `pipeline.py`, `score.py`, `render.py`, `state.py`.
+
+---
+
+### Adding a new digest output format (e.g., Slack message, Markdown file, webhook)
+
+Output is isolated to `render.py`. The pipeline calls two functions:
+- `render_html(jobs) -> str` — builds the HTML string
+- `send_digest(html, run_date)` — delivers it
+
+To add a new output format:
+
+1. Add a new delivery function in `render.py`, e.g. `send_slack(jobs, run_date)`.
+2. In `pipeline.py`, check a new `OUTPUT_MODE` env var and call the appropriate function.
+   Keep `send_digest()` as the default so existing users are unaffected.
+3. Add `OUTPUT_MODE=slack` to `.env.example`.
+
+If the new format doesn't use HTML (e.g., Slack blocks), bypass `render_html()` entirely
+and work directly from the ranked `jobs` list that `rank_jobs()` returns.
+
+---
+
+### Extending the profile schema
+
+`profile.yaml` is loaded by `profile.py → load_profile_yaml()` and rendered into the
+Sonnet system prompt by `render_profile()`. The scoring prompt reads whatever is in the
+profile — Claude interprets free-text fields, so adding new fields often *just works*
+without code changes.
+
+**For structured new fields** (ones that affect code behavior, not just prompt text):
+
+1. Add the field to `init_cmd.py` wizard if it should be user-configurable at setup.
+2. Read it in the relevant module (e.g., a new `scoring.deal_breaker_weight` field would
+   be read in `score.py` alongside the existing threshold reads).
+3. Update `SPEC.md §6` if it's a user-visible configuration option.
+4. Update `M-04` validation in `init_cmd.py` if the new field is required.
+
+**Schema versioning:** There is no formal version field in `profile.yaml`. If you add a
+required field, make the code tolerate its absence (default gracefully) so existing
+profiles don't break on upgrade. Document the new field in `README.md § Configuration`.
+
+---
 
 ```
 ~/.job_pipeline/profile.yaml   — candidate profile (scoring criteria, background)
