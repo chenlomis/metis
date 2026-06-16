@@ -13,6 +13,8 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
+import anthropic
+
 import pytest
 
 
@@ -707,6 +709,143 @@ class TestScoreJobsBatchChunking:
         assert result[1]["eval"]["score"] == 70   # real eval
         assert result[2]["eval"]["verdict"] == "skipped"  # error eval
         assert "parse error" in result[2]["eval"]["frictionPoints"][0].lower()
+
+
+# ---------------------------------------------------------------------------
+# score.py — API retry logic
+# ---------------------------------------------------------------------------
+
+class TestScoreChunkRetry:
+    """_score_chunk must retry on transient API errors and raise on persistent failure."""
+
+    def _make_jobs(self, n=2):
+        return [
+            {"title": f"Job {i}", "company": "Acme", "location": "SF",
+             "jd": "Some job description.", "eval": {}}
+            for i in range(n)
+        ]
+
+    def _good_response(self, n):
+        import unittest.mock as mock
+        evals = [
+            {"score": 75, "verdict": "apply",
+             "leveragePoints": [], "frictionPoints": [], "tags": []}
+            for _ in range(n)
+        ]
+        r = mock.MagicMock()
+        r.content = [mock.MagicMock(text=json.dumps(evals))]
+        r.usage = mock.MagicMock(
+            input_tokens=100, output_tokens=40,
+            cache_creation_input_tokens=0, cache_read_input_tokens=0,
+        )
+        return r
+
+    def test_succeeds_on_first_try(self):
+        """Happy path — no retries needed."""
+        from scorerole.score import score_jobs_batch
+        import unittest.mock as mock
+
+        jobs = self._make_jobs(2)
+        fake_client = mock.MagicMock()
+        fake_client.messages.create.return_value = self._good_response(2)
+
+        with mock.patch("scorerole.score._build_score_system", return_value="mock"), \
+             mock.patch("time.sleep"):
+            result = score_jobs_batch(fake_client, jobs)
+
+        assert fake_client.messages.create.call_count == 1
+        assert result[0]["eval"]["score"] == 75
+
+    def test_retries_on_500_and_succeeds(self):
+        """First call raises InternalServerError; second call succeeds — result is correct."""
+        from scorerole.score import score_jobs_batch
+        import unittest.mock as mock
+
+        jobs = self._make_jobs(2)
+        good = self._good_response(2)
+        fake_client = mock.MagicMock()
+        fake_client.messages.create.side_effect = [
+            anthropic.InternalServerError(
+                message="Internal server error",
+                response=mock.MagicMock(status_code=500, headers={}),
+                body={"type": "error", "error": {"type": "api_error",
+                      "message": "Internal server error"}},
+            ),
+            good,
+        ]
+
+        with mock.patch("scorerole.score._build_score_system", return_value="mock"), \
+             mock.patch("time.sleep") as mock_sleep:
+            result = score_jobs_batch(fake_client, jobs)
+
+        assert fake_client.messages.create.call_count == 2
+        mock_sleep.assert_called_once()   # backed off once
+        assert result[0]["eval"]["score"] == 75
+
+    def test_retries_on_rate_limit_and_succeeds(self):
+        """RateLimitError (429) is also retried."""
+        from scorerole.score import score_jobs_batch
+        import unittest.mock as mock
+
+        jobs = self._make_jobs(1)
+        good = self._good_response(1)
+        fake_client = mock.MagicMock()
+        fake_client.messages.create.side_effect = [
+            anthropic.RateLimitError(
+                message="rate limited",
+                response=mock.MagicMock(status_code=429, headers={}),
+                body={},
+            ),
+            good,
+        ]
+
+        with mock.patch("scorerole.score._build_score_system", return_value="mock"), \
+             mock.patch("time.sleep"):
+            result = score_jobs_batch(fake_client, jobs)
+
+        assert fake_client.messages.create.call_count == 2
+        assert result[0]["eval"]["score"] == 75
+
+    def test_raises_after_max_retries(self):
+        """Three consecutive 500s must propagate — not silently swallow."""
+        from scorerole.score import score_jobs_batch
+        import unittest.mock as mock
+
+        jobs = self._make_jobs(1)
+        fake_client = mock.MagicMock()
+        fake_client.messages.create.side_effect = anthropic.InternalServerError(
+            message="Internal server error",
+            response=mock.MagicMock(status_code=500, headers={}),
+            body={"type": "error", "error": {"type": "api_error",
+                  "message": "Internal server error"}},
+        )
+
+        with mock.patch("scorerole.score._build_score_system", return_value="mock"), \
+             mock.patch("time.sleep"):
+            with pytest.raises(anthropic.InternalServerError):
+                score_jobs_batch(fake_client, jobs)
+
+        assert fake_client.messages.create.call_count == 3   # all 3 attempts made
+
+    def test_non_retryable_error_propagates_immediately(self):
+        """A non-retryable error (e.g. AuthenticationError) must not be retried."""
+        from scorerole.score import score_jobs_batch
+        import unittest.mock as mock
+
+        jobs = self._make_jobs(1)
+        fake_client = mock.MagicMock()
+        fake_client.messages.create.side_effect = anthropic.AuthenticationError(
+            message="invalid api key",
+            response=mock.MagicMock(status_code=401, headers={}),
+            body={},
+        )
+
+        with mock.patch("scorerole.score._build_score_system", return_value="mock"), \
+             mock.patch("time.sleep"):
+            with pytest.raises(anthropic.AuthenticationError):
+                score_jobs_batch(fake_client, jobs)
+
+        assert fake_client.messages.create.call_count == 1   # no retry
 
 
 # ---------------------------------------------------------------------------

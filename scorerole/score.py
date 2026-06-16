@@ -1,4 +1,4 @@
-import re, json, logging
+import re, json, logging, time
 from pathlib import Path
 import anthropic
 
@@ -288,19 +288,43 @@ def _score_chunk(client: anthropic.Anthropic, jobs: list[dict], system_prompt: s
         for i, j in enumerate(jobs)
     )
 
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=_MAX_OUTPUT_TOKENS,
-        system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
-        messages=[{
-            "role": "user",
-            "content": (
-                f"Score all {len(jobs)} jobs. "
-                f"Return a JSON array of exactly {len(jobs)} objects.\n\n"
-                f"{job_blocks}"
-            ),
-        }],
+    _RETRYABLE = (
+        anthropic.InternalServerError,   # 500 — transient server error
+        anthropic.RateLimitError,        # 429
+        anthropic.APIConnectionError,    # network blip
+        anthropic.APITimeoutError,       # request timed out
     )
+    _MAX_ATTEMPTS = 3
+    response = None
+    for attempt in range(_MAX_ATTEMPTS):
+        try:
+            response = client.messages.create(
+                model=MODEL,
+                max_tokens=_MAX_OUTPUT_TOKENS,
+                system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
+                messages=[{
+                    "role": "user",
+                    "content": (
+                        f"Score all {len(jobs)} jobs. "
+                        f"Return a JSON array of exactly {len(jobs)} objects.\n\n"
+                        f"{job_blocks}"
+                    ),
+                }],
+            )
+            break
+        except _RETRYABLE as exc:
+            if attempt < _MAX_ATTEMPTS - 1:
+                wait = 2 ** attempt   # 1s, 2s
+                log.warning(
+                    "Scoring API error (attempt %d/%d): %s — retrying in %ds",
+                    attempt + 1, _MAX_ATTEMPTS, exc, wait,
+                )
+                time.sleep(wait)
+            else:
+                log.error(
+                    "Scoring API error after %d attempts: %s", _MAX_ATTEMPTS, exc
+                )
+                raise
 
     usage = response.usage
     log.info(
