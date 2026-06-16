@@ -18,7 +18,7 @@ DEFAULT_LOOKBACK   = os.getenv("DEFAULT_LOOKBACK", "3d")
 
 from .state import (
     DATA_DIR, LOG_DIR, SEEN_FILE,
-    load_seen_roles, save_seen_roles, _role_hash,
+    load_seen_roles, save_seen_roles, save_skipped_roles, _role_hash,
 )
 from .sources import fetch_alerts
 from .sources.linkedin import extract_jobs, extract_jobs_html, _extract_text
@@ -145,7 +145,7 @@ def _stage_cap(
     Returns (jobs_to_score, did_prescreen).
 
     Cap logic (in priority order):
-      --all flag            → skip prompt, run Haiku pre-screen, score everything that survives
+      --no-limit flag            → skip prompt, run Haiku pre-screen, score everything that survives
       interactive TTY       → ask user; if yes, run pre-screen; if no, cap to MAX_JOBS_PER_RUN
       non-interactive cron  → cap silently, log warning
 
@@ -155,18 +155,18 @@ def _stage_cap(
     n_found = len(all_jobs)
     should_prescreen = False
 
-    # Show cost estimate upfront when --all is used (spec requirement).
+    # Show cost estimate upfront when --no-limit is used (spec requirement).
     if score_all:
         from .score import estimate_cost
         print(
-            f"\n  --all: {n_found} role{'s' if n_found != 1 else ''} in window. "
+            f"\n  --no-limit: {n_found} role{'s' if n_found != 1 else ''} in window. "
             f"Estimated cost: ~{estimate_cost(n_found)}\n"
             f"  (Haiku pre-screen will filter obvious mismatches — actual cost typically lower.)\n"
         )
 
     if MAX_JOBS_PER_RUN > 0 and n_found > MAX_JOBS_PER_RUN:
         if score_all:
-            log.info(f"{n_found} roles to evaluate (--all flag; Haiku pre-screen will filter)")
+            log.info(f"{n_found} roles to evaluate (--no-limit flag; Haiku pre-screen will filter)")
             should_prescreen = True
         elif sys.stdin.isatty():
             wants_all = _prompt_score_all(n_found, MAX_JOBS_PER_RUN)
@@ -179,7 +179,7 @@ def _stage_cap(
         else:
             log.warning(
                 f"{n_found} roles found but capped at {MAX_JOBS_PER_RUN} "
-                f"(non-interactive run). Use --all to score everything, "
+                f"(non-interactive run). Use --no-limit to score everything, "
                 f"or set MAX_JOBS_PER_RUN=0 in .env to remove the cap entirely."
             )
             all_jobs = all_jobs[:MAX_JOBS_PER_RUN]
@@ -233,13 +233,23 @@ def _stage_deliver(
     scored_jobs: list[dict],
     n_filtered: int,
     new_role_timestamps: dict,
+    no_tracker: bool = False,
 ) -> None:
     """Render the HTML digest and deliver it via SMTP.
 
     Raises SystemExit(1) on SMTP failure (so seen_roles.json is NOT written — the roles
     remain unseen and will be re-scored on the next run, per SPEC §8 / T-07).
-    On success, persists new_role_timestamps to seen_roles.json.
+    On success, persists new_role_timestamps to seen_roles.json and writes Apply/Consider
+    rows to the Applications xlsx tracker.
+
+    Skipped-role metadata is saved to skipped_roles.json BEFORE delivery so it survives
+    even if SMTP fails — it's needed for future backport and costs nothing to keep.
     """
+    # Save skipped role metadata before delivery (safe to write regardless of SMTP outcome)
+    skipped_jobs = [j for j in scored_jobs if j.get("eval", {}).get("verdict") == "skipped"]
+    if skipped_jobs:
+        save_skipped_roles(skipped_jobs)
+
     run_date = datetime.datetime.now().strftime("%B %d, %Y")
     html = render_html(scored_jobs, run_date, deal_breaker_count=n_filtered)
     try:
@@ -249,6 +259,10 @@ def _stage_deliver(
         raise SystemExit(1)
 
     save_seen_roles(new_role_timestamps)
+
+    if not no_tracker:
+        from .tracker import write_to_tracker
+        write_to_tracker(scored_jobs, run_date=datetime.date.today().isoformat())
 
     apply_n    = sum(1 for j in scored_jobs if j["eval"].get("verdict") == "apply")
     consider_n = sum(1 for j in scored_jobs if j["eval"].get("verdict") == "consider")
@@ -262,14 +276,16 @@ def _stage_deliver(
 # Orchestration
 # ---------------------------------------------------------------------------
 
-def run_pipeline(since_dt: datetime.datetime, score_all: bool = False):
+def run_pipeline(since_dt: datetime.datetime, score_all: bool = False, no_tracker: bool = False):
     """Fetch LinkedIn alert emails since since_dt, score unseen roles, deliver digest.
 
     seen_roles.json (14-day TTL) is the dedup gate — roles already scored
     within the last 14 days are skipped automatically.
 
-    score_all=True (--all flag) bypasses the cap and runs a Haiku pre-screen
+    score_all=True (--no-limit flag) bypasses the cap and runs a Haiku pre-screen
     before full Sonnet scoring to keep costs down.
+
+    no_tracker=True skips writing to the Applications xlsx (useful for test runs).
     """
     log.info(f"=== Pipeline run starting — lookback since {since_dt.strftime('%Y-%m-%d')} ===")
     client     = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -318,7 +334,7 @@ def run_pipeline(since_dt: datetime.datetime, score_all: bool = False):
         return
 
     # Stage 5: Render + deliver digest (persists seen_roles on success)
-    _stage_deliver(scored_jobs, n_filtered, new_role_timestamps)
+    _stage_deliver(scored_jobs, n_filtered, new_role_timestamps, no_tracker=no_tracker)
 
 
 def debug_emails():
@@ -374,10 +390,14 @@ def main():
              f"Default: {DEFAULT_LOOKBACK}",
     )
     parser.add_argument(
-        "--all", dest="score_all", action="store_true",
+        "--no-limit", dest="score_all", action="store_true",
         help="Score every role in the lookback window, ignoring MAX_JOBS_PER_RUN. "
              "A Haiku pre-screen runs first to keep API costs down. "
              "Useful for catch-up runs after a long gap or a reset.",
+    )
+    parser.add_argument(
+        "--no-tracker", dest="no_tracker", action="store_true",
+        help="Skip writing to the Applications xlsx tracker. Useful for test/dry runs.",
     )
 
     subparsers = parser.add_subparsers(dest="command")
@@ -401,23 +421,46 @@ def main():
     reset_p.add_argument("--force",   action="store_true", help="Skip confirmation prompt.")
     reset_p.add_argument("--profile", action="store_true", help="Also delete your scoring profile (~/.job_pipeline/profile.yaml).")
 
-    # schedule subcommand
+    # schedule subcommand  (git-style nested actions)
     schedule_p = subparsers.add_parser(
         "schedule",
         help="Install, inspect, or remove the automated digest schedule.",
         description=(
-            "Without flags: show the current schedule.\n"
-            "  scorerole schedule --set      interactive setup (or update)\n"
-            "  scorerole schedule --remove   remove the scheduled job"
+            "Show the current schedule when called with no action.\n\n"
+            "  scorerole schedule        show current schedule + OS job status\n"
+            "  scorerole schedule set    interactive setup (or update)\n"
+            "  scorerole schedule remove remove the scheduled job"
         ),
     )
-    schedule_p.add_argument(
-        "--set", dest="schedule_set", action="store_true",
+    schedule_sub = schedule_p.add_subparsers(dest="schedule_action")
+    schedule_sub.add_parser(
+        "set",
         help="Run the interactive setup wizard to install or replace the schedule.",
     )
-    schedule_p.add_argument(
-        "--remove", dest="schedule_remove", action="store_true",
+    schedule_sub.add_parser(
+        "remove",
         help="Remove the scheduled job and clear ~/.job_pipeline/schedule.json.",
+    )
+
+    # track subcommand
+    track_p = subparsers.add_parser(
+        "track",
+        help="Parse confirmation and rejection emails, update the Applications tracker.",
+        description=(
+            "Fetches emails from Gmail, classifies them as confirmations or rejections,\n"
+            "and updates the Applications xlsx tracker accordingly.\n\n"
+            "  scorerole track                # parse last 7 days\n"
+            "  scorerole track --since 14d    # extend lookback\n"
+            "  scorerole track --dry-run      # preview matches, no writes"
+        ),
+    )
+    track_p.add_argument(
+        "--since", default="7d", metavar="DURATION",
+        help="How far back to look for emails. Accepts '7d', '14d', '2026-06-01'. Default: 7d",
+    )
+    track_p.add_argument(
+        "--dry-run", dest="dry_run", action="store_true",
+        help="Parse and print matches without writing to the tracker.",
     )
 
     # debug subcommand
@@ -460,16 +503,28 @@ def main():
 
     elif args.command == "schedule":
         from .schedule_cmd import show_schedule, run_schedule_wizard, remove_schedule
-        if getattr(args, "schedule_remove", False):
+        action = getattr(args, "schedule_action", None)
+        if action == "remove":
             removed = remove_schedule()
-            if removed:
-                print("  Schedule removed.")
-            else:
-                print("  No schedule was configured.")
-        elif getattr(args, "schedule_set", False):
+            print("  Schedule removed." if removed else "  No schedule was configured.")
+        elif action == "set":
             run_schedule_wizard()
         else:
             show_schedule()
+
+    elif args.command == "track":
+        _validate_env()
+        since_dt = _parse_lookback(getattr(args, "since", "7d"))
+        if not since_dt:
+            print(f"Could not parse --since '{args.since}'. Try: '7d', '14d', '2026-06-01'")
+            raise SystemExit(1)
+        from .track import run_track
+        run_track(
+            gmail_address=GMAIL_ADDRESS,
+            app_password=GMAIL_APP_PASSWORD,
+            since_dt=since_dt,
+            dry_run=getattr(args, "dry_run", False),
+        )
 
     elif args.command == "debug":
         _validate_env()
@@ -483,7 +538,7 @@ def main():
             print(f"Could not parse --lookback '{args.lookback}'. "
                   f"Try: '3d', '7d', '2026-05-10'")
             raise SystemExit(1)
-        run_pipeline(since_dt=since_dt, score_all=args.score_all)
+        run_pipeline(since_dt=since_dt, score_all=args.score_all, no_tracker=args.no_tracker)
 
 
 if __name__ == "__main__":

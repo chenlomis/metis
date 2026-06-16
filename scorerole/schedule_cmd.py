@@ -4,7 +4,7 @@ On macOS: writes a launchd plist to ~/Library/LaunchAgents/ and loads it via
 launchctl so the job runs at the configured time without manual intervention.
 
 On Linux: edits the user crontab (crontab -l / crontab -) to add a single
-tagged line that is removed cleanly by `scorerole schedule --remove`.
+tagged line that is removed cleanly by `scorerole schedule remove`.
 
 Config is stored in ~/.job_pipeline/schedule.json alongside profile.yaml and
 seen_roles.json so the schedule is inspectable independently of the OS job.
@@ -291,7 +291,7 @@ def show_schedule() -> None:
     config = load_schedule()
     if not config:
         print("  No schedule configured.")
-        print("  Run `scorerole schedule --set` to set one up.")
+        print("  Run `scorerole schedule set` to set one up.")
         return
 
     freq    = config.get("frequency", "?")
@@ -309,18 +309,18 @@ def show_schedule() -> None:
     # Binary health check
     if bin_path != "?" and not Path(bin_path).exists():
         print(f"\n  ⚠  Binary not found at {bin_path}")
-        print("     If the venv was recreated, run `scorerole schedule --set` to reinstall.")
+        print("     If the venv was recreated, run `scorerole schedule set` to reinstall.")
 
     # OS job health check
     sys_platform = config.get("platform", platform.system())
     if sys_platform == "Darwin":
         plist_ok = LAUNCHD_PLIST.exists()
-        status   = "✓ launchd plist active" if plist_ok else "⚠  plist missing — run `scorerole schedule --set` to reinstall"
+        status   = "✓ launchd plist active" if plist_ok else "⚠  plist missing — run `scorerole schedule set` to reinstall"
         print(f"  OS job:     {status}")
     elif sys_platform == "Linux":
         current = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
         cron_ok = current.returncode == 0 and CRONTAB_MARKER in current.stdout
-        status  = "✓ crontab entry active" if cron_ok else "⚠  crontab entry missing — run `scorerole schedule --set` to reinstall"
+        status  = "✓ crontab entry active" if cron_ok else "⚠  crontab entry missing — run `scorerole schedule set` to reinstall"
         print(f"  OS job:     {status}")
 
 
@@ -411,8 +411,8 @@ def run_schedule_wizard() -> None:
         print(f"     OS job: {LAUNCHD_PLIST}")
     print(f"     Config: {SCHEDULE_FILE}")
     print()
-    print("  To change the schedule: scorerole schedule --set")
-    print("  To remove the schedule: scorerole schedule --remove")
+    print("  To change the schedule: scorerole schedule set")
+    print("  To remove the schedule: scorerole schedule remove")
     print()
 
 

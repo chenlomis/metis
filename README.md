@@ -114,21 +114,41 @@ See [`profile.template.yaml`](./profile.template.yaml) for the full schema with 
 
 ## Commands
 
+**Running the digest:**
+
 | Command | What it does |
 |---|---|
 | `scorerole` | Fetch alerts → score → send digest (default: last 3 days) |
-| `scorerole --lookback 7d` | Same, but look back further. Accepts `7d`, `14d`, `2026-05-10`, `yesterday` |
-| `scorerole --all` | Score everything in the lookback window, bypassing the per-run cap. Shows a cost estimate and runs a Haiku pre-screen before charging the full Sonnet cost. |
-| `scorerole --all --lookback 14d` | Catch-up run — useful after a gap or after `scorerole reset` |
-| `scorerole init` | Interactive wizard: parse your resume, generate `~/.job_pipeline/profile.yaml`. Re-run any time to update your profile. |
-| `scorerole init --resume path/to/resume.pdf` | Skip the resume prompt |
-| `scorerole init --supplement path/to/linkedin.pdf` | Add a LinkedIn export or supplementary file |
-| `scorerole reset` | Clear dedup state so all roles reprocess on next run (profile is kept) |
+| `scorerole --lookback 7d` | Same, wider window. Accepts `7d`, `14d`, `2026-05-10`, `yesterday` |
+| `scorerole --no-limit` | Score everything in the lookback window, bypassing the per-run cap. Shows a cost estimate; Haiku pre-screens first to keep costs down. |
+| `scorerole --no-limit --lookback 14d` | Catch-up run — useful after a gap or after `scorerole reset` |
+
+**Profile setup:**
+
+| Command | What it does |
+|---|---|
+| `scorerole init` | Full wizard: resume → LinkedIn → preferences → review → save. Re-run any time to update. |
+| `scorerole init --resume path/to/resume.pdf` | Skip the resume path prompt |
+
+**Automated scheduling:**
+
+| Command | What it does |
+|---|---|
+| `scorerole schedule` | Show current schedule and OS job status |
+| `scorerole schedule set` | Interactive wizard: choose frequency (daily / Mon+Thu / weekly) and time |
+| `scorerole schedule remove` | Remove the scheduled job and clear `schedule.json` |
+
+**State and debugging:**
+
+| Command | What it does |
+|---|---|
+| `scorerole reset` | Clear dedup state so all roles reprocess on next run (profile kept) |
 | `scorerole reset --force` | Same, no confirmation prompt |
 | `scorerole reset --profile` | Also delete your scoring profile — requires `scorerole init` before next run |
+| `scorerole reset --profile --force` | Same, no confirmation |
 | `scorerole debug` | Dump the most recent LinkedIn alert email to `~/.job_pipeline/debug_email.txt` |
 
-> **When more than 20 new roles are found**, scorerole pauses and tells you how many there are and the estimated API cost. You can score all of them (with Haiku pre-screening to reduce cost), or proceed with the default cap. Roles beyond the cap stay available for the next run — they are not silently discarded.
+> **When more than 20 new roles are found**, scorerole pauses and shows the count and estimated API cost. You can score all of them (with Haiku pre-screening to reduce cost), or proceed with the default cap. Roles beyond the cap stay unseen and reappear next run — they are never silently discarded.
 
 ---
 
