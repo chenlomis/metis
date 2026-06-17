@@ -9,7 +9,8 @@ candidate:
   name: "Your Name"
   email: "you@example.com"
   location: "City, State"           # e.g. "San Francisco, CA"
-  open_to_remote: true
+  location_preference: "remote"     # remote / local / flexible
+  open_to_remote: true              # derived from location_preference; kept for compat
   open_to_relocation:               # list cities/regions, or leave empty
     - "New York City"
 
@@ -91,6 +92,12 @@ deal_breakers:                      # absolute no's — will not apply
   - "on-site 5 days/week"
 
 salary_floor_usd: 150000            # set to null if not applicable
+
+# Inferred by scorerole init from your resume — set to null if uncertain
+inferred:
+  customer_types:                   # b2b, b2c, b2b2c, marketplace, developer, internal
+    - "b2b"
+  degree_level: "bs"                # none / bs / ms_phd
 
 notes: |
   Add any custom scoring calibration notes here.

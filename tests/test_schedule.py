@@ -329,7 +329,7 @@ class TestPipelineScheduleRegression:
         monkeypatch.setattr("scorerole.schedule_cmd.SCHEDULE_FILE", tmp_path / "schedule.json")
 
         from scorerole import pipeline
-        monkeypatch.setattr(pipeline, "fetch_alerts", lambda since_dt: [])
+        monkeypatch.setattr(pipeline, "fetch_alerts", lambda since_dt, **kwargs: [])
         monkeypatch.setattr(pipeline, "load_seen_roles", lambda: set())
         monkeypatch.setattr(pipeline, "ANTHROPIC_API_KEY", "sk-fake")
 

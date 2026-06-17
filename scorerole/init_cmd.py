@@ -141,6 +141,11 @@ salary_floor_usd: int or null    # hard floor — use user-provided if given; el
 notes: string                    # scoring calibration; distinguish hard filters from soft signals;
                                  # include level-mismatch rule if title understates scope
 
+inferred:
+  customer_types: []              # list from [b2b, b2c, b2b2c, marketplace, developer, internal]
+                                  # inferred from past employers; [] if unclear
+  degree_level: null              # "none" / "bs" / "ms_phd" — from education section; null if unclear
+
 Rules:
 - Use null or [] when information is absent; never omit a key.
 - Infer target roles and level from title trajectory, not just current title.
@@ -243,11 +248,16 @@ def _show_profile(profile: dict, console):
     tbl.add_row("Name",     c.get("name", "—"))
     tbl.add_row("Location", c.get("location", "—"))
 
-    remote_str = "yes" if c.get("open_to_remote") else "no"
+    loc_pref = c.get("location_preference")
+    if loc_pref:
+        _lbl = {"remote": "remote only", "local": "local / open to onsite", "flexible": "flexible"}
+        remote_str = _lbl.get(loc_pref, loc_pref)
+    else:
+        remote_str = "yes" if c.get("open_to_remote") else "no"
     reloc = c.get("open_to_relocation") or []
     if reloc:
         remote_str += f"  [dim]· relocation: {', '.join(reloc)}[/dim]"
-    tbl.add_row("Remote", remote_str)
+    tbl.add_row("Location", remote_str)
 
     tbl.add_row("Target roles", "\n".join(t.get("roles", [])) or "—")
     tbl.add_row("Level",        t.get("level", "—"))
@@ -322,12 +332,16 @@ def _collect_hard_filters(Q_STYLE) -> dict:
     target_roles = questionary.text("  Target roles:", style=Q_STYLE).ask() or ""
 
     print()
-    print("  Work mode: select all that apply  (leave blank = no preference)")
-    work_mode = questionary.checkbox(
-        "  Work mode:",
-        choices=["Remote-first", "Hybrid OK", "On-site OK"],
+    print("  Location preference:")
+    location_preference = questionary.select(
+        "  Where do you need to work?",
+        choices=[
+            questionary.Choice("Remote — not willing to relocate",               value="remote"),
+            questionary.Choice("Local or willing to relocate — open to onsite",  value="local"),
+            questionary.Choice("Flexible — either works",                        value="flexible"),
+        ],
         style=Q_STYLE,
-    ).ask() or []
+    ).ask() or "flexible"
 
     print()
     print("  Relocation: leave blank = current location only")
@@ -364,11 +378,11 @@ def _collect_hard_filters(Q_STYLE) -> dict:
                   f"Try: 150000 or 150,000  (leave blank to skip)")
 
     return {
-        "target_roles":      [r.strip() for r in target_roles.split(",") if r.strip()],
-        "work_mode":         work_mode,
-        "relocation_cities": relocation,
-        "deal_breakers":     [d.strip() for d in deal_breakers.split(",") if d.strip()],
-        "salary_floor":      salary_floor,
+        "target_roles":        [r.strip() for r in target_roles.split(",") if r.strip()],
+        "location_preference": location_preference,
+        "relocation_cities":   relocation,
+        "deal_breakers":       [d.strip() for d in deal_breakers.split(",") if d.strip()],
+        "salary_floor":        salary_floor,
     }
 
 
@@ -471,11 +485,11 @@ def _collect_preferences(console, Q_STYLE) -> dict:
     hard = _collect_hard_filters(Q_STYLE)
     # ── Summary line after hard filters ─────────────────────────────────────
     _roles_str = ", ".join(hard["target_roles"][:2]) + ("…" if len(hard["target_roles"]) > 2 else "")
-    _wm_str    = ", ".join(hard.get("work_mode") or []) or "no pref"
+    _loc_str   = {"remote": "remote only", "local": "local/onsite OK", "flexible": "flexible"}.get(hard.get("location_preference", "flexible"), "flexible")
     _sal_str   = f"  ·  ${hard['salary_floor']} floor" if hard.get("salary_floor") else ""
     _db_str    = f"  ·  {len(hard['deal_breakers'])} deal-breaker{'s' if len(hard['deal_breakers']) != 1 else ''}" if hard.get("deal_breakers") else ""
     print()
-    print(f"  ✓  Hard filters  ·  {_roles_str or '—'}  ·  {_wm_str}{_sal_str}{_db_str}")
+    print(f"  ✓  Hard filters  ·  {_roles_str or '—'}  ·  {_loc_str}{_sal_str}{_db_str}")
 
     asp = _collect_aspirations(Q_STYLE)
     # ── Summary line after aspirations ──────────────────────────────────────
@@ -502,8 +516,9 @@ def _format_user_context(prefs: dict) -> str:
     lines.append("# Hard filters")
     if prefs.get("target_roles"):
         lines.append(f"Target roles: {', '.join(prefs['target_roles'])}")
-    _wm = prefs.get("work_mode") or []
-    lines.append(f"Work mode: {', '.join(_wm) if _wm else 'no preference'}")
+    _loc = prefs.get("location_preference", "flexible")
+    _loc_labels = {"remote": "remote only", "local": "local / open to onsite", "flexible": "flexible"}
+    lines.append(f"Location preference: {_loc_labels.get(_loc, _loc)}")
     reloc = prefs.get("relocation_cities") or []
     if reloc:
         lines.append(f"Open to relocation: yes — {', '.join(reloc)}")
@@ -547,13 +562,18 @@ def _apply_prefs_to_profile(profile: dict, prefs: dict) -> None:
     if prefs.get("target_roles"):
         profile.setdefault("target", {})["roles"] = prefs["target_roles"]
 
-    # Work mode → open_to_remote + store list so render_profile can use it verbatim.
-    # "Remote-first" or "Hybrid OK" → remote-open.
-    # "On-site OK" alone → on-site preferred (open_to_remote = False).
-    work_mode = prefs.get("work_mode") or []
-    if work_mode:
+    # Location preference — replaces the old work_mode checkbox.
+    # Also derive open_to_remote for backward compat with legacy profile readers.
+    loc_pref = prefs.get("location_preference")
+    if loc_pref:
         cand = profile.setdefault("candidate", {})
-        cand["work_mode"] = work_mode   # store list for richer rendering
+        cand["location_preference"] = loc_pref
+        cand["open_to_remote"] = loc_pref in ("remote", "flexible")
+    elif prefs.get("work_mode"):
+        # Legacy path: old wizard ran and produced work_mode list
+        work_mode = prefs["work_mode"]
+        cand = profile.setdefault("candidate", {})
+        cand["work_mode"] = work_mode
         on_site_only = ("On-site OK" in work_mode
                         and "Remote-first" not in work_mode
                         and "Hybrid OK" not in work_mode)
@@ -629,6 +649,188 @@ def _apply_prefs_to_profile(profile: dict, prefs: dict) -> None:
     if prefs.get("calibration"):
         existing = (profile.get("notes") or "").strip()
         profile["notes"] = (existing + "\n\n" + prefs["calibration"]).strip() if existing else prefs["calibration"]
+
+
+# ---------------------------------------------------------------------------
+# Proactive sources wizard
+# ---------------------------------------------------------------------------
+
+def _run_proactive_sources_wizard(profile: dict, console, Q_STYLE=None):
+    """Wizard step that configures proactive company scraping in profile['proactive_sources']."""
+    try:
+        import questionary
+    except ImportError:
+        return  # non-interactive env; skip silently
+
+    from .sources.proactive import count_companies, estimate_monthly_cost
+
+    n_sa   = count_companies(["S", "A"])
+    n_sab  = count_companies(["S", "A", "B"])
+    n_all  = count_companies(["S", "A", "B", "C"])
+    cost_sa  = estimate_monthly_cost(["S", "A"])
+    cost_sab = estimate_monthly_cost(["S", "A", "B"])
+
+    target_roles = ", ".join(profile.get("target", {}).get("roles", ["your target role"]))
+    existing = profile.get("proactive_sources", {})
+
+    console.print()
+    console.rule("[dim]Proactive job sources[/dim]")
+    console.print()
+    console.print(
+        f"  Beyond LinkedIn alerts, scorerole can check company career pages directly each run.\n"
+        f"  Currently [bold]{n_all}[/bold] companies are available across 4 tiers (Anthropic, Figma, Stripe…)\n"
+        f"  Based on your profile, we'll filter for: [italic]{target_roles}[/italic]"
+    )
+    console.print()
+
+    choices = [
+        questionary.Choice(
+            f"S + A tier only  ({n_sa} companies, +{cost_sa} est.)",
+            value="SA",
+        ),
+        questionary.Choice(
+            f"S + A + B tier   ({n_sab} companies, +{cost_sab} est.)  — broader coverage",
+            value="SAB",
+        ),
+        questionary.Choice(
+            "Add specific companies  (you pick from a list or enter names)",
+            value="custom",
+        ),
+        questionary.Choice(
+            "Other  (describe what you want — free text)",
+            value="other",
+        ),
+        questionary.Choice(
+            "Skip  (LinkedIn alerts only, no extra cost)",
+            value="skip",
+        ),
+    ]
+
+    # Pre-select based on existing config
+    default_val = "skip"
+    if existing.get("enabled"):
+        tiers = set(existing.get("tiers", []))
+        if "B" in tiers:
+            default_val = "SAB"
+        elif existing.get("extra_companies"):
+            default_val = "custom"
+        else:
+            default_val = "SA"
+
+    answer = questionary.select(
+        "  Which companies should we check each run?",
+        choices=choices,
+        default=next((c for c in choices if c.value == default_val), choices[0]),
+    ).ask()
+
+    if answer is None or answer == "skip":
+        profile["proactive_sources"] = {"enabled": False}
+        console.print("  [dim]Skipped — LinkedIn alerts only. Run `scorerole init` any time to change this.[/dim]")
+        return
+
+    if answer == "SA":
+        profile["proactive_sources"] = {
+            "enabled": True,
+            "tiers": ["S", "A"],
+            "extra_companies": [],
+            "exclude_companies": [],
+        }
+        console.print(f"  [green]✓[/green]  Proactive sources enabled: S + A tier ({n_sa} companies)")
+
+    elif answer == "SAB":
+        profile["proactive_sources"] = {
+            "enabled": True,
+            "tiers": ["S", "A", "B"],
+            "extra_companies": [],
+            "exclude_companies": [],
+        }
+        console.print(f"  [green]✓[/green]  Proactive sources enabled: S + A + B tier ({n_sab} companies)")
+
+    elif answer == "custom":
+        _configure_custom_companies(profile, existing, console)
+
+    elif answer == "other":
+        freeform = questionary.text(
+            "  Describe what you want (e.g. 'only Anthropic and Stripe', "
+            "'all S-tier plus Notion and Ramp'):",
+            style=Q_STYLE,
+        ).ask()
+        if freeform:
+            # Store as a note and default to S+A — user can edit profile.yaml directly
+            profile["proactive_sources"] = {
+                "enabled": True,
+                "tiers": ["S", "A"],
+                "extra_companies": [],
+                "exclude_companies": [],
+                "notes": freeform.strip(),
+            }
+            console.print(
+                f"  [green]✓[/green]  Saved your preference. Starting with S + A tier as baseline.\n"
+                f"  [dim]Edit [bold]proactive_sources[/bold] in your profile.yaml to fine-tune, "
+                f"or run `scorerole init` again.[/dim]"
+            )
+
+    console.print(
+        "  [dim]You can always reconfigure proactive sources via `scorerole init`.[/dim]"
+    )
+
+
+def _configure_custom_companies(profile: dict, existing: dict, console):
+    """Sub-wizard for the 'Add specific companies' path."""
+    try:
+        import questionary
+    except ImportError:
+        return
+
+    from .sources.proactive import _load_companies_yml
+
+    cfg = _load_companies_yml()
+    all_companies = (
+        cfg.get("greenhouse_companies", [])
+        + cfg.get("lever_companies", [])
+        + cfg.get("ashby_companies", [])
+    )
+    by_name = {c["name"]: c for c in all_companies}
+
+    existing_tiers  = set(existing.get("tiers", []))
+    existing_extras = {c.get("name", "") for c in (existing.get("extra_companies") or [])}
+
+    choices = [
+        questionary.Choice(
+            f"[{c['tier']}] {c['name']} ({c.get('ats', '?')})",
+            value=c["name"],
+            checked=(c.get("tier") in existing_tiers or c["name"] in existing_extras),
+        )
+        for c in sorted(all_companies, key=lambda x: (x.get("tier", "Z"), x.get("name", "")))
+    ]
+
+    selected = questionary.checkbox(
+        "  Select companies to include (space to toggle, enter to confirm):",
+        choices=choices,
+    ).ask()
+
+    if selected is None:
+        return
+
+    known_names = set(selected)
+    tiers_covered = {by_name[n]["tier"] for n in known_names if n in by_name}
+    extra_names   = [n for n in known_names if n in by_name and by_name[n]["tier"] not in {"S", "A"}]
+
+    # Derive tiers from selection — use tier list where possible, extras for one-offs
+    tiers = list(tiers_covered & {"S", "A"}) or []
+    extra_companies = [
+        {"name": by_name[n]["name"], "ats": by_name[n].get("ats", "greenhouse"), "slug": by_name[n].get("slug", "")}
+        for n in selected
+        if n in by_name and by_name[n]["tier"] not in set(tiers)
+    ]
+
+    profile["proactive_sources"] = {
+        "enabled": True,
+        "tiers": tiers,
+        "extra_companies": extra_companies,
+        "exclude_companies": [],
+    }
+    console.print(f"  [green]✓[/green]  Proactive sources enabled: {len(selected)} companies selected")
 
 
 # ---------------------------------------------------------------------------
@@ -1012,6 +1214,9 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
         console.print()
         _show_profile(profile, console)
         console.print()
+
+    # ── Proactive sources ─────────────────────────────────────────────────────
+    _run_proactive_sources_wizard(profile, console, Q_STYLE)
 
     # ── Save ──────────────────────────────────────────────────────────────────
     DATA_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)  # restrict to owner

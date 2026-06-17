@@ -1,9 +1,14 @@
+from __future__ import annotations
 import os, re, json, datetime, hashlib
 from pathlib import Path
 
-DATA_DIR  = Path.home() / ".job_pipeline"
-LOG_DIR   = DATA_DIR / "logs"
-SEEN_FILE = DATA_DIR / "seen_roles.json"   # canonical dedup store
+DATA_DIR      = Path.home() / ".job_pipeline"
+LOG_DIR       = DATA_DIR / "logs"
+SEEN_FILE     = DATA_DIR / "seen_roles.json"     # canonical dedup store
+SKIPPED_FILE  = DATA_DIR / "skipped_roles.json"  # metadata for skipped roles (backport store)
+LAST_RUN_FILE = DATA_DIR / "last_run.json"        # summary of most recent pipeline run
+FEEDBACK_FILE = DATA_DIR / "feedback.md"          # user calibration notes (appended via `scorerole feedback`)
+SKIPPED_TTL_DAYS = 90
 
 
 def _role_hash(title: str, company: str) -> str:
@@ -42,6 +47,71 @@ def load_seen_roles(ttl_days: int = 14) -> set:
               .replace(tzinfo=None) - datetime.timedelta(days=ttl_days))
     return {h for h, ts in raw.items()
             if datetime.datetime.fromisoformat(ts) > cutoff}
+
+
+def save_skipped_roles(jobs: list[dict]) -> None:
+    """Persist metadata for skipped-verdict roles so they can be backported later.
+
+    Keyed by role_hash (same as seen_roles). Entries expire after SKIPPED_TTL_DAYS
+    (90 days) — long enough that a delayed application can still be matched.
+    Only writes; never removes entries until they expire or are promoted to a tracker row.
+    """
+    if not jobs:
+        return
+    p = SKIPPED_FILE
+    existing: dict = {}
+    if p.exists():
+        try:
+            existing = json.loads(p.read_text())
+            if not isinstance(existing, dict):
+                existing = {}
+        except (json.JSONDecodeError, OSError):
+            existing = {}
+
+    now_iso = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None).isoformat()
+    for job in jobs:
+        h = _role_hash(job["title"], job["company"])
+        existing[h] = {
+            "role_title":    job["title"],
+            "company":       job["company"],
+            "match_score":   job.get("eval", {}).get("score"),
+            "date_suggested": now_iso[:10],   # YYYY-MM-DD
+            "url":           job.get("url", ""),
+            "saved_at":      now_iso,
+        }
+
+    cutoff = (datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+              - datetime.timedelta(days=SKIPPED_TTL_DAYS)).isoformat()
+    pruned = {h: v for h, v in existing.items() if v.get("saved_at", "") > cutoff}
+
+    p.write_text(json.dumps(pruned, indent=2))
+    p.chmod(0o600)
+
+
+def lookup_skipped_role(title: str, company: str) -> dict | None:
+    """Return stored metadata for a skipped role, or None if not found / expired."""
+    if not SKIPPED_FILE.exists():
+        return None
+    try:
+        data = json.loads(SKIPPED_FILE.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    return data.get(_role_hash(title, company))
+
+
+def promote_skipped_role(title: str, company: str) -> None:
+    """Remove a skipped role from the sidecar once it has been promoted to a tracker row."""
+    if not SKIPPED_FILE.exists():
+        return
+    try:
+        data = json.loads(SKIPPED_FILE.read_text())
+    except (json.JSONDecodeError, OSError):
+        return
+    h = _role_hash(title, company)
+    if h in data:
+        del data[h]
+        SKIPPED_FILE.write_text(json.dumps(data, indent=2))
+        SKIPPED_FILE.chmod(0o600)
 
 
 def save_seen_roles(new_entries: dict, ttl_days: int = 14):

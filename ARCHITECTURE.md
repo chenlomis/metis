@@ -42,9 +42,21 @@ sources/linkedin.py — enrich_jobs()
     │ extracts external ATS URL (Greenhouse/Lever/Ashby) from applyAction
     │ retries 3x with exponential backoff on 429/5xx/timeout
     ▼
+extract.py — extract_jd_structs()          ← Layer 1 (NEW)
+    │ Haiku call at temperature=0 per chunk (≤10 jobs/chunk)
+    │ extracts 27 structured fields: salary, work model, domain, seniority,
+    │   degree req, visa, company stage, customer type, culture signals, etc.
+    │ extraction failure → blank structs (scoring unblocked)
+    ▼
+extract.py — check_hard_gates()
+    │ jd_blank gate:    no JD text → verdict="filtered", skip Sonnet
+    │ salary_floor:     disclosed salary_max < floor*0.9 → filtered
+    │ (all other gates handled by Layer 2 — require nuanced judgment)
+    ▼
 score.py — score_jobs_batch()
-    │ single Sonnet batch call: all surviving jobs in one message
-    │ profile rendered as cached system prompt block
+    │ Sonnet call on gate-surviving jobs only (cost savings)
+    │ each job block includes [EXTRACTED CONTEXT] from Layer 1
+    │ profile as cached system prompt; explicit 6-dimension rubric
     │ returns score (0-100), verdict, leveragePoints, frictionPoints, tags
     ▼
 score.py — rank_jobs()
@@ -78,10 +90,20 @@ All jobs are scored in a single `messages.create()` call. The profile is sent as
 cache window pay reduced input token costs. Trade-off: one large call is more fragile
 than N small calls (partial-JSON recovery in `_recover_partial_json()` mitigates this).
 
-### 3. Two-pass scoring: Haiku pre-screen → Sonnet
-Activated when role count exceeds `MAX_JOBS_PER_RUN`. Haiku sees only title+company
-(no JD fetch), returns Y/N per role. Only Y's proceed to enrichment + Sonnet scoring.
-Reduces cost by ~40–60% on large catch-up runs without sacrificing quality on survivors.
+### 3. Three-pass scoring: Haiku pre-screen → Haiku extraction → Sonnet
+Pass 1 (pre-screen): activated when role count exceeds `MAX_JOBS_PER_RUN`. Haiku sees
+only title+company, returns Y/N. Reduces catch-up run cost by ~40–60%.
+
+Pass 2 (Layer 1 extraction): always runs on enriched jobs. Haiku at temperature=0
+extracts 27 structured fields from each JD. Two Python hard gates run here:
+`jd_blank` (no JD text → skip Sonnet) and `salary_floor` (disclosed salary_max < floor * 0.9).
+Extraction failures fall back to blank structs — scoring is never blocked.
+Cost: ~$0.005 per 10 jobs; partially offset by gate filtering savings on Sonnet.
+
+Pass 3 (Layer 2 Sonnet): only runs on roles that passed hard gates. Each job block
+includes the Layer 1 `[EXTRACTED CONTEXT]` as grounding. The scoring prompt includes
+an explicit 6-dimension rubric (seniority_scope, experience_relevance, compensation_fit,
+culture_values, domain_background, company_stage) with weights and multipliers.
 
 ### 4. seen_roles.json as the dedup gate (not email Message-IDs)
 Role identity is `md5(normalize(title + company))[:12]` — not the email Message-ID.
@@ -225,7 +247,8 @@ See README § Privacy for the full data flow table.
 | `pipeline.py` | CLI entry point, orchestration, cap/prompt logic |
 | `sources/linkedin.py` | IMAP fetch, email parsing, JD enrichment, retry logic |
 | `sources/__init__.py` | Routing between alert modes (lookback vs. seen-ID gate) |
-| `score.py` | Haiku pre-screen, Sonnet scoring, JSON recovery, rank |
+| `extract.py` | Layer 1 Haiku extraction (27 structured fields), hard gate checker, context formatter |
+| `score.py` | Haiku pre-screen, Sonnet scoring (Layer 2), JSON recovery, rank |
 | `render.py` | HTML digest building, SMTP delivery |
 | `profile.py` | Profile YAML loader + `render_profile()` for scoring prompt |
 | `state.py` | `seen_roles.json` read/write/prune, `_role_hash()` |

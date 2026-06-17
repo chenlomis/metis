@@ -9,6 +9,7 @@ tagged line that is removed cleanly by `scorerole schedule remove`.
 Config is stored in ~/.job_pipeline/schedule.json alongside profile.yaml and
 seen_roles.json so the schedule is inspectable independently of the OS job.
 """
+from __future__ import annotations
 import json, os, platform, re, subprocess, sys
 import datetime
 from pathlib import Path

@@ -1,3 +1,4 @@
+from __future__ import annotations
 import re, json, imaplib, email, datetime, logging, time
 import httpx
 from bs4 import BeautifulSoup
@@ -50,11 +51,37 @@ _JOB_URL_RE = re.compile(r"https://www\.linkedin\.com/comm/jobs/view/(\d+)/")
 # Matches "Company · Location" lines in HTML recommendation emails
 _COMPANY_LOC_RE = re.compile(r"^(.+?)\s+·\s+(.+)$")
 
+# LinkedIn action-button text that bleeds into the location slot in recommendation emails
+# e.g. "Apply with resume & profile" or "Easy Apply"
+_LOCATION_GARBAGE_RE = re.compile(
+    r"^(apply with\b|easy apply)",
+    re.IGNORECASE,
+)
+
 # Short strings that appear as link text but are not job titles
 _NON_TITLE_LABELS = frozenset({
     "view all jobs", "easy apply", "linkedin", "apply", "see more",
     "expand your search", "remote jobs", "recommendations based on your activity",
 })
+
+
+def _sanitize_location(loc: str) -> str:
+    """Strip LinkedIn CTA text that bleeds into the location field.
+
+    LinkedIn recommendation emails include 'Apply with resume & profile' as a
+    UI element right after the company·location line, and the HTML scraper
+    sometimes captures it as location. Strip it so jobs show a real location or empty.
+    """
+    if not loc:
+        return loc
+    stripped = loc.strip()
+    if _LOCATION_GARBAGE_RE.match(stripped):
+        return ""
+    # Strip trailing '· Apply with...' suffix (e.g. 'United States · Apply with resume')
+    cleaned = re.sub(
+        r"\s*·\s*(apply with|easy apply)\b.*$", "", stripped, flags=re.IGNORECASE
+    ).strip()
+    return cleaned
 
 
 def _extract_text(msg) -> str:
@@ -131,7 +158,7 @@ def extract_jobs(body: str) -> list[dict]:
         jobs.append({
             "title":        title,
             "company":      company,
-            "location":     location,
+            "location":     _sanitize_location(location),
             "alumni_count": alumni_count,
             "job_id":       job_id,
             "url":          f"https://www.linkedin.com/jobs/view/{job_id}/",
@@ -179,7 +206,7 @@ def extract_jobs_html(html: str) -> list[dict]:
         jobs.append({
             "title":        title,
             "company":      company,
-            "location":     location,
+            "location":     _sanitize_location(location),
             "alumni_count": None,
             "job_id":       job_id,
             "url":          f"https://www.linkedin.com/jobs/view/{job_id}/",
@@ -286,19 +313,25 @@ def _fetch_one_jd(job: dict) -> tuple[str, str]:
 
 
 def enrich_jobs(jobs: list[dict]) -> list[dict]:
-    """Fetch JD text and external apply URL for each job. Sequential with delay."""
+    """Fetch JD text and external apply URL for each job. Sequential with delay.
+
+    Proactive jobs (source='proactive') already have a JD from the ATS API — they
+    are skipped to avoid redundant HTTP fetches.
+    """
     import time as _time
-    for i, job in enumerate(jobs):
+    linkedin_jobs = [j for j in jobs if j.get("source") != "proactive"]
+    for i, job in enumerate(linkedin_jobs):
         jd_text, apply_url = _fetch_one_jd(job)
         job["jd"]        = jd_text
         job["apply_url"] = apply_url
-        if i < len(jobs) - 1:
+        if i < len(linkedin_jobs) - 1:
             _time.sleep(0.4)
     fetched   = sum(1 for j in jobs if j.get("jd"))
     has_apply = sum(1 for j in jobs if j.get("apply_url"))
-    log.info(f"JD fetched for {fetched}/{len(jobs)} jobs; "
-             f"{has_apply} have external apply URL, "
-             f"{len(jobs) - has_apply} are LinkedIn Easy Apply")
+    proactive = sum(1 for j in jobs if j.get("source") == "proactive")
+    log.info(f"JD fetched for {fetched}/{len(jobs)} jobs "
+             f"({proactive} proactive, pre-fetched); "
+             f"{has_apply} have external apply URL")
     return jobs
 
 

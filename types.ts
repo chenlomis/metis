@@ -22,5 +22,7 @@ export interface Job {
 export interface DigestPayload {
   date: string;
   totalEvaluated: number;
+  candidateName: string;
+  greeting: string;
   jobs: Job[];
 }

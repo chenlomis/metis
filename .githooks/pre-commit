@@ -1,18 +1,30 @@
 #!/bin/sh
 # Warn when SPEC.md is staged — it's the locked source of truth.
 # Code changes should be checked against the spec, not the other way around.
+# Set SPEC_UPDATE=1 to bypass the prompt in automated/CI contexts.
 
 if git diff --cached --name-only | grep -q "^SPEC\.md$"; then
-  echo ""
-  echo "  ⚠  SPEC.md is staged for commit."
-  echo "     This file is the locked source of truth (spec-v0.1)."
-  echo "     Code should be checked against it, not the other way around."
-  echo ""
-  printf "     Type YES to confirm this is an intentional spec update: "
-  read answer </dev/tty
-  if [ "$answer" != "YES" ]; then
-    echo "     Commit aborted. Unstage SPEC.md or type YES to proceed."
-    exit 1
+  if [ -n "$SPEC_UPDATE" ]; then
+    echo "  ℹ  SPEC.md update acknowledged via SPEC_UPDATE env var."
+    exit 0
   fi
-  echo ""
+
+  # Only prompt when stdin is a real terminal
+  if [ -t 0 ]; then
+    echo ""
+    echo "  ⚠  SPEC.md is staged for commit."
+    echo "     This file is the locked source of truth (spec-v0.1)."
+    echo "     Code should be checked against it, not the other way around."
+    echo ""
+    printf "     Type YES to confirm this is an intentional spec update: "
+    read answer </dev/tty
+    if [ "$answer" != "YES" ]; then
+      echo "     Commit aborted. Unstage SPEC.md or type YES to proceed."
+      exit 1
+    fi
+    echo ""
+  else
+    echo "  ⚠  SPEC.md is being committed in a non-interactive context."
+    echo "     Set SPEC_UPDATE=1 if this is intentional."
+  fi
 fi

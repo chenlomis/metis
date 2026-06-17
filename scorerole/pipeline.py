@@ -1,3 +1,4 @@
+from __future__ import annotations
 import os, re, sys, datetime, logging
 from pathlib import Path
 from dotenv import load_dotenv
@@ -20,6 +21,7 @@ from .state import (
     DATA_DIR, LOG_DIR, SEEN_FILE,
     load_seen_roles, save_seen_roles, save_skipped_roles, _role_hash,
 )
+from .feedback_cmd import save_last_run
 from .sources import fetch_alerts
 from .sources.linkedin import extract_jobs, extract_jobs_html, _extract_text
 from .score import score_jobs_batch, rank_jobs
@@ -91,8 +93,8 @@ def _prompt_score_all(n_found: int, cap: int) -> bool:
 # Pipeline stages (private — called in sequence by run_pipeline)
 # ---------------------------------------------------------------------------
 
-def _stage_ingest(since_dt: datetime.datetime, seen_roles: set) -> list[dict] | None:
-    """Fetch LinkedIn alert emails and return deduplicated new jobs.
+def _stage_ingest(since_dt: datetime.datetime, seen_roles: set, profile=None) -> "list[dict] | None":
+    """Fetch job alerts (LinkedIn + proactive sources) and return deduplicated new jobs.
 
     Applies three dedup layers:
       1. job_id exact duplicate within this run
@@ -100,11 +102,11 @@ def _stage_ingest(since_dt: datetime.datetime, seen_roles: set) -> list[dict] | 
       3. role_hash in seen_roles (14-day cross-run TTL gate)
 
     Returns:
-      None           — no LinkedIn emails found in the lookback window
-      []  (empty)    — emails found but all roles already seen within 14 days
+      None           — no emails found and no proactive jobs
+      []  (empty)    — sources returned jobs but all already seen within 14 days
       [...]           — new, unseen roles ready for cap + scoring
     """
-    threads = fetch_alerts(since_dt)
+    threads = fetch_alerts(since_dt, profile=profile)
     if not threads:
         log.info("No emails in lookback window. Done.")
         return None
@@ -194,21 +196,64 @@ def _stage_cap(
 
 
 def _stage_enrich_and_score(jobs: list[dict], client) -> list[dict]:
-    """Fetch JD text for each job (enrich) then score + rank with Sonnet.
+    """Fetch JDs (enrich), run Layer 1 extraction + gate checks, then score + rank with Sonnet.
+
+    Layer 1 (Haiku, temperature=0):
+      - Extracts structured fields (salary, work model, degree req, domain, etc.)
+      - Hard gates: blank JDs skip Sonnet; disclosed salary below floor → filtered
+      - Extraction failures fall back gracefully — scoring is never blocked
+
+    Layer 2 (Sonnet):
+      - Receives extraction context per job as grounding
+      - Only runs on roles that passed all hard gates
 
     Returns ranked jobs with 'eval' key populated.
     Raises SystemExit if the profile is missing.
     """
     from .sources.linkedin import enrich_jobs
+    from .extract import extract_jd_structs, check_hard_gates, format_extraction_for_scoring
+    from .profile import load_profile_yaml
+
     jobs = enrich_jobs(jobs)
 
+    # Load profile for gate checks
     try:
-        jobs = score_jobs_batch(client, jobs)
-    except FileNotFoundError:
-        raise SystemExit(
-            "\n❌  No scoring profile found.\n"
-            "   Run `scorerole init` to create one from your resume.\n"
-        )
+        profile_data = load_profile_yaml() or {}
+    except Exception:
+        profile_data = {}
+
+    # Layer 1: structured extraction
+    try:
+        extractions = extract_jd_structs(client, jobs)
+    except Exception as exc:
+        log.warning("Layer 1 extraction failed (%s) — scoring without extraction context", exc)
+        extractions = [{} for _ in jobs]
+
+    # Attach extraction structs and apply hard gates
+    to_score: list[dict] = []
+    for job, ext in zip(jobs, extractions):
+        job["extraction"] = ext
+        passes, gate_name = check_hard_gates(ext, profile_data)
+        if not passes:
+            job["eval"] = {
+                "score": 0,
+                "verdict": "filtered",
+                "leveragePoints": [],
+                "frictionPoints": [],
+                "tags": [{"text": f"gate: {gate_name}", "sentiment": "red"}],
+            }
+            log.info("Gate filtered: %s at %s — %s", job["title"], job["company"], gate_name)
+        else:
+            to_score.append(job)
+
+    if to_score:
+        try:
+            score_jobs_batch(client, to_score)   # mutates job["eval"] in-place
+        except FileNotFoundError:
+            raise SystemExit(
+                "\n❌  No scoring profile found.\n"
+                "   Run `scorerole init` to create one from your resume.\n"
+            )
 
     return rank_jobs(jobs)
 
@@ -259,10 +304,12 @@ def _stage_deliver(
         raise SystemExit(1)
 
     save_seen_roles(new_role_timestamps)
+    save_last_run(scored_jobs, run_date, filtered_count=n_filtered)
 
     if not no_tracker:
-        from .tracker import write_to_tracker
+        from .tracker import write_to_tracker, TRACKER_PATH
         write_to_tracker(scored_jobs, run_date=datetime.date.today().isoformat())
+        print(f"  Tracker → {TRACKER_PATH}")
 
     apply_n    = sum(1 for j in scored_jobs if j["eval"].get("verdict") == "apply")
     consider_n = sum(1 for j in scored_jobs if j["eval"].get("verdict") == "consider")
@@ -291,8 +338,12 @@ def run_pipeline(since_dt: datetime.datetime, score_all: bool = False, no_tracke
     client     = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     seen_roles = load_seen_roles()
 
+    # Load profile early — needed for proactive source config and gate checks
+    from .profile import load_profile_yaml
+    profile_data = load_profile_yaml() or {}
+
     # Stage 1: Ingest + deduplicate
-    all_jobs = _stage_ingest(since_dt, seen_roles)
+    all_jobs = _stage_ingest(since_dt, seen_roles, profile=profile_data)
     if all_jobs is None:
         return   # "No emails in lookback window" already logged inside _stage_ingest
     if not all_jobs:
@@ -449,22 +500,40 @@ def main():
         description=(
             "Fetches emails from Gmail, classifies them as confirmations or rejections,\n"
             "and updates the Applications xlsx tracker accordingly.\n\n"
-            "  scorerole track                # parse last 7 days\n"
-            "  scorerole track --since 14d    # extend lookback\n"
-            "  scorerole track --dry-run      # preview matches, no writes"
+            "  scorerole track                   # parse last 7 days\n"
+            "  scorerole track --lookback 30d    # extend lookback\n"
+            "  scorerole track --dry-run         # preview matches, no writes"
         ),
     )
     track_p.add_argument(
-        "--since", default="7d", metavar="DURATION",
-        help="How far back to look for emails. Accepts '7d', '14d', '2026-06-01'. Default: 7d",
+        "--lookback", default="7d", metavar="DURATION",
+        help="How far back to look for emails. Accepts '7d', '30d', '2026-06-01'. Default: 7d",
     )
     track_p.add_argument(
         "--dry-run", dest="dry_run", action="store_true",
         help="Parse and print matches without writing to the tracker.",
     )
 
+    # feedback subcommand
+    subparsers.add_parser(
+        "feedback",
+        help="Add calibration notes that shape future scoring runs.",
+        description=(
+            "Shows a summary of the last run, then prompts for free-form feedback.\n"
+            "Notes are appended to ~/.job_pipeline/feedback.md and injected into\n"
+            "the scoring prompt on every subsequent run.\n\n"
+            "  scorerole feedback    # interactive prompt"
+        ),
+    )
+
     # debug subcommand
     subparsers.add_parser("debug", help="Dump the most recent LinkedIn alert email for inspection.")
+
+    # tracker subcommand
+    subparsers.add_parser(
+        "tracker",
+        help="Show the tracker path and open the Applications spreadsheet.",
+    )
 
     args = parser.parse_args()
 
@@ -514,9 +583,9 @@ def main():
 
     elif args.command == "track":
         _validate_env()
-        since_dt = _parse_lookback(getattr(args, "since", "7d"))
+        since_dt = _parse_lookback(getattr(args, "lookback", "7d"))
         if not since_dt:
-            print(f"Could not parse --since '{args.since}'. Try: '7d', '14d', '2026-06-01'")
+            print(f"Could not parse --lookback '{args.lookback}'. Try: '7d', '30d', '2026-06-01'")
             raise SystemExit(1)
         from .track import run_track
         run_track(
@@ -525,6 +594,10 @@ def main():
             since_dt=since_dt,
             dry_run=getattr(args, "dry_run", False),
         )
+
+    elif args.command == "feedback":
+        from .feedback_cmd import run_feedback
+        run_feedback()
 
     elif args.command == "debug":
         _validate_env()

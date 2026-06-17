@@ -19,6 +19,19 @@ export const C_BORDER         = '#e5e5e5';
 export const C_BORDER_LIGHT   = '#dddddd';
 export const C_BORDER_SECTION = '#eeece5';
 
+// Stat tile fills — colored background tiles in the digest header
+export const C_STAT_TOTAL_BG  = '#f5f5f3';
+export const C_STAT_TOTAL_NUM = '#1f2118';
+export const C_STAT_TOTAL_LBL = '#888780';
+
+export const C_STAT_APPLY_BG  = '#f0fdf4';
+export const C_STAT_APPLY_NUM = '#15803d';
+export const C_STAT_APPLY_LBL = '#166534';
+
+export const C_STAT_CONSIDER_BG  = '#fefce8';
+export const C_STAT_CONSIDER_NUM = '#854d0e';
+export const C_STAT_CONSIDER_LBL = '#713f12';
+
 // Score tier pills — tints, not fills; all within same lightness band
 export const SCORE_COLORS = {
   apply:    { background: '#eef2ee', color: '#2d5a2d' },

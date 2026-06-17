@@ -1,9 +1,26 @@
-import os, stat, json, logging, smtplib, subprocess, tempfile
+import os, stat, json, logging, smtplib, subprocess, tempfile, datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from pathlib import Path
 
 log = logging.getLogger(__name__)
+
+
+def _make_greeting(name: str, apply_count: int) -> str:
+    """Generate a time-aware, count-sensitive greeting for the digest header."""
+    hour = datetime.datetime.now().hour
+    if 5 <= hour < 12:
+        prefix = f"Good morning, {name}."
+    elif 12 <= hour < 17:
+        prefix = f"Good afternoon, {name}."
+    else:
+        prefix = f"Evening, {name}."
+
+    if apply_count >= 1:
+        s = 's' if apply_count != 1 else ''
+        return f"{prefix} {apply_count} role{s} worth your time today."
+    return f"{prefix} Quiet batch today — nothing in the apply tier."
+
 
 # Credentials needed by send_digest — read from env directly
 GMAIL_ADDRESS      = os.getenv("GMAIL_ADDRESS", "")
@@ -111,7 +128,9 @@ def _job_card(job: dict, bg: str, pill_bg: str, pill_color: str) -> str:
         f'</td></tr></table>'
         # Row 2 — company · location
         f'<div style="font-size:13px;color:{_C_MUTED};margin-bottom:8px;font-family:{_FONT}">'
-        f'{job["company"]} · {job["location"]}</div>'
+        f'{job["company"]}'
+        f'{(" · " + job["location"]) if job.get("location") else ""}'
+        f'</div>'
         # Row 3 — rationale (leverage / friction)
         f'{rationale}'
         # Row 4 — tags
@@ -140,7 +159,9 @@ def _skipped_cell(job: dict) -> str:
         f'<div style="font-size:12px;font-weight:500;color:#333;margin-bottom:2px;font-family:{_FONT}">'
         f'{job["title"]}</div>'
         f'<div style="font-size:11px;color:{_C_MUTED};margin-bottom:6px;font-family:{_FONT}">'
-        f'{job["company"]} · {job["location"]}</div>'
+        f'{job["company"]}'
+        f'{(" · " + job["location"]) if job.get("location") else ""}'
+        f'</div>'
         f'<div style="font-size:11px;color:{_C_MUTED};line-height:1.5;margin-bottom:6px;font-family:{_FONT}">'
         f'{first}</div>'
         f'<div>{tags}</div>'
@@ -157,7 +178,13 @@ def _score_range(jobs: list[dict]) -> str:
     return f"{lo}–{hi}% match · {n} role{'s' if n != 1 else ''}"
 
 
-def build_digest_payload(jobs: list[dict], run_date: str, deal_breaker_count: int = 0) -> dict:
+def build_digest_payload(
+    jobs: list[dict],
+    run_date: str,
+    deal_breaker_count: int = 0,
+    candidate_name: str = "",
+    greeting: str = "",
+) -> dict:
     result_jobs = []
     for job in jobs:
         ev = job.get("eval", {})
@@ -176,18 +203,26 @@ def build_digest_payload(jobs: list[dict], run_date: str, deal_breaker_count: in
     return {
         "date":             run_date,
         "totalEvaluated":   len(jobs),
+        "candidateName":    candidate_name,
+        "greeting":         greeting,
         "dealBreakerCount": deal_breaker_count,
         "jobs":             result_jobs,
     }
 
 
 def render_html(jobs: list[dict], run_date: str, deal_breaker_count: int = 0) -> str:
+    from .profile import load_profile_yaml
+    profile        = load_profile_yaml() or {}
+    candidate_name = profile.get("candidate", {}).get("name", "")
+    apply_count    = sum(1 for j in jobs if j.get("eval", {}).get("verdict") == "apply")
+    greeting       = _make_greeting(candidate_name, apply_count) if candidate_name else ""
+
     pipeline_dir  = Path(__file__).parent.parent  # scorerole/ → project root
     ts_node       = pipeline_dir / "node_modules" / ".bin" / "ts-node"
     render_script = pipeline_dir / "render.ts"
 
     if ts_node.exists() and render_script.exists():
-        payload = build_digest_payload(jobs, run_date, deal_breaker_count)
+        payload = build_digest_payload(jobs, run_date, deal_breaker_count, candidate_name, greeting)
         # ts-node reads the payload file after Python closes the fd, so we use mkstemp
         # (delete=False equivalent) and restrict permissions before writing any data.
         fd, payload_path = tempfile.mkstemp(suffix=".json")
@@ -210,10 +245,10 @@ def render_html(jobs: list[dict], run_date: str, deal_breaker_count: int = 0) ->
             Path(payload_path).unlink(missing_ok=True)
 
     log.info("HTML rendered via Python fallback")
-    return build_digest_html(jobs, run_date, deal_breaker_count)
+    return build_digest_html(jobs, run_date, deal_breaker_count, candidate_name, greeting)
 
 
-def build_digest_html(jobs: list[dict], run_date: str, deal_breaker_count: int = 0) -> str:
+def build_digest_html(jobs: list[dict], run_date: str, deal_breaker_count: int = 0, candidate_name: str = "", greeting: str = "") -> str:
     # `jobs` contains only scored roles (apply / consider / skipped).
     # Deal-breaker filtered roles are removed upstream in pipeline.py before render;
     # their count is passed in as deal_breaker_count and shown only in the footer.
@@ -319,9 +354,28 @@ def build_digest_html(jobs: list[dict], run_date: str, deal_breaker_count: int =
         f'<table width="100%" cellpadding="0" cellspacing="0" border="0">'
         f'<tr><td height="1" style="background:{_C_BORDER};font-size:0;line-height:0">&nbsp;</td></tr>'
         f'<tr><td style="padding-top:12px;font-size:11px;color:#aaa;text-align:center;'
-        f'font-family:{_FONT}">scorerole &middot; powered by Claude '
+        f'font-family:{_FONT}">ScoreRole &middot; powered by Claude '
         f'&middot; {len(jobs)} roles evaluated{filtered_note}</td></tr>'
         f'</table>'
+    )
+
+    greeting_html = (
+        f'<p style="font-size:14px;color:{_C_MUTED};margin:0 0 6px 0;'
+        f'font-family:{_FONT};line-height:1.5">{greeting}</p>'
+        if greeting else ""
+    )
+    wordmark_row = (
+        f'<table width="100%" cellpadding="0" cellspacing="0" border="0" '
+        f'style="border-bottom:1px solid #eeeeee;margin-bottom:0">'
+        f'<tr>'
+        f'<td style="padding:12px 0">'
+        f'<table cellpadding="0" cellspacing="0" border="0"><tr>'
+        f'<td width="8" height="8" style="background:#1f2118;border-radius:2px;font-size:0;line-height:0">&nbsp;</td>'
+        f'<td style="padding-left:7px;font-size:12px;font-weight:500;color:#1f2118;font-family:{_FONT}">ScoreRole</td>'
+        f'</tr></table>'
+        f'</td>'
+        f'<td style="padding:12px 0;text-align:right;font-size:11px;color:{_C_MUTED};font-family:{_FONT}">{run_date}</td>'
+        f'</tr></table>'
     )
 
     return (
@@ -329,31 +383,46 @@ def build_digest_html(jobs: list[dict], run_date: str, deal_breaker_count: int =
         f'<meta charset="UTF-8">'
         f'<meta name="viewport" content="width=device-width,initial-scale=1">'
         f'</head>'
-        f'<body style="margin:0;padding:0;background:#ffffff;font-family:{_FONT}">'
-        f'<table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff">'
+        f'<body style="margin:0;padding:0;background:#f5f5f3;font-family:{_FONT}">'
+        f'<table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f5f5f3">'
         f'<tr><td align="center">'
         f'<table width="600" cellpadding="0" cellspacing="0" border="0" align="center" '
         f'style="max-width:600px;width:100%">'
-        f'<tr><td style="padding:24px">'
-        f'<h1 style="font-size:18px;font-weight:500;color:#222;margin:0 0 2px 0;'
-        f'font-family:{_FONT}">Personalized Job Alert Digest</h1>'
-        f'<p style="font-size:13px;color:{_C_MUTED};margin:0 0 14px 0;'
-        f'font-family:{_FONT}">{run_date}</p>'
+        f'<tr><td style="padding:16px 12px">'
+        f'<table width="100%" cellpadding="0" cellspacing="0" border="0" '
+        f'style="background:#ffffff;border:1px solid #e5e5e5;border-radius:8px">'
+        f'<tr><td style="padding:0">'
+        f'<table width="100%" cellpadding="0" cellspacing="0" border="0" style="padding:0 20px">'
+        f'<tr><td>{wordmark_row}</td></tr>'
+        f'<tr><td style="padding:16px 0 0">'
+        f'{greeting_html}'
+        f'<h1 style="font-size:18px;font-weight:500;color:#1f2118;margin:0 0 14px 0;'
+        f'font-family:{_FONT}">Personalized job alert digest</h1>'
         f'{stat_row}'
-        f'{legend}'
+        f'</td></tr>'
+        f'</table>'
+        f'<table width="100%" cellpadding="0" cellspacing="0" border="0" '
+        f'style="border-top:1px solid #eeeeee;padding:10px 20px">'
+        f'<tr><td>{legend}</td></tr>'
+        f'</table>'
+        f'</td></tr></table>'
+        f'<table width="100%" cellpadding="0" cellspacing="0" border="0" style="padding:12px 0">'
+        f'<tr><td>'
         f'{apply_html}'
         f'{consider_html}'
         f'{skip_html}'
         f'{footer}'
         f'</td></tr></table>'
         f'</td></tr></table>'
+        f'</td></tr></table>'
         f'</body></html>'
     )
 
 
-def send_digest(html: str, run_date: str):
+def send_digest(html: str, run_date: str, label: str = ""):
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"Personalized Job Alert Digest — {run_date}"
+    prefix = f"[{label}] " if label else ""
+    msg["Subject"] = f"{prefix}Personalized Job Alert Digest — {run_date}"
     msg["From"]    = GMAIL_ADDRESS
     msg["To"]      = RECIPIENT_EMAIL
     msg.attach(MIMEText(html, "html"))

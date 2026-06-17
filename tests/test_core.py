@@ -968,3 +968,208 @@ class TestRenderEdgeCases:
         jobs[0]["eval"]["frictionPoints"] = []
         html = build_digest_html(jobs, "June 14, 2026")
         assert "Friction:" not in html or "↓ Friction: </span>" not in html
+
+    def test_empty_location_renders_without_separator(self):
+        """A job with no location must render 'Company' not 'Company · '."""
+        from scorerole.render import build_digest_html
+        jobs = [self._job("apply", 80)]
+        jobs[0]["location"] = ""
+        html = build_digest_html(jobs, "June 14, 2026")
+        assert "Acme · " not in html  # no trailing separator
+        assert "Acme" in html         # company name still present
+
+
+class TestSanitizeLocation:
+    """_sanitize_location strips LinkedIn CTA text from location fields."""
+
+    def _sanitize(self, loc: str) -> str:
+        from scorerole.sources.linkedin import _sanitize_location
+        return _sanitize_location(loc)
+
+    def test_normal_location_unchanged(self):
+        assert self._sanitize("San Francisco, CA") == "San Francisco, CA"
+
+    def test_apply_with_resume_stripped_entirely(self):
+        assert self._sanitize("Apply with resume & profile") == ""
+
+    def test_easy_apply_stripped_entirely(self):
+        assert self._sanitize("Easy Apply") == ""
+
+    def test_location_with_apply_suffix_stripped(self):
+        assert self._sanitize("United States · Apply with resume & profile") == "United States"
+
+    def test_location_with_easy_apply_suffix_stripped(self):
+        assert self._sanitize("New York, NY · Easy Apply") == "New York, NY"
+
+    def test_empty_string_passthrough(self):
+        assert self._sanitize("") == ""
+
+    def test_remote_location_unchanged(self):
+        assert self._sanitize("Remote") == "Remote"
+
+    def test_case_insensitive(self):
+        assert self._sanitize("San Francisco · APPLY WITH RESUME") == "San Francisco"
+
+
+# ---------------------------------------------------------------------------
+# save_skipped_roles / lookup_skipped_role
+# ---------------------------------------------------------------------------
+
+class TestSaveSkippedRoles:
+    """save_skipped_roles writes metadata; lookup_skipped_role retrieves it."""
+
+    def _make_job(self, title: str, company: str, score: int = 45, verdict: str = "skipped") -> dict:
+        return {"title": title, "company": company, "url": "https://example.com",
+                "eval": {"score": score, "verdict": verdict}}
+
+    def test_writes_entry_for_skipped_job(self, tmp_path, monkeypatch):
+        import scorerole.state as state
+        monkeypatch.setattr(state, "SKIPPED_FILE", tmp_path / "skipped_roles.json")
+        job = self._make_job("Senior PM", "Acme")
+        state.save_skipped_roles([job])
+        data = json.loads((tmp_path / "skipped_roles.json").read_text())
+        assert len(data) == 1
+        entry = next(iter(data.values()))
+        assert entry["role_title"] == "Senior PM"
+        assert entry["company"] == "Acme"
+        assert entry["match_score"] == 45
+
+    def test_empty_list_writes_nothing(self, tmp_path, monkeypatch):
+        import scorerole.state as state
+        out = tmp_path / "skipped_roles.json"
+        monkeypatch.setattr(state, "SKIPPED_FILE", out)
+        state.save_skipped_roles([])
+        assert not out.exists()
+
+    def test_lookup_returns_entry(self, tmp_path, monkeypatch):
+        import scorerole.state as state
+        monkeypatch.setattr(state, "SKIPPED_FILE", tmp_path / "skipped_roles.json")
+        job = self._make_job("Staff PM", "Beta Corp")
+        state.save_skipped_roles([job])
+        result = state.lookup_skipped_role("Staff PM", "Beta Corp")
+        assert result is not None
+        assert result["company"] == "Beta Corp"
+
+    def test_lookup_returns_none_for_unknown(self, tmp_path, monkeypatch):
+        import scorerole.state as state
+        monkeypatch.setattr(state, "SKIPPED_FILE", tmp_path / "skipped_roles.json")
+        state.save_skipped_roles([self._make_job("PM", "X")])
+        assert state.lookup_skipped_role("Unrelated", "Nobody") is None
+
+    def test_expired_entries_pruned_on_write(self, tmp_path, monkeypatch):
+        import scorerole.state as state
+        monkeypatch.setattr(state, "SKIPPED_FILE", tmp_path / "skipped_roles.json")
+        monkeypatch.setattr(state, "SKIPPED_TTL_DAYS", 30)
+        stale_time = (datetime.datetime.now() - datetime.timedelta(days=31)).isoformat()
+        stale = {"abc123": {"role_title": "Old PM", "company": "Gone", "saved_at": stale_time}}
+        (tmp_path / "skipped_roles.json").write_text(json.dumps(stale))
+        # Writing a new job triggers pruning of the stale entry
+        state.save_skipped_roles([self._make_job("New PM", "Current Co")])
+        data = json.loads((tmp_path / "skipped_roles.json").read_text())
+        assert all(v["role_title"] != "Old PM" for v in data.values())
+
+    def test_file_permissions_are_0600(self, tmp_path, monkeypatch):
+        import stat, scorerole.state as state
+        monkeypatch.setattr(state, "SKIPPED_FILE", tmp_path / "skipped_roles.json")
+        state.save_skipped_roles([self._make_job("PM", "Co")])
+        mode = (tmp_path / "skipped_roles.json").stat().st_mode
+        assert oct(stat.S_IMODE(mode)) == oct(0o600)
+
+
+# ---------------------------------------------------------------------------
+# write_to_tracker
+# ---------------------------------------------------------------------------
+
+class TestWriteToTracker:
+    """write_to_tracker appends Apply/Consider rows to the xlsx; skips duplicates."""
+
+    def _make_job(self, title: str, company: str, verdict: str, score: int = 80) -> dict:
+        return {"title": title, "company": company, "url": "https://linkedin.com/jobs/1",
+                "location": "Remote", "eval": {"score": score, "verdict": verdict,
+                "leveragePoints": [], "frictionPoints": []}}
+
+    def test_apply_and_consider_rows_written(self, tmp_path, monkeypatch):
+        pytest.importorskip("openpyxl")
+        import scorerole.tracker as tracker
+        monkeypatch.setattr(tracker, "TRACKER_PATH", tmp_path / "applications.xlsx")
+        jobs = [
+            self._make_job("Senior PM", "Acme", "apply"),
+            self._make_job("Staff PM", "Beta", "consider", score=62),
+            self._make_job("Junior PM", "Gamma", "skipped", score=30),
+        ]
+        tracker.write_to_tracker(jobs, run_date="2026-06-16")
+        import openpyxl
+        wb = openpyxl.load_workbook(tmp_path / "applications.xlsx")
+        ws = wb.active
+        # Row 1 = header; rows 2+ = data
+        titles = [ws.cell(row=r, column=2).value for r in range(2, ws.max_row + 1)]
+        assert "Senior PM" in titles
+        assert "Staff PM" in titles
+        assert "Junior PM" not in titles   # skipped verdict not written
+
+    def test_duplicate_role_not_written_twice(self, tmp_path, monkeypatch):
+        pytest.importorskip("openpyxl")
+        import scorerole.tracker as tracker
+        monkeypatch.setattr(tracker, "TRACKER_PATH", tmp_path / "applications.xlsx")
+        job = self._make_job("Senior PM", "Acme", "apply")
+        tracker.write_to_tracker([job], run_date="2026-06-16")
+        tracker.write_to_tracker([job], run_date="2026-06-17")  # second run, same role
+        import openpyxl
+        ws = openpyxl.load_workbook(tmp_path / "applications.xlsx").active
+        titles = [ws.cell(row=r, column=2).value for r in range(2, ws.max_row + 1)]
+        assert titles.count("Senior PM") == 1
+
+    def test_no_eligible_roles_writes_nothing(self, tmp_path, monkeypatch):
+        pytest.importorskip("openpyxl")
+        import scorerole.tracker as tracker
+        monkeypatch.setattr(tracker, "TRACKER_PATH", tmp_path / "applications.xlsx")
+        jobs = [self._make_job("PM", "X", "skipped", score=20)]
+        tracker.write_to_tracker(jobs)
+        assert not (tmp_path / "applications.xlsx").exists()
+
+    def test_missing_openpyxl_logs_warning_and_returns(self, tmp_path, monkeypatch, caplog):
+        import scorerole.tracker as tracker
+        monkeypatch.setattr(tracker, "TRACKER_PATH", tmp_path / "applications.xlsx")
+        import unittest.mock as mock
+        with mock.patch.dict("sys.modules", {"openpyxl": None}):
+            import importlib
+            tracker_fresh = importlib.reload(tracker)
+            monkeypatch.setattr(tracker_fresh, "TRACKER_PATH", tmp_path / "applications.xlsx")
+            import logging
+            with caplog.at_level(logging.WARNING, logger="scorerole.tracker"):
+                tracker_fresh.write_to_tracker(
+                    [self._make_job("PM", "Co", "apply")], run_date="2026-06-16"
+                )
+        assert not (tmp_path / "applications.xlsx").exists()
+
+
+# ---------------------------------------------------------------------------
+# --no-limit flag renamed from --all
+# ---------------------------------------------------------------------------
+
+class TestNoLimitFlag:
+    """--all was renamed --no-limit; score_all internal param unchanged."""
+
+    def _parse(self, argv: list) -> object:
+        import argparse
+        parser = argparse.ArgumentParser(prog="scorerole")
+        parser.add_argument("--lookback", default="3d")
+        parser.add_argument("--no-limit", dest="score_all", action="store_true")
+        parser.add_argument("--no-tracker", dest="no_tracker", action="store_true")
+        parser.add_subparsers(dest="command")
+        return parser.parse_args(argv)
+
+    def test_no_limit_sets_score_all(self):
+        assert self._parse(["--no-limit"]).score_all is True
+
+    def test_default_score_all_is_false(self):
+        assert self._parse([]).score_all is False
+
+    def test_all_flag_not_accepted(self):
+        import argparse
+        parser = argparse.ArgumentParser(prog="scorerole")
+        parser.add_argument("--no-limit", dest="score_all", action="store_true")
+        parser.add_subparsers(dest="command")
+        with pytest.raises(SystemExit) as exc:
+            parser.parse_args(["--all"])
+        assert exc.value.code == 2

@@ -217,45 +217,111 @@ def _build_score_system() -> str:
 
 You are a job fit evaluator for {name}.
 
+Each job listing includes an [EXTRACTED CONTEXT] block with structured fields extracted
+from the JD. Use these as grounding when scoring — they prevent misreads on salary,
+work model, seniority, and domain.
+
+SCORING RUBRIC — score six dimensions (0–100 each), then compute weighted total:
+
+  seniority_scope     (0.25)  Does the scope, ownership language, and structural level
+                               match {name}'s target level? Use extracted inferred_structural_level,
+                               manages_pm_team, reports_to_level as anchors.
+
+  experience_relevance (0.20)  How well does the JD's required stack and depth match
+                               {name}'s background? Target 70–80% match: 100% overlap
+                               scores ~85 (no growth headroom), not 100.
+
+  compensation_fit    (0.15)  Does total comp land attractively above the salary floor?
+                               If salary_disclosed=false, cap this dimension at 60 (can't assess).
+
+  culture_values      (0.15)  Score these four signals (0–100 each), then average:
+                                 autonomy_signal:     "own outcomes" vs "manage up"
+                                 pace_signal:         "0→1 / scrappy" vs "process-driven"
+                                 mission_signal:      explicit mission vs generic growth
+                                 collaboration_model: embedded eng collab vs heavy XFN
+                               Default each to 50 when absent (neutral, no penalty).
+                               Compare against candidate's stated company_types and aspirations.
+
+  domain_background   (0.15)  How native is {name}'s background to this domain?
+                               native(100) → adjacent(70) → tangential(40) → foreign(10).
+                               Use extracted customer_type, product_surface, industry as signal.
+
+  company_stage       (0.10)  Does the company stage match candidate's stated preference?
+                               Use extracted company_stage and company_tier.
+
+MULTIPLIERS (apply to weighted score):
+  overqualified: if inferred_structural_level is clearly below target level, apply
+                 0.75 (seed) → 0.85 (series_b) → 0.95 (large company). Use company_stage.
+  degree soft:   if degree_hard_requirement=true and candidate likely lacks it → 0.80×
+  floor:         final_score ≥ weighted_score × 0.50 (two soft triggers never drop below half)
+
+DEAL-BREAKER RULE (apply before scoring anything else):
+  If a role clearly violates any item in the DEAL BREAKERS list above — based on the
+  job title, company, industry, JD content, or extracted flags — set score=0,
+  verdict="filtered", and add exactly one red tag naming the triggered rule
+  (e.g., {{"text": "deal breaker: mgmt only", "sentiment": "red"}}).
+  Set leveragePoints=[] and frictionPoints=[].
+  A deal-breaker violation must NEVER produce verdict "apply", "consider", or "skipped".
+  Also check: government_export_control=true, visa_sponsorship=false — flag if these
+  conflict with candidate's situation.
+
+STYLE:
+  Use standard tech shorthands: ML, AI, API, infra, dev, eng, PM, SaaS, LLM, RAG, B2B, B2C, XFN.
+  Lead PM = Staff PM — these are equivalent levels at most tech companies. NEVER flag "Lead"
+  as a level concern, title gap, or friction point. Only flag when the title is "Senior PM"
+  or lower with no scope signal, or when the JD is clearly a manager-of-managers role below target.
+  NEVER mention score adjustments, multipliers, deductions, or any numerical scoring mechanics
+  in leveragePoints, frictionPoints, or tags — those are internal. Write only real-world job factors.
+
 Given a batch of job listings, return a JSON array — one object per job, same order as input:
 [
   {{
     "score": <integer 0-100>,
     "verdict": "apply" | "consider" | "skipped" | "filtered",
-    "leveragePoints": ["<short phrase ≤5 words>", ...],
-    "frictionPoints": ["<short phrase ≤5 words>", ...],
+    "leveragePoints": ["...", ...],
+    "frictionPoints": ["..."],
     "tags": [
-      {{"text": "<≤5 words>", "sentiment": "green" | "amber" | "red"}}
+      {{"text": "...", "sentiment": "green" | "amber" | "red"}}
     ]
   }},
   ...
 ]
 
-DEAL-BREAKER RULE (apply before scoring anything else):
-  If a role clearly violates any item in the DEAL BREAKERS list above — based on the
-  job title, company, industry, or JD content — set score=0, verdict="filtered", and
-  add exactly one red tag naming the triggered rule (e.g., {{"text": "deal breaker: mgmt only", "sentiment": "red"}}).
-  Set leveragePoints=[] and frictionPoints=[].
-  A deal-breaker violation must NEVER produce verdict "apply", "consider", or "skipped".
+leveragePoints: 1-2 complete, natural sentences. ~15-20 words each. Explain why this role
+  is a strong fit — name the specific skill or experience and tie it to something concrete
+  in the JD. Write like you're telling a colleague why this role is interesting, not filling
+  in a template. Avoid mechanical openers ("maps directly to", "aligns with") and avoid the
+  stiff "topic label — evidence clause" em-dash pattern.
+  BAD:  "agentic platform — DocuSign Navigator flows map directly to JD's core workflow need"
+  GOOD: "DocuSign Navigator's agentic platform work is a direct match for the JD's focus on
+         autonomous workflow orchestration at enterprise scale."
 
-leveragePoints: 1-2 match explanations. Lead with a 2-4 word topic label, em-dash (—), then a
-  tight evidence clause. ~12 words total. No "JD needs" prefix — write naturally.
-  BAD:  "JD needs agentic workflow design → DocuSign Navigator agentic flows"
-  GOOD: "agentic platform — DocuSign Navigator flows match JD's core workflow need"
-  BAD:  "JD wants ML depth → UIUC + model eval"
-  GOOD: "ML depth — UIUC Deep Learning for Healthcare + 2k-model eval fits JD"
-  BAD:  "0-1 PRD authoring"
-  GOOD: "0-1 build — DocuSign Custom Extractions built from zero matches JD scope"
-
-frictionPoints: 1 honest concern, same format. Use [] if no real friction.
-  NEVER write placeholder text ("none", "n/a", "none material", "no concerns", etc.).
+frictionPoints: 1 honest, specific concern in the same natural-sentence style. Use [] if
+  there is genuinely no material concern — never write placeholder text ("none", "n/a",
+  "no concerns", "none material").
   BAD:  "none material"
   GOOD: []
-  BAD:  "JD expects crawl/index infra exp → no direct background"
-  GOOD: "crawl/index infra — no direct background, though ML systems work overlaps"
 
-tags: Up to 4 highlight tags. "green" = clear JD↔background match, "amber" = caution or
-      domain gap, "red" = hard blocker. ≤5 words each.
+TAG VOCABULARY — pick only from this list; do not invent new tags:
+
+  GREEN (genuine match):
+    "AI/ML: native"         "dev tools: match"        "enterprise SaaS: match"
+    "stage: growth fit"     "stage: public co fit"     "level: Staff/Lead scope"
+    "level: Principal scope" "0→1 scope"               "AI-native team"
+    "strong eng collab"     "comp: meets floor"
+
+  AMBER (caution — evaluate carefully):
+    "domain: adjacent"      "domain: B2C gap"          "domain: hardware-adj"
+    "level: scope unclear"  "level: title gap"         "level: overqualified"
+    "stage: seed/early"     "comp: undisclosed"        "visa: unclear"
+    "degree gate"           "anon employer"
+
+  RED (hard concerns):
+    "domain: foreign"       "comp: below floor"        "export ctrl flag"
+    "clearance required"    "hard prereq: background"
+
+  For deal-breaker filtered roles the gate code sets the tag automatically — do not add more.
+  Use up to 4 tags. Pick the best match; do not combine two tags for the same dimension.
 
 Thresholds (from your profile.yaml scoring section):
   score >= {apply_t}  →  apply
@@ -273,12 +339,16 @@ _MAX_OUTPUT_TOKENS = 8192
 
 def _score_chunk(client: anthropic.Anthropic, jobs: list[dict], system_prompt: str) -> list[dict]:
     """Score one chunk of jobs. Returns evals list (may be shorter than jobs on truncation)."""
+    from .extract import format_extraction_for_scoring
+
     job_blocks = "\n\n---\n\n".join(
-        "JOB {n}: {title} at {company} ({location})\n{jd_line}".format(
-            n=i + 1,
-            title=j["title"],
-            company=j["company"],
-            location=j["location"],
+        "{header}\n{extraction}\n{jd_line}".format(
+            header=f"JOB {i + 1}: {j['title']} at {j['company']} ({j['location']})",
+            extraction=(
+                "\n" + format_extraction_for_scoring(j.get("extraction", {})) + "\n"
+                if j.get("extraction")
+                else ""
+            ),
             jd_line=(
                 "JD:\n" + j["jd"][:1500]
                 if j.get("jd")

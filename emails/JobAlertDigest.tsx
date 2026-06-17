@@ -25,6 +25,8 @@ export default function JobAlertDigest({ payload }: Props) {
             totalEvaluated={payload.totalEvaluated}
             applyCount={applyJobs.length}
             considerCount={considerJobs.length}
+            candidateName={payload.candidateName}
+            greeting={payload.greeting}
           />
 
           {applyJobs.length > 0 && <TierSection tier="apply" jobs={applyJobs} />}
@@ -40,7 +42,7 @@ export default function JobAlertDigest({ payload }: Props) {
                 </tr>
                 <tr>
                   <td style={{ paddingTop: '12px', fontSize: '11px', color: C_SUBTLE, textAlign: 'center', fontFamily: FONT }}>
-                    Lomis job alert pipeline &middot; powered by Claude Sonnet 4.6 &middot;{' '}
+                    ScoreRole &middot; powered by Claude &middot;{' '}
                     {payload.totalEvaluated} roles evaluated
                   </td>
                 </tr>
