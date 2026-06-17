@@ -11,8 +11,11 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
+import os as _os
 PROFILE_DIR  = Path.home() / ".job_pipeline"
-YAML_PATH    = PROFILE_DIR / "profile.yaml"
+# SCOREROLE_PROFILE env var lets dev/test tooling point at a different profile
+# without touching the real profile.yaml — never set this in production.
+YAML_PATH    = Path(_os.environ["SCOREROLE_PROFILE"]) if "SCOREROLE_PROFILE" in _os.environ else PROFILE_DIR / "profile.yaml"
 MD_PATH      = PROFILE_DIR / "profile.md"
 
 
