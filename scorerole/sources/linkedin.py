@@ -154,6 +154,11 @@ def extract_jobs(body: str) -> list[dict]:
             before_lines[-2],
             before_lines[-3],
         )
+        # Guard: if extracted "title" looks like a company name (e.g. "Qventus, Inc"),
+        # the card had an extra line above — shift up one level if available.
+        _CO_SUFFIX = re.compile(r',\s*(Inc\.?|LLC|Corp\.?|Ltd\.?|GmbH|S\.A\.|PBC)$', re.I)
+        if _CO_SUFFIX.search(title) and len(before_lines) >= 4:
+            title = before_lines[-4]
         seen.add(job_id)
         jobs.append({
             "title":        title,

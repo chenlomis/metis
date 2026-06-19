@@ -378,10 +378,27 @@ def build_digest_html(jobs: list[dict], run_date: str, deal_breaker_count: int =
         f'</tr></table>'
     )
 
+    import json as _json
+    _job_payload = [
+        {
+            "title":      j["title"],
+            "company":    j["company"],
+            "postingUrl": j.get("url", ""),
+            "score":      j["eval"].get("score", 0),
+            "verdict":    j["eval"].get("verdict", "skipped"),
+        }
+        for j in jobs
+        if j["eval"].get("verdict") in ("apply", "consider")
+    ]
+
     return (
         f'<!DOCTYPE html><html><head>'
         f'<meta charset="UTF-8">'
         f'<meta name="viewport" content="width=device-width,initial-scale=1">'
+        # Machine-readable data island — parsed by backfill_from_digests() in track.py
+        f'<script type="application/json" id="scorerole-data">'
+        f'{_json.dumps({"date": run_date, "jobs": _job_payload})}'
+        f'</script>'
         f'</head>'
         f'<body style="margin:0;padding:0;background:#f5f5f3;font-family:{_FONT}">'
         f'<table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#f5f5f3">'

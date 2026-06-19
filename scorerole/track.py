@@ -1,9 +1,9 @@
 """track.py — parse confirmation and rejection emails, update the Applications tracker.
 
 Usage:
-    scorerole track                  # parse emails from last 7 days
-    scorerole track --since 14d      # extend lookback
-    scorerole track --dry-run        # parse + print matches, no writes
+    scorerole track                   # parse emails from last 7 days
+    scorerole track --lookback 30d    # extend lookback
+    scorerole track --no-excel        # print matches to stdout, no xlsx write or open
 
 Pipeline:
     1. Fetch emails from Gmail matching broad subject-line patterns
@@ -79,8 +79,16 @@ _CONFIRMATION_PHRASES = [
     "we're reviewing your application",
     "we are reviewing your application",
     "thank you for submitting your application",    # Binti / generic
-    "we've received your application",              # curly-apostrophe variant
+    "we’ve received your application",              # curly-apostrophe variant
     "we’ve received your application",
+    "we will review it shortly",                    # Databricks / Greenhouse
+    "we will review your application",
+    "we will begin reviewing it",                   # Carta / Greenhouse
+    "thanks for applying to",                       # Google, Scale AI, Databricks body
+    "thank you for applying to",                    # CoreWeave, Mux body
+    "thank you for taking the time to apply",       # Harvey / Ashby
+    "thank you for applying for the",               # Headstart / Ashby
+    "wanted to confirm that we have received",      # GitLab / Greenhouse
 ]
 
 # ---------------------------------------------------------------------------
@@ -103,13 +111,17 @@ _SUBJECT_CANDIDATES = re.compile(
 
 # Subject patterns that strongly imply confirmation (used as body tiebreaker)
 _SUBJECT_IMPLIES_CONFIRMATION = re.compile(
-    r"thank you for (applying|your application)|"
+    r"thank(?:s| you) for (applying|your application|your interest|submitting)|"
     r"thanks for (applying|your application|completing your application|submitting)|"
     r"your application for .+ at |"
     r"we('ve| have) received your application|"
     r"we have received your application|"
     r"thank you for your application to|"
-    r"your application to \w",
+    r"your application to \w|"
+    r"next steps|"
+    r"we got it|"              # "Gen Digital | We Got It!"
+    r"welcome to .+ careers|"
+    r"we look forward to",
     re.IGNORECASE,
 )
 
@@ -118,7 +130,9 @@ _SUBJECT_IMPLIES_REJECTION = re.compile(
     r"thank you from |"           # NVIDIA, Elastic, Workato
     r"following up on your (application|recent application)|"
     r"application (status )?update|"
-    r"update on your .+ application",
+    r"update on your .+ application|"
+    r"application feedback from |"  # Google DeepMind
+    r"important information about your application",  # Altruist
     re.IGNORECASE,
 )
 
@@ -169,7 +183,16 @@ _COMPANY_FROM_SUBJECT = [
 _COMPANY_TRAILING_NOISE = re.compile(
     r"\s*[-–]\s*(?:[A-Z][a-z]+ [A-Z][a-z]+|[A-Z][a-z]+,? [A-Z][a-z]+)$"  # "- Lomis Chen"
 )
-_COMPANY_LEADING_THE = re.compile(r"^the\s+", re.IGNORECASE)
+_COMPANY_LEADING_THE   = re.compile(r"^the\s+", re.IGNORECASE)
+_COMPANY_SENDER_SUFFIX = re.compile(
+    r"\s+(?:recruiting|talent|hiring team|hr|careers|talent acquisition)$", re.IGNORECASE
+)
+# Words that indicate the extracted string is a role title, not a company name
+_ROLE_TITLE_WORDS = re.compile(
+    r"\b(?:manager|director|engineer|product|principal|staff|senior|lead|analyst|"
+    r"scientist|designer|architect|specialist|coordinator|associate|vp|head of)\b",
+    re.IGNORECASE,
+)
 
 _COMPANY_FROM_BODY = [
     re.compile(r"applying (?:for|to) .+? (?:role|position)(?: here)? at ([A-Z][A-Za-z0-9 &.,]+?)[\.\!,\n]"),
@@ -295,16 +318,46 @@ def fetch_candidate_emails(gmail_address: str, app_password: str, since_dt: date
 
     # Server-side subject filters — each maps to one IMAP SEARCH call.
     # Gmail evaluates these server-side so no per-message round trips needed.
+    # Each term is a COMPLETE WORD or phrase as it appears in real subjects.
+    # Gmail IMAP does word-based search — "apply" does NOT match "applying".
+    # All terms derived from real email samples in scorerole_confEmail/.
     _SUBJECT_SEARCHES = [
-        "thank you for apply",
+        # Confirmation — "Thank you for applying to {Company}" (Greenhouse, direct)
+        "thank you for applying",
+        "thanks for applying",
+        # Confirmation — "Thank you for your application to {Company}" (Ashby, Lever)
         "thank you for your application",
-        "thanks for apply",
-        "your application",
-        "following up on your",
-        "application update",
-        "thank you from",
-        "we got it",
+        "thanks for your application",
+        # Confirmation — "Your application for {Role} at {Company}" (Ashby/Superhuman)
+        "your application for",
+        # Confirmation — "Thanks for your interest in {Company}" (Greenhouse/Carta)
+        "thanks for your interest",
+        "thank you for your interest",
+        # Confirmation — "Keep track of your application" (Amazon jobs)
         "keep track of your application",
+        # Confirmation — "We've Received Your Application!" (Console/Ashby)
+        "we've received your application",
+        # Confirmation — "We received your application" (various)
+        "we received your application",
+        # Confirmation — "We Got It!" (Gen Digital)
+        "we got it",
+        # Confirmation — "Next Steps with {Company}" (Descript/Klaviyo)
+        "next steps",
+        # Rejection — "Following up on your application" (Google, Front)
+        "following up on your",
+        # Rejection/Update — "Application Update", "Update on your application"
+        "application update",
+        "update on your",
+        # Rejection — "Thank you from {Company}" (NVIDIA, Workato)
+        "thank you from",
+        # Rejection — "Application feedback from {Company}" (Google DeepMind)
+        "application feedback",
+        # Confirmation/Rejection — "Your Application to {Company}" (Anduril direct)
+        "your application to",
+        # Update — "Application Follow Up" (GitHub/iCIMS)
+        "application follow up",
+        # Update — "We look forward to" (various)
+        "we look forward to",
     ]
 
     emails = []
@@ -336,12 +389,23 @@ def fetch_candidate_emails(gmail_address: str, app_password: str, since_dt: date
             subject     = _decode_header_value(msg.get("Subject", ""))
             sender      = _decode_header_value(msg.get("From", ""))
             date_header = msg.get("Date", "")
+
+            # Skip out-of-office auto-replies — they're triggered by our own emails
+            if re.search(r"\bout of office\b|auto.?reply|automatic reply|autoreply", subject, re.IGNORECASE):
+                log.debug("track: skipping OOO/auto-reply — %s", subject[:80])
+                continue
+            # Also check X-Auto-Submitted header (RFC 3834)
+            if msg.get("X-Auto-Submitted", "").lower() not in ("", "no"):
+                log.debug("track: skipping auto-submitted — %s", subject[:80])
+                continue
+
             try:
                 email_date = parsedate_to_datetime(date_header).date().isoformat()
             except Exception:
                 email_date = datetime.date.today().isoformat()
 
             body = _extract_body(msg)
+            log.debug("track: fetched — %s | from: %s", subject[:80], sender[:50])
             emails.append({
                 "subject": subject,
                 "sender":  sender,
@@ -399,13 +463,25 @@ def classify_email(body: str, subject: str = "") -> str:
 # Extraction
 # ---------------------------------------------------------------------------
 
-def _clean_company(raw: str) -> str:
-    """Normalize a raw company string extracted from subject or body."""
+def _clean_company(raw: str) -> str | None:
+    """Normalize and validate a raw company string extracted from subject or body.
+
+    Returns None if the extracted string looks like a job title rather than a company name.
+    """
     company = raw.strip().rstrip("!").strip()
     company = re.sub(r",\s+[A-Z][a-z]+$", "", company)       # trailing ", Lomis"
     company = _COMPANY_TRAILING_NOISE.sub("", company)         # trailing "- Lomis Chen"
     company = _COMPANY_LEADING_THE.sub("", company)            # leading "the "
-    return company.strip()
+    company = _COMPANY_SENDER_SUFFIX.sub("", company)          # trailing "Recruiting", "Talent"
+    company = company.strip()
+    if not company or len(company) < 2:
+        return None
+    # If the string contains colon or looks like a role title, discard it — we caught too much
+    if ":" in company:
+        company = company.split(":")[0].strip()
+    if _ROLE_TITLE_WORDS.search(company) and len(company.split()) >= 2:
+        return None
+    return company
 
 
 def extract_company(subject: str, body: str) -> str | None:
@@ -413,17 +489,27 @@ def extract_company(subject: str, body: str) -> str | None:
     # Normalize line-folds in subject (MIME headers can wrap mid-phrase)
     subject = " ".join(subject.split())
 
+    # ATS-specific patterns that would otherwise trip up generic patterns
+    # "{COMPANY} Job Application Update: {ID} {ROLE}" (Workday / GE HealthCare)
+    m = re.search(r"^([A-Za-z0-9][^:]+?) job application update", subject, re.IGNORECASE)
+    if m:
+        company = _clean_company(m.group(1))
+        if company:
+            return company
+
     for pattern in _COMPANY_FROM_SUBJECT:
         m = pattern.search(subject)
         if m:
             company = _clean_company(m.group(1))
-            if len(company) > 1:
+            if company and len(company) > 1:
                 return company
 
     for pattern in _COMPANY_FROM_BODY:
         m = pattern.search(body)
         if m:
-            return _clean_company(m.group(1))
+            result = _clean_company(m.group(1))
+            if result:
+                return result
 
     return None
 
@@ -478,7 +564,14 @@ def parse_email(email_dict: dict) -> dict:
 
     classification = classify_email(body, subject)
     company = extract_company(subject, body)
+
+    # Sender domain fallback: "no-reply@databricks.com" → "Databricks"
+    # Only used when subject/body extraction failed, and domain isn't a generic ESP
+    if not company:
+        company = _company_from_sender(email_dict.get("sender", ""))
+
     role    = extract_role(subject, body)
+    log.debug("track: parse  [%s] company=%r | %s", classification[:4], company, subject[:70])
 
     return {
         "classification": classification,
@@ -488,6 +581,67 @@ def parse_email(email_dict: dict) -> dict:
         "subject":        subject,
         "sender":         email_dict["sender"],
     }
+
+
+_GENERIC_SENDER_DOMAINS = {
+    # Email providers
+    "gmail", "googlemail", "yahoo", "hotmail", "outlook", "icloud",
+    # ATS platforms — emails come "from" these but the company is in the display name
+    "ashbyhq", "ashby", "greenhouse-mail", "greenhouse",
+    "lever", "smartrecruiters", "icims", "jobvite", "taleo",
+    "bamboohr", "myworkdayjobs", "myworkday", "successfactors", "applytojob",
+    "talentplatform", "workday",
+    # Generic sender names
+    "notifications", "noreply", "no-reply", "mailer", "bounce", "mail",
+}
+
+def _company_from_sender(sender: str) -> str | None:
+    """Extract company name from sender display name or email domain.
+
+    Tries in order:
+    1. Display name pattern: "Console Hiring Team" → "Console"
+    2. Email domain: "careers@databricks.com" → "Databricks"
+    Ignores generic ATS and ESP domains.
+    """
+    # 1. Display name: "Console Hiring Team <...>" or "EvenUp Talent Team <...>"
+    display_m = re.match(r'^"?([^"<]+?)"?\s*(?:<|$)', sender)
+    if display_m:
+        display = display_m.group(1).strip()
+        # Strip trailing " Hiring Team", " Talent Team", " Careers", " Recruiting", etc.
+        company = re.sub(
+            r'\s+(?:hiring team|talent team|talent acquisition|recruiting team|'
+            r'careers|recruiter|hr|talent|@ \w+)$',
+            "", display, flags=re.IGNORECASE
+        ).strip()
+        # Strip trailing legal suffixes and punctuation
+        company = re.sub(r',?\s+(?:inc|llc|corp|ltd)\.?$', "", company, flags=re.IGNORECASE).strip()
+        # Reject personal names: "Laura Otto", "John Smith" (2 title-case words, no digits)
+        words = company.split()
+        is_personal_name = (
+            len(words) == 2
+            and all(w[0].isupper() and w[1:].islower() and w.isalpha() for w in words)
+        )
+        if (company
+                and len(company) > 2
+                and not is_personal_name
+                and not re.search(r'\b(?:noreply|no.reply|mailer|notifications|do.not.reply)\b',
+                                  company, re.IGNORECASE)
+                and "@" not in company):
+            return company
+
+    # 2. Email domain fallback
+    m = re.search(r"@([a-zA-Z0-9][-a-zA-Z0-9.]*\.[a-zA-Z]{2,})", sender)
+    if not m:
+        return None
+    domain = m.group(1).lower()
+    parts = domain.split(".")
+    if len(parts) >= 2:
+        slug = parts[-2]
+    else:
+        return None
+    if slug in _GENERIC_SENDER_DOMAINS or len(slug) <= 2:
+        return None
+    return slug.title()
 
 
 # ---------------------------------------------------------------------------
@@ -634,6 +788,184 @@ def create_backfill_row(ws, parsed: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Digest backfill — parse past "Personalized Job Alert Digest" emails
+# ---------------------------------------------------------------------------
+
+def _parse_digest_html(html: str, email_date: str) -> list[dict]:
+    """Extract Apply/Consider job rows from a rendered digest HTML email.
+
+    Returns a list of job dicts compatible with write_to_tracker():
+    {'title', 'company', 'url', 'eval': {'score', 'verdict'}}
+    """
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    # ── Prefer embedded JSON data island (added to future digests) ──────────
+    tag = soup.find("script", {"type": "application/json", "id": "scorerole-data"})
+    if tag and tag.string:
+        import json as _json
+        try:
+            payload = _json.loads(tag.string)
+            jobs = []
+            for j in payload.get("jobs", []):
+                verdict = j.get("verdict", "").lower()
+                if verdict not in ("apply", "consider"):
+                    continue
+                jobs.append({
+                    "title":   j.get("title", ""),
+                    "company": j.get("company", ""),
+                    "url":     j.get("postingUrl", ""),
+                    "eval":    {"score": j.get("score", 0), "verdict": verdict},
+                })
+            return jobs
+        except Exception:
+            pass  # fall through to HTML parsing
+
+    # ── HTML fallback: parse job cards by "View posting" links ──────────────
+    # React Email renders: title in <td color:#1f2118 font-size:15px>,
+    # company in <p color:#72716d>, score in <span border-radius:20px>.
+    # Python fallback uses slightly different colors but same structure.
+    # Both use "View posting" anchor text to identify job cards.
+    jobs = []
+    for anchor in soup.find_all("a"):
+        if "View posting" not in anchor.get_text():
+            continue
+        url = anchor.get("href", "")
+        # Walk up to find the enclosing card table — the card has border-radius:8px.
+        # find_parent("table") would grab the inner footer table, not the card.
+        card = anchor.find_parent(
+            "table",
+            style=lambda s: s and "border-radius:8px" in s.replace(" ", "")
+        )
+        if not card:
+            continue
+
+        # Title: <td> with font-size:15px and font-weight:500
+        title_td = card.find(
+            lambda t: t.name in ("td", "div")
+            and "15px" in (t.get("style") or "")
+            and "500" in (t.get("style") or "")
+        )
+        title = title_td.get_text(strip=True) if title_td else ""
+
+        # Company+location: muted <p> or <div> — React uses #72716d, Python uses #888780
+        co_tag = card.find(
+            lambda t: t.name in ("p", "div")
+            and ("72716d" in (t.get("style") or "") or "888780" in (t.get("style") or ""))
+        )
+        company_raw = co_tag.get_text(strip=True) if co_tag else ""
+        company = company_raw.split("·")[0].strip()
+
+        # Score: span with border-radius:20px containing "\d+%"
+        score_span = card.find(
+            lambda t: t.name == "span"
+            and "border-radius:20px" in (t.get("style") or "").replace(" ", "")
+            and re.search(r"\d+%", t.get_text())
+        )
+        score = 0
+        if score_span:
+            m = re.search(r"(\d+)%", score_span.get_text())
+            if m:
+                score = int(m.group(1))
+
+        # Verdict: from pill background color
+        # React Email:    apply=#eef2ee  consider=#f4f0e8
+        # Python fallback: apply=#EAF3DE consider=#FAEEDA
+        style = (score_span.get("style", "") if score_span else "").lower()
+        if "eef2ee" in style or "eaf3de" in style:
+            verdict = "apply"
+        elif "f4f0e8" in style or "faeeda" in style:
+            verdict = "consider"
+        else:
+            verdict = "consider"   # safe default
+
+        if title and company:
+            jobs.append({
+                "title":   title,
+                "company": company,
+                "url":     url,
+                "eval":    {"score": score, "verdict": verdict},
+            })
+
+    return jobs
+
+
+def backfill_from_digests(
+    gmail_address: str,
+    app_password: str,
+    since_dt: datetime.datetime,
+) -> int:
+    """Fetch past digest emails from Gmail and write any new rows to the tracker.
+
+    Only writes Apply/Consider roles not already in the tracker (dedup by
+    normalized title+company). Returns the number of new rows added.
+    """
+    from email.utils import parsedate_to_datetime
+    from .tracker import write_to_tracker
+
+    since_str = since_dt.strftime("%d-%b-%Y")
+    added_total = 0
+
+    with imaplib.IMAP4_SSL("imap.gmail.com") as imap:
+        imap.login(gmail_address, app_password)
+        imap.select("INBOX")
+
+        _, data = imap.search(None, f'SINCE {since_str} SUBJECT "Personalized Job Alert Digest"')
+        if not data or not data[0]:
+            log.info("track: no digest emails found since %s", since_str)
+            return 0
+
+        digest_ids = data[0].split()
+        n_digests = len(digest_ids)
+        log.info("track: found %d digest email(s) to backfill from", n_digests)
+
+        for msg_id in digest_ids:
+            _, raw = imap.fetch(msg_id, "(RFC822)")
+            if not raw or not raw[0]:
+                continue
+            raw_bytes = raw[0][1] if isinstance(raw[0], tuple) else raw[0]
+            msg = email_lib.message_from_bytes(raw_bytes)
+
+            date_header = msg.get("Date", "")
+            try:
+                email_date = parsedate_to_datetime(date_header).date().isoformat()
+            except Exception:
+                email_date = datetime.date.today().isoformat()
+
+            # Extract HTML body from digest email
+            html_body = ""
+            if msg.is_multipart():
+                for part in msg.walk():
+                    if part.get_content_type() == "text/html":
+                        payload = part.get_payload(decode=True)
+                        if payload:
+                            html_body = _safe_decode(payload, part.get_content_charset())
+                            break
+            else:
+                if msg.get_content_type() == "text/html":
+                    payload = msg.get_payload(decode=True)
+                    if payload:
+                        html_body = _safe_decode(payload, msg.get_content_charset())
+
+            if not html_body:
+                log.debug("track: digest %s has no HTML body — skipping", email_date)
+                continue
+
+            jobs = _parse_digest_html(html_body, email_date)
+            if jobs:
+                log.info("track: digest %s → %d role(s) parsed", email_date, len(jobs))
+                write_to_tracker(jobs, run_date=email_date)
+                added_total += len(jobs)
+            else:
+                log.warning("track: digest %s → 0 roles parsed (HTML structure mismatch?)", email_date)
+
+    log.info("track: digest backfill complete — %d role(s) eligible across %d digest(s)",
+             added_total, n_digests)
+    return added_total
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -647,6 +979,13 @@ def run_track(gmail_address: str, app_password: str, since_dt: datetime.datetime
     from .tracker import TRACKER_PATH
     from .state   import lookup_skipped_role, promote_skipped_role
 
+    # Step 1: backfill tracker from past digest emails FIRST so every suggested
+    # role has a proper row (with score, URL, suggestion_status) before we try
+    # to match confirmation/rejection emails against tracker rows.
+    log.info("track: step 1 — backfilling tracker from digest emails…")
+    backfill_from_digests(gmail_address, app_password, since_dt)
+
+    # Step 2: parse confirmation / rejection emails and update tracker rows
     emails = fetch_candidate_emails(gmail_address, app_password, since_dt)
     if not emails:
         log.info("track: no candidate emails found in lookback window.")
@@ -708,8 +1047,7 @@ def run_track(gmail_address: str, app_password: str, since_dt: datetime.datetime
                     create_backfill_row(ws, parsed)
                 changed += 1
             else:
-                log.debug("track: no match for rejection — company=%s (subject: %s)",
-                          company, parsed["subject"])
+                log.info("track: skip rejection (no tracker row) — %s", company)
             continue
 
         current_action = ws.cell(row_idx, 6).value   # action_taken
@@ -720,13 +1058,16 @@ def run_track(gmail_address: str, app_password: str, since_dt: datetime.datetime
             update_confirmation(ws, row_idx, parsed["date"])
             changed += 1
         elif kind == "confirmation" and current_action == "Applied":
-            log.debug("track: already Applied — skipping confirmation for %s", company)
+            log.info("track: skip confirmation (already Applied) — %s", company)
         elif kind == "rejection" and current_status != "Rejected":
             log.info("track: ✗ rejection  — %s / %s → Rejected", company, role or "?")
             update_rejection(ws, row_idx)
             changed += 1
         elif kind == "rejection" and current_status == "Rejected":
-            log.debug("track: already Rejected — skipping for %s", company)
+            log.info("track: skip rejection (already Rejected) — %s", company)
+
+    from .tracker import _sort_rows_by_date
+    _sort_rows_by_date(ws)   # always re-sort so date order is maintained
 
     if changed:
         wb.save(TRACKER_PATH)
@@ -737,4 +1078,6 @@ def run_track(gmail_address: str, app_password: str, since_dt: datetime.datetime
             import subprocess
             subprocess.Popen(["open", str(TRACKER_PATH)])
     else:
+        wb.save(TRACKER_PATH)   # save even if no updates — sort may have reordered rows
+        TRACKER_PATH.chmod(0o600)
         log.info("track: no updates needed.")

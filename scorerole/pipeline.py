@@ -15,7 +15,7 @@ GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
 RECIPIENT_EMAIL    = os.getenv("RECIPIENT_EMAIL", GMAIL_ADDRESS)
 MODEL              = os.getenv("MODEL", "claude-sonnet-4-6")
 MAX_JOBS_PER_RUN   = int(os.getenv("MAX_JOBS_PER_RUN", "20"))
-DEFAULT_LOOKBACK   = os.getenv("DEFAULT_LOOKBACK", "3d")
+DEFAULT_LOOKBACK   = os.getenv("DEFAULT_LOOKBACK", "3d")  # fallback only; main() uses last-run timestamp when available
 
 from .state import (
     DATA_DIR, LOG_DIR, SEEN_FILE,
@@ -24,7 +24,7 @@ from .state import (
 from .feedback_cmd import save_last_run
 from .sources import fetch_alerts
 from .sources.linkedin import extract_jobs, extract_jobs_html, _extract_text
-from .score import score_jobs_batch, rank_jobs
+from .score import score_jobs_batch, rank_jobs, build_score_system
 from .render import render_html, send_digest
 
 # ---------------------------------------------------------------------------
@@ -66,24 +66,56 @@ log = logging.getLogger(__name__)
 
 def _parse_lookback(value: str) -> datetime.datetime | None:
     """Parse '3d', '7d', '2026-05-10', 'yesterday' → datetime. Returns None on failure."""
-    if re.match(r'^\d+d$', value):
-        return datetime.datetime.now() - datetime.timedelta(days=int(value[:-1]))
+    if re.match(r'^\d+d(ay)?s?$', value):
+        days = int(re.match(r'^\d+', value).group())
+        return datetime.datetime.now() - datetime.timedelta(days=days)
     import dateparser
     return dateparser.parse(value, settings={"RETURN_AS_TIMEZONE_AWARE": False})
 
 
+def _since_last_run(fallback: str = DEFAULT_LOOKBACK) -> tuple[datetime.datetime, str]:
+    """Return (since_dt, label) using last_run.json timestamp, or fallback duration.
+
+    Label is shown to the user so they know which window is active.
+    """
+    try:
+        from .feedback_cmd import load_last_run
+        run = load_last_run()
+        if run and run.get("run_timestamp"):
+            since_dt = datetime.datetime.fromisoformat(run["run_timestamp"])
+            label = f"since last run ({run.get('run_date', since_dt.date())})"
+            return since_dt, label
+    except Exception:
+        pass
+    since_dt = _parse_lookback(fallback)
+    return since_dt, f"{fallback} (no prior run found)"
+
+
+_COST_GATE_USD = 0.50   # show prominent cost warning when upper-bound estimate exceeds this
+
+
 def _prompt_score_all(n_found: int, cap: int) -> bool:
-    """Interactively ask whether to score all roles. Returns True = score all."""
-    from .score import estimate_cost
+    """Interactively ask whether to score all roles. Returns True = score all.
+
+    When the upper-bound cost estimate exceeds _COST_GATE_USD, a prominent warning
+    is shown before asking. Accepts y / Y / yes / YES / Yes in all cases.
+    """
+    from .score import estimate_cost, estimate_cost_hi
+    cost_str  = estimate_cost(n_found)
+    cost_hi   = estimate_cost_hi(n_found)
+    high_cost = cost_hi >= _COST_GATE_USD
+
     print(f"\n  ⚠  Found {n_found} new roles in your lookback window.")
     print(f"     Your cap is {cap} (MAX_JOBS_PER_RUN in .env).")
-    print(f"     Scoring all {n_found}: ~{estimate_cost(n_found)} estimated")
-    print(f"     (A Haiku pre-screen runs first to filter obvious mismatches —")
-    print(f"     actual cost is typically 40–60% lower than the estimate above.)")
-    print(f"     Roles beyond the cap stay unseen until their 14-day TTL expires.\n")
+    if high_cost:
+        print(f"     ⚠  Estimated cost: ~{cost_str}  (up to ${cost_hi:.2f}) — higher than usual")
+    else:
+        print(f"     Estimated cost: ~{cost_str}")
+    print(f"     (Haiku pre-screen runs first — actual cost typically 40–60% lower.)")
+    print(f"     Roles beyond the cap stay unseen until their 30-day TTL expires.\n")
     try:
         ans = input(f"  Score all {n_found} roles? [y/N]: ").strip().lower()
-        return ans == "y"
+        return ans in ("y", "yes")
     except (EOFError, KeyboardInterrupt):
         print()
         return False
@@ -99,11 +131,11 @@ def _stage_ingest(since_dt: datetime.datetime, seen_roles: set, profile=None) ->
     Applies three dedup layers:
       1. job_id exact duplicate within this run
       2. title+company key (same role, different location email)
-      3. role_hash in seen_roles (14-day cross-run TTL gate)
+      3. role_hash in seen_roles (30-day cross-run TTL gate)
 
     Returns:
       None           — no emails found and no proactive jobs
-      []  (empty)    — sources returned jobs but all already seen within 14 days
+      []  (empty)    — sources returned jobs but all already seen within 30 days
       [...]           — new, unseen roles ready for cap + scoring
     """
     threads = fetch_alerts(since_dt, profile=profile)
@@ -248,7 +280,7 @@ def _stage_enrich_and_score(jobs: list[dict], client) -> list[dict]:
 
     if to_score:
         try:
-            score_jobs_batch(client, to_score)   # mutates job["eval"] in-place
+            score_jobs_batch(client, to_score, profile_data)   # mutates job["eval"] in-place
         except FileNotFoundError:
             raise SystemExit(
                 "\n❌  No scoring profile found.\n"
@@ -278,7 +310,7 @@ def _stage_deliver(
     scored_jobs: list[dict],
     n_filtered: int,
     new_role_timestamps: dict,
-    no_tracker: bool = False,
+    dry_run: bool = False,
 ) -> None:
     """Render the HTML digest and deliver it via SMTP.
 
@@ -289,14 +321,24 @@ def _stage_deliver(
 
     Skipped-role metadata is saved to skipped_roles.json BEFORE delivery so it survives
     even if SMTP fails — it's needed for future backport and costs nothing to keep.
+
+    dry_run=True skips all writes: no email send, no seen_roles save, no tracker write.
     """
     # Save skipped role metadata before delivery (safe to write regardless of SMTP outcome)
     skipped_jobs = [j for j in scored_jobs if j.get("eval", {}).get("verdict") == "skipped"]
-    if skipped_jobs:
+    if skipped_jobs and not dry_run:
         save_skipped_roles(skipped_jobs)
 
     run_date = datetime.datetime.now().strftime("%B %d, %Y")
     html = render_html(scored_jobs, run_date, deal_breaker_count=n_filtered)
+
+    if dry_run:
+        apply_n    = sum(1 for j in scored_jobs if j["eval"].get("verdict") == "apply")
+        consider_n = sum(1 for j in scored_jobs if j["eval"].get("verdict") == "consider")
+        filter_note = f", {n_filtered} filtered by deal-breaker" if n_filtered else ""
+        print(f"  [dry-run] Would send digest — {len(scored_jobs)} evaluated: {apply_n} apply, {consider_n} consider{filter_note}")
+        return
+
     try:
         send_digest(html, run_date)
     except Exception:
@@ -306,10 +348,9 @@ def _stage_deliver(
     save_seen_roles(new_role_timestamps)
     save_last_run(scored_jobs, run_date, filtered_count=n_filtered)
 
-    if not no_tracker:
-        from .tracker import write_to_tracker, TRACKER_PATH
-        write_to_tracker(scored_jobs, run_date=datetime.date.today().isoformat())
-        print(f"  Tracker → {TRACKER_PATH}")
+    from .tracker import write_to_tracker, TRACKER_PATH
+    write_to_tracker(scored_jobs, run_date=datetime.date.today().isoformat())
+    print(f"  Tracker → {TRACKER_PATH}")
 
     apply_n    = sum(1 for j in scored_jobs if j["eval"].get("verdict") == "apply")
     consider_n = sum(1 for j in scored_jobs if j["eval"].get("verdict") == "consider")
@@ -323,16 +364,16 @@ def _stage_deliver(
 # Orchestration
 # ---------------------------------------------------------------------------
 
-def run_pipeline(since_dt: datetime.datetime, score_all: bool = False, no_tracker: bool = False):
+def run_pipeline(since_dt: datetime.datetime, score_all: bool = False, dry_run: bool = False):
     """Fetch LinkedIn alert emails since since_dt, score unseen roles, deliver digest.
 
-    seen_roles.json (14-day TTL) is the dedup gate — roles already scored
-    within the last 14 days are skipped automatically.
+    seen_roles.json (30-day TTL) is the dedup gate — roles already scored
+    within the last 30 days are skipped automatically.
 
     score_all=True (--no-limit flag) bypasses the cap and runs a Haiku pre-screen
     before full Sonnet scoring to keep costs down.
 
-    no_tracker=True skips writing to the Applications xlsx (useful for test runs).
+    dry_run=True skips all writes: no email send, no seen_roles save, no tracker write.
     """
     log.info(f"=== Pipeline run starting — lookback since {since_dt.strftime('%Y-%m-%d')} ===")
     client     = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -347,7 +388,7 @@ def run_pipeline(since_dt: datetime.datetime, score_all: bool = False, no_tracke
     if all_jobs is None:
         return   # "No emails in lookback window" already logged inside _stage_ingest
     if not all_jobs:
-        log.info("No new roles to evaluate — all already seen within the past 14 days.")
+        log.info("No new roles to evaluate — all already seen within the past 30 days.")
         return
 
     # Stage 2: Apply cap, optionally run Haiku pre-screen
@@ -385,7 +426,7 @@ def run_pipeline(since_dt: datetime.datetime, score_all: bool = False, no_tracke
         return
 
     # Stage 5: Render + deliver digest (persists seen_roles on success)
-    _stage_deliver(scored_jobs, n_filtered, new_role_timestamps, no_tracker=no_tracker)
+    _stage_deliver(scored_jobs, n_filtered, new_role_timestamps, dry_run=dry_run)
 
 
 def debug_emails():
@@ -436,9 +477,9 @@ def main():
                     "only what's worth your time.",
     )
     parser.add_argument(
-        "--lookback", default=DEFAULT_LOOKBACK, metavar="DURATION",
-        help=f"How far back to fetch emails. Accepts: '3d', '7d', '2026-05-10'. "
-             f"Default: {DEFAULT_LOOKBACK}",
+        "--lookback", default=None, metavar="DURATION",
+        help="Override lookback window. Accepts: '3d', '7d', '2026-05-10'. "
+             "Default: since last run (falls back to 3d if no prior run).",
     )
     parser.add_argument(
         "--no-limit", dest="score_all", action="store_true",
@@ -447,8 +488,8 @@ def main():
              "Useful for catch-up runs after a long gap or a reset.",
     )
     parser.add_argument(
-        "--no-tracker", dest="no_tracker", action="store_true",
-        help="Skip writing to the Applications xlsx tracker. Useful for test/dry runs.",
+        "--dry-run", dest="dry_run", action="store_true",
+        help="Full run (fetch + score) but no writes: no email sent, no seen_roles saved, no tracker updated.",
     )
 
     subparsers = parser.add_subparsers(dest="command")
@@ -463,8 +504,14 @@ def main():
         help="Path to your resume (PDF, DOCX, or TXT). Prompted interactively if omitted.",
     )
     init_p.add_argument(
-        "--supplement", metavar="PATH",
-        help="Optional: LinkedIn export PDF, bio, or any supplementary text file.",
+        "--linkedin", metavar="PATH",
+        help="Optional: LinkedIn export PDF or data archive for profile enrichment.",
+    )
+
+    # init2 subcommand — conversational onboarding wizard (beta)
+    subparsers.add_parser(
+        "init2",
+        help="[beta] Conversational profile setup — freeform prompts instead of a form.",
     )
 
     # reset subcommand
@@ -511,7 +558,7 @@ def main():
     )
     track_p.add_argument(
         "--dry-run", dest="dry_run", action="store_true",
-        help="Parse and print matches without writing to the tracker.",
+        help="Parse and classify emails; print matches to stdout without writing or opening the tracker.",
     )
 
     # feedback subcommand
@@ -529,11 +576,7 @@ def main():
     # debug subcommand
     subparsers.add_parser("debug", help="Dump the most recent LinkedIn alert email for inspection.")
 
-    # tracker subcommand
-    subparsers.add_parser(
-        "tracker",
-        help="Show the tracker path and open the Applications spreadsheet.",
-    )
+
 
     args = parser.parse_args()
 
@@ -543,8 +586,13 @@ def main():
         run_init(
             api_key=ANTHROPIC_API_KEY,
             resume_path_arg=getattr(args, "resume", "") or "",
-            supplement_path_arg=getattr(args, "supplement", "") or "",
+            supplement_path_arg=getattr(args, "linkedin", "") or "",
         )
+
+    elif args.command == "init2":
+        _validate_env(require_gmail=False)
+        from .init2_cmd import run_init2
+        run_init2(api_key=ANTHROPIC_API_KEY)
 
     elif args.command == "reset":
         targets = [SEEN_FILE]
@@ -606,12 +654,16 @@ def main():
     else:
         # Default: run the digest pipeline
         _validate_env()
-        since_dt = _parse_lookback(args.lookback)
-        if not since_dt:
-            print(f"Could not parse --lookback '{args.lookback}'. "
-                  f"Try: '3d', '7d', '2026-05-10'")
-            raise SystemExit(1)
-        run_pipeline(since_dt=since_dt, score_all=args.score_all, no_tracker=args.no_tracker)
+        if args.lookback:
+            since_dt = _parse_lookback(args.lookback)
+            if not since_dt:
+                print(f"Could not parse --lookback '{args.lookback}'. "
+                      f"Try: '3d', '7d', '2026-05-10'")
+                raise SystemExit(1)
+        else:
+            since_dt, label = _since_last_run()
+            log.info("Lookback window: %s", label)
+        run_pipeline(since_dt=since_dt, score_all=args.score_all, dry_run=args.dry_run)
 
 
 if __name__ == "__main__":

@@ -71,6 +71,55 @@ _STATUS_FILL = {
 }
 
 
+def _sort_rows_by_date(ws) -> None:
+    """Sort data rows by date_suggested (col A) descending — newest first.
+
+    Reads all data rows into memory, clears them, then rewrites in sorted order.
+    Header row (row 1) is untouched. Preserves fills, fonts, hyperlinks.
+    """
+    from openpyxl.styles import PatternFill, Font, Alignment
+    from copy import copy
+
+    max_row = ws.max_row
+    if max_row < 3:
+        return  # 0 or 1 data rows — nothing to sort
+
+    # Capture every data row as a list of (value, style snapshot)
+    data_rows = []
+    for row_idx in range(2, max_row + 1):
+        row_cells = []
+        for col_idx in range(1, len(_HEADERS) + 1):
+            cell = ws.cell(row_idx, col_idx)
+            row_cells.append({
+                "value":      cell.value,
+                "hyperlink":  cell.hyperlink,
+                "fill":       copy(cell.fill),
+                "font":       copy(cell.font),
+                "number_fmt": cell.number_format,
+                "alignment":  copy(cell.alignment),
+            })
+        data_rows.append(row_cells)
+
+    # Sort by date in column A descending — rows without a date go to the bottom
+    def _sort_key(row):
+        val = row[0]["value"]
+        return val if isinstance(val, str) and val else ""
+
+    data_rows.sort(key=_sort_key, reverse=True)
+
+    # Rewrite — clear then restore
+    for row_idx, row_cells in enumerate(data_rows, start=2):
+        for col_idx, snap in enumerate(row_cells, start=1):
+            cell = ws.cell(row_idx, col_idx)
+            cell.value        = snap["value"]
+            cell.fill         = snap["fill"]
+            cell.font         = snap["font"]
+            cell.number_format = snap["number_fmt"]
+            cell.alignment    = snap["alignment"]
+            if snap["hyperlink"]:
+                cell.hyperlink = snap["hyperlink"]
+
+
 def _norm_key(title: str, company: str) -> str:
     """Normalized dedup key — same logic as state._role_hash but human-readable."""
     return re.sub(r"[^a-z0-9]", "", (title + company).lower())
@@ -245,6 +294,7 @@ def write_to_tracker(jobs: list[dict], run_date: str | None = None) -> None:
         added += 1
 
     if added:
+        _sort_rows_by_date(ws)
         wb.save(TRACKER_PATH)
         TRACKER_PATH.chmod(0o600)
         log.info("Tracker: wrote %d new row(s) to %s (%d duplicate(s) skipped)",

@@ -85,6 +85,11 @@ def estimate_cost(n: int) -> str:
     return f"${lo:.2f}–${hi:.2f}"
 
 
+def estimate_cost_hi(n: int) -> float:
+    """Upper-bound cost estimate as a float — used by the cost gate in pipeline.py."""
+    return n * 0.015
+
+
 def _recover_partial_json(raw: str) -> list[dict]:
     """Salvage individual job objects from a truncated JSON array.
 
@@ -198,55 +203,115 @@ def prescreen_jobs_batch(client: anthropic.Anthropic, jobs: list[dict]) -> list[
 # Full scoring (Sonnet)
 # ---------------------------------------------------------------------------
 
-def _build_score_system() -> str:
-    """Build the scoring system prompt, loading the profile fresh each call."""
-    profile = _load_profile()
-    name = _candidate_name()
+def _build_bullet_style_guide(profile_data: dict) -> str:
+    """Build bullet writing rules from the candidate's actual profile data.
 
-    # Read scoring thresholds from profile.yaml; fall back to safe defaults.
-    apply_t, consider_t = 75, 55
-    try:
-        from .profile import load_profile_yaml
-        sc = (load_profile_yaml() or {}).get("scoring", {})
-        apply_t    = int(sc.get("apply_threshold",    apply_t))
-        consider_t = int(sc.get("consider_threshold", consider_t))
-    except Exception:
-        pass
+    Generated dynamically so proof points and examples reference this specific
+    candidate — not any hardcoded name, company, or product vocabulary.
+    """
+    candidate  = profile_data.get("candidate", {})
+    name       = candidate.get("name", "the candidate")
+    first      = name.split()[0]
+    strengths  = profile_data.get("strengths", [])
+    experience = profile_data.get("experience", [])
 
-    return f"""{profile}
+    # Proof points from strengths (up to 5)
+    proof_lines = (
+        "\n".join(f"  - {s}" for s in strengths[:5])
+        if strengths else
+        "  (no strengths listed in profile — infer from experience section above)"
+    )
 
-You are a job fit evaluator for {name}.
+    # Experience vocabulary from first 3 roles
+    exp_lines = []
+    for e in experience[:3]:
+        title = e.get("title", "")
+        co    = e.get("company", "")
+        hls   = e.get("highlights", [])
+        label = f"{title} at {co}" if co else title
+        if label:
+            detail = hls[0][:80] if hls else ""
+            exp_lines.append(f"  - {label}" + (f": {detail}" if detail else ""))
+    exp_vocab = (
+        "\n".join(exp_lines)
+        if exp_lines else
+        "  (see experience section in the profile above)"
+    )
 
-Each job listing includes an [EXTRACTED CONTEXT] block with structured fields extracted
-from the JD. Use these as grounding when scoring — they prevent misreads on salary,
-work model, seniority, and domain.
+    # Good example: first strength, trimmed cleanly at a word boundary
+    if strengths:
+        s = strengths[0]
+        if len(s) > 95:
+            s = s[:95]
+            s = s[: s.rfind(" ")].rstrip(" ,.")
+        good_leverage = f'"{s}."'
+    else:
+        good_leverage = f'"{first} shipped [specific feature] at [company], which directly covers [JD requirement]."'
 
-SCORING RUBRIC — score six dimensions (0–100 each), then compute weighted total:
+    return f"""BULLET WRITING RULES — follow exactly for every leveragePoint and frictionPoint:
+
+1. HARD LENGTH LIMIT: 15–20 words maximum. Count every word before writing. Cut until it fits.
+   If a sentence exceeds 20 words, it is wrong — rewrite it, do not submit it.
+2. NO em-dash constructions. "topic — evidence — more evidence" is banned. One clause only.
+3. Lead with the specific skill or fact; name something concrete from the JD.
+4. PRONOUNS BANNED everywhere. No she/her/he/him/his/they/them in any position.
+   Subject position: always "{first}", never "{first}'s background", "{first}'s experience".
+   Object position: restructure to avoid "for her", "giving him", "with his experience".
+   Possessive subject also banned: "{first}'s MCS..." → "Her MCS..." is wrong; write
+   "{first} holds an MCS..." instead.
+5. Active verb: "shipped", "led", "owns", "built" — not "has experience in" or "maps to".
+6. Specific over generic: name a product, metric, customer type, or technology.
+   "at scale" is banned — replace with the actual scale: "across 2,000+ models", "for 350+ customers".
+7. NEVER mention score adjustments, deductions, multipliers, or numerical scoring mechanics.
+8. Auto-delete on sight: directly, directly applicable, directly relevant, mapping directly,
+   effectively, successfully, uniquely, seamlessly, exactly, robust, leverage (as verb),
+   synergy, alignment (unless quoting a JD requirement), "at scale" (use the specific number).
+
+PROOF POINTS — draw on these for leverage bullets:
+{proof_lines}
+
+EXPERIENCE VOCABULARY — cite these when referencing {first}'s background:
+{exp_vocab}
+
+BAD (these are wrong — reject before submitting):
+  ↑  "{first} built AI features at DocuSign — including model evaluation and semantic recommendation at enterprise scale — mapping directly to the JD."  [em-dash + "at scale" + "directly" = 3 violations]
+  ↑  "{first}'s MCS in Data Science from UIUC satisfies Google's preferred master's degree qualification."  [possessive subject — rewrite as "{first} holds an MCS..."]
+  ↑  "...giving her direct fluency with the developer context..."  [pronoun in object position]
+  ↓  "There may be some leveling uncertainty worth exploring in the interview."  [vague]
+
+GOOD (15–20 words, no em-dash, no pronouns, no banned words):
+  ↑  {good_leverage}
+  ↓  "The title sits below {first}'s Staff/Principal target — verify scope and comp before applying." """
+
+
+def _build_score_suffix(name: str, apply_t: int, consider_t: int) -> str:
+    """Static scoring rubric, output schema, and thresholds — same structure for every user."""
+    return f"""SCORING RUBRIC — score six dimensions (0–100 each), then compute weighted total:
 
   seniority_scope     (0.25)  Does the scope, ownership language, and structural level
-                               match {name}'s target level? Use extracted inferred_structural_level,
-                               manages_pm_team, reports_to_level as anchors.
+                               match the candidate's target level? Use extracted
+                               inferred_structural_level, manages_pm_team, reports_to_level.
 
   experience_relevance (0.20)  How well does the JD's required stack and depth match
-                               {name}'s background? Target 70–80% match: 100% overlap
+                               the candidate's background? Target 70–80% overlap: 100% overlap
                                scores ~85 (no growth headroom), not 100.
 
   compensation_fit    (0.15)  Does total comp land attractively above the salary floor?
                                If salary_disclosed=false, cap this dimension at 60 (can't assess).
 
-  culture_values      (0.15)  Score these four signals (0–100 each), then average:
+  culture_values      (0.15)  Score four signals (0–100 each), then average:
                                  autonomy_signal:     "own outcomes" vs "manage up"
                                  pace_signal:         "0→1 / scrappy" vs "process-driven"
                                  mission_signal:      explicit mission vs generic growth
                                  collaboration_model: embedded eng collab vs heavy XFN
                                Default each to 50 when absent (neutral, no penalty).
-                               Compare against candidate's stated company_types and aspirations.
+                               Compare against the candidate's stated company_types and aspirations.
 
-  domain_background   (0.15)  How native is {name}'s background to this domain?
+  domain_background   (0.15)  How native is the candidate's background to this domain?
                                native(100) → adjacent(70) → tangential(40) → foreign(10).
                                Use extracted customer_type, product_surface, industry as signal.
 
-  company_stage       (0.10)  Does the company stage match candidate's stated preference?
+  company_stage       (0.10)  Does the company stage match the candidate's stated preference?
                                Use extracted company_stage and company_tier.
 
 MULTIPLIERS (apply to weighted score):
@@ -267,11 +332,9 @@ DEAL-BREAKER RULE (apply before scoring anything else):
 
 STYLE:
   Use standard tech shorthands: ML, AI, API, infra, dev, eng, PM, SaaS, LLM, RAG, B2B, B2C, XFN.
-  Lead PM = Staff PM — these are equivalent levels at most tech companies. NEVER flag "Lead"
-  as a level concern, title gap, or friction point. Only flag when the title is "Senior PM"
-  or lower with no scope signal, or when the JD is clearly a manager-of-managers role below target.
-  NEVER mention score adjustments, multipliers, deductions, or any numerical scoring mechanics
-  in leveragePoints, frictionPoints, or tags — those are internal. Write only real-world job factors.
+  Lead PM = Staff PM — equivalent levels at most tech companies. NEVER flag "Lead" as a
+  level concern or friction point. Only flag when the title is "Senior PM" or lower with
+  no scope signal, or when the JD is clearly a manager-of-managers role below target.
 
 Given a batch of job listings, return a JSON array — one object per job, same order as input:
 [
@@ -287,20 +350,14 @@ Given a batch of job listings, return a JSON array — one object per job, same 
   ...
 ]
 
-leveragePoints: 1-2 complete, natural sentences. ~15-20 words each. Explain why this role
-  is a strong fit — name the specific skill or experience and tie it to something concrete
-  in the JD. Write like you're telling a colleague why this role is interesting, not filling
-  in a template. Avoid mechanical openers ("maps directly to", "aligns with") and avoid the
-  stiff "topic label — evidence clause" em-dash pattern.
-  BAD:  "agentic platform — DocuSign Navigator flows map directly to JD's core workflow need"
-  GOOD: "DocuSign Navigator's agentic platform work is a direct match for the JD's focus on
-         autonomous workflow orchestration at enterprise scale."
-
-frictionPoints: 1 honest, specific concern in the same natural-sentence style. Use [] if
-  there is genuinely no material concern — never write placeholder text ("none", "n/a",
-  "no concerns", "none material").
-  BAD:  "none material"
-  GOOD: []
+leveragePoints: exactly 2 bullets following the writing rules above. Always 2 — never 1, never 3.
+frictionPoints: exactly 1 honest, specific concern following the writing rules above.
+  Use [] only if there is genuinely no material concern at all.
+  NEVER write placeholder text ("none", "n/a", "no concerns", "none material").
+  For "skipped" verdict: frictionPoints[0] is displayed as the skip reason in the digest.
+    Write it as a short phrase (≤12 words), not a full sentence.
+    BAD: "The role is scoped as TPM, not PM — Lomis's career track is IC PM, making this misaligned regardless of company prestige."
+    GOOD: "TPM role, not PM — title mismatch regardless of company prestige"
 
 TAG VOCABULARY — pick only from this list; do not invent new tags:
 
@@ -323,7 +380,7 @@ TAG VOCABULARY — pick only from this list; do not invent new tags:
   For deal-breaker filtered roles the gate code sets the tag automatically — do not add more.
   Use up to 4 tags. Pick the best match; do not combine two tags for the same dimension.
 
-Thresholds (from your profile.yaml scoring section):
+Thresholds (from the candidate's profile.yaml scoring section):
   score >= {apply_t}  →  apply
   score {consider_t}–{apply_t - 1}  →  consider
   score < {consider_t}   →  skipped
@@ -331,6 +388,60 @@ Thresholds (from your profile.yaml scoring section):
 
 Be honest. {apply_t}% IS strong at this level. Do not inflate.
 Return ONLY valid JSON array — no markdown fences, no preamble."""
+
+
+def build_score_system(profile: dict) -> str:
+    """Build the scoring system prompt from an already-loaded profile dict.
+
+    Accepts the profile dict directly so the caller (pipeline) can pass the
+    same object already loaded for gate checks — avoids a redundant disk read.
+    """
+    from .profile import render_profile
+    from .feedback_cmd import load_feedback_text
+
+    profile_text = render_profile(profile)
+    feedback     = load_feedback_text()
+    if feedback:
+        profile_text += (
+            "\n\nCANDIDATE CALIBRATION FEEDBACK:\n"
+            "The candidate has provided these scoring notes from past runs.\n"
+            "Use them to adjust your judgment — they take precedence over generic defaults:\n\n"
+            + feedback
+        )
+
+    apply_t, consider_t = 75, 55
+    sc = profile.get("scoring", {})
+    try:
+        apply_t    = int(sc.get("apply_threshold",    apply_t))
+        consider_t = int(sc.get("consider_threshold", consider_t))
+    except (TypeError, ValueError):
+        pass
+
+    name         = profile.get("candidate", {}).get("name") or _candidate_name()
+    bullet_guide = _build_bullet_style_guide(profile)
+    score_suffix = _build_score_suffix(name, apply_t, consider_t)
+
+    return (
+        f"{profile_text}\n\n"
+        f"You are a job fit evaluator for {name}.\n\n"
+        "Each job listing includes an [EXTRACTED CONTEXT] block with structured fields "
+        "extracted from the JD. Use these as grounding when scoring — they prevent misreads "
+        "on salary, work model, seniority, and domain.\n\n"
+        f"{bullet_guide}\n\n"
+        f"{score_suffix}"
+    )
+
+
+def _build_score_system() -> str:
+    """Legacy shim — loads profile from disk and delegates to build_score_system()."""
+    from .profile import load_profile_yaml
+    profile = load_profile_yaml()
+    if not profile:
+        raise FileNotFoundError(
+            "No profile found at ~/.job_pipeline/profile.yaml\n"
+            "Run `scorerole init` to create one from your resume."
+        )
+    return build_score_system(profile)
 
 
 _SCORE_CHUNK_SIZE = 15   # max jobs per Sonnet call (~15 × 300 tok ≈ 4,500 out, fits in 8192)
@@ -428,9 +539,17 @@ def _score_chunk(client: anthropic.Anthropic, jobs: list[dict], system_prompt: s
         return evals
 
 
-def score_jobs_batch(client: anthropic.Anthropic, jobs: list[dict]) -> list[dict]:
-    """Score all jobs, chunking into batches of _SCORE_CHUNK_SIZE to avoid output truncation."""
-    system_prompt = _build_score_system()
+def score_jobs_batch(
+    client: anthropic.Anthropic,
+    jobs: list[dict],
+    profile: dict | None = None,
+) -> list[dict]:
+    """Score all jobs, chunking into batches of _SCORE_CHUNK_SIZE to avoid output truncation.
+
+    Pass `profile` (already loaded dict) to avoid a redundant disk read. Falls back to
+    loading from disk when called without a profile (backward compat for tests).
+    """
+    system_prompt = build_score_system(profile) if profile is not None else _build_score_system()
     _error_eval   = {
         "score": 0, "verdict": "skipped",
         "leveragePoints": [], "frictionPoints": ["Scoring parse error"], "tags": [],

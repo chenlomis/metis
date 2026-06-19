@@ -469,7 +469,7 @@ class TestPipelineExtractionIntegration:
         """A job that passes all gates must be sent to score_jobs_batch."""
         from scorerole.pipeline import _stage_enrich_and_score
 
-        def fake_score(client, jobs):
+        def fake_score(client, jobs, profile=None):
             for j in jobs:
                 j["eval"] = {"score": 80, "verdict": "apply",
                              "leveragePoints": [], "frictionPoints": [], "tags": []}
@@ -487,7 +487,7 @@ class TestPipelineExtractionIntegration:
         """If extract_jd_structs raises, pipeline should still score (no gate fires)."""
         from scorerole.pipeline import _stage_enrich_and_score
 
-        def fake_score(client, jobs):
+        def fake_score(client, jobs, profile=None):
             for j in jobs:
                 j["eval"] = {"score": 70, "verdict": "consider",
                              "leveragePoints": [], "frictionPoints": [], "tags": []}
@@ -508,7 +508,7 @@ class TestPipelineExtractionIntegration:
 
         scored_calls = []
 
-        def fake_score(client, jobs):
+        def fake_score(client, jobs, profile=None):
             scored_calls.extend(j["title"] for j in jobs)
             for j in jobs:
                 j["eval"] = {"score": 75, "verdict": "apply",

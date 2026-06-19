@@ -1,6 +1,6 @@
 """scorerole init — interactive profile setup wizard.
 
-Uses questionary for prompts and Rich for formatted output.
+Uses InquirerPy for prompts and Rich for formatted output.
 Parses a resume (PDF / DOCX / TXT), optionally a LinkedIn export,
 collects preferences interactively, extracts a structured profile
 with Claude, lets the user review and edit, then saves to
@@ -8,6 +8,21 @@ with Claude, lets the user review and edit, then saves to
 """
 import os, re, sys, shutil, subprocess, logging
 from pathlib import Path
+from rich.style import Style
+
+from .theme import (
+    QUESTIONARY_STYLE,
+    INQUIRER_STYLE,
+    THEME,
+    console,
+    print_hint,
+    print_section,
+    print_section_intro,
+    print_eg,
+    print_confirmed,
+    print_separator,
+    print_kb_hint,
+)
 
 log = logging.getLogger(__name__)
 
@@ -15,6 +30,7 @@ log = logging.getLogger(__name__)
 # or appear between questionary prompts.
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("anthropic").setLevel(logging.WARNING)
+logging.getLogger("InquirerPy").setLevel(logging.WARNING)
 
 DATA_DIR     = Path.home() / ".job_pipeline"
 PROFILE_PATH = DATA_DIR / "profile.yaml"
@@ -30,6 +46,80 @@ _RELOCATION_CITIES = [
     "Denver / Boulder",
     "Remote anywhere",
 ]
+
+
+# ---------------------------------------------------------------------------
+# InquirerPy prompt helpers
+#
+# Spacing rule (Gemini / UX consensus):
+#   WITHIN a question block  → 0 blank lines  (label, hint, input are one unit)
+#   BETWEEN question blocks  → 1 blank line   (the \n prefix in each helper)
+#
+# Pointer: "  › " — 2 spaces + › + 1 space — fixed width so text and list
+# prompts align horizontally regardless of prompt type.
+#
+# All helpers use INQUIRER_STYLE from theme.py (dark/light adaptive).
+# ---------------------------------------------------------------------------
+
+def _ask(label: str, hint: str = "", default: str = "", examples: str = "", **kw) -> str:
+    """Single-line text input block.
+
+    Label is flush left (typographic anchor). Hint and examples are 2-space
+    indented to create a clear subordinate tier. One blank line is injected
+    before the label via the leading newline — callers must NOT add extra spacing.
+    """
+    from InquirerPy import inquirer
+    console.print(f"\n[bold]{label}[/bold]")
+    if hint:
+        console.print(f"  {hint}", style="dim italic")
+    if examples:
+        print_eg(examples)
+    return inquirer.text(message="  › ", default=default, style=INQUIRER_STYLE, **kw).execute() or ""
+
+
+def _ask_select(label: str, choices: list, hint: str = "", default=None, examples: str = "", **kw):
+    """Single-selection list block.
+
+    qmark and message are suppressed so InquirerPy doesn't render '? ›' before
+    the choice list — that marker looks like a text input affordance, which is wrong.
+    The label and hint printed above already set context; choices speak for themselves.
+    """
+    from InquirerPy import inquirer
+    console.print(f"\n[bold]{label}[/bold]")
+    if hint:
+        console.print(f"  {hint}", style="dim italic")
+    if examples:
+        print_eg(examples)
+    return inquirer.select(
+        message="", qmark="", choices=choices, default=default, style=INQUIRER_STYLE, **kw
+    ).execute()
+
+
+def _ask_checkbox(label: str, choices: list, hint: str = "Space to toggle  ·  Enter to confirm") -> list:
+    """Multi-selection checkbox block. Choices may be strings or InquirerPy Choice objects."""
+    from InquirerPy import inquirer
+    console.print(f"\n[bold]{label}[/bold]")
+    if hint:
+        console.print(f"  {hint}", style="dim italic")
+    return inquirer.checkbox(message="", qmark="", choices=choices, style=INQUIRER_STYLE).execute() or []
+
+
+def _ask_confirm(label: str, default: bool = True) -> bool:
+    """Yes/No confirmation block."""
+    from InquirerPy import inquirer
+    console.print()
+    return bool(inquirer.confirm(message=f"  › {label}", default=default, style=INQUIRER_STYLE).execute())
+
+
+def _ask_filepath(label: str, hint: str = "", examples: str = "") -> str:
+    """File-path input with tab-completion."""
+    from InquirerPy import inquirer
+    console.print(f"\n[bold]{label}[/bold]")
+    if hint:
+        console.print(f"  {hint}", style="dim italic")
+    if examples:
+        print_eg(examples)
+    return inquirer.filepath(message="  › ", style=INQUIRER_STYLE).execute() or ""
 
 
 # ---------------------------------------------------------------------------
@@ -54,6 +144,86 @@ def _parse_file(path: Path) -> str:
         doc = docx.Document(path)
         return "\n".join(p.text for p in doc.paragraphs)
     return path.read_text(errors="replace")
+
+
+# ---------------------------------------------------------------------------
+# LinkedIn URL scraper
+# ---------------------------------------------------------------------------
+
+def _scrape_linkedin_url(url: str, console) -> str:
+    """Fetch a LinkedIn profile URL and return extracted plain text.
+
+    Uses the li_at session cookie from .env. Returns empty string on any failure
+    so the caller can continue without supplementary text.
+    """
+    li_at = os.getenv("LINKEDIN_COOKIE", "").strip()
+    if not li_at:
+        console.print(
+            "  [yellow]⚠[/yellow]  LINKEDIN_COOKIE not set in .env — skipping LinkedIn scrape.\n"
+            "  [dim]Add li_at cookie value to .env to enable this.[/dim]\n"
+        )
+        return ""
+
+    try:
+        import requests
+        from bs4 import BeautifulSoup
+    except ImportError as _e:
+        console.print(
+            f"  [yellow]⚠[/yellow]  Missing dep ({_e}) — run: pip install requests beautifulsoup4\n"
+        )
+        return ""
+
+    # Normalise URL — strip trailing slash, query params
+    url = url.split("?")[0].rstrip("/")
+    if not url.startswith("http"):
+        url = "https://" + url
+
+    headers = {
+        "cookie": f"li_at={li_at}",
+        "user-agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "accept-language": "en-US,en;q=0.9",
+    }
+
+    try:
+        with console.status("  [dim]Fetching LinkedIn profile…[/dim]"):
+            resp = requests.get(url, headers=headers, timeout=15)
+    except Exception as exc:
+        console.print(f"  [yellow]⚠[/yellow]  LinkedIn fetch failed ({exc}) — skipping.\n")
+        return ""
+
+    if resp.status_code == 401 or resp.status_code == 403:
+        console.print(
+            f"  [yellow]⚠[/yellow]  LinkedIn returned {resp.status_code} — "
+            "session cookie may be expired. Skipping.\n"
+            "  [dim]Refresh LINKEDIN_COOKIE in .env (DevTools → Application → Cookies → li_at).[/dim]\n"
+        )
+        return ""
+    if resp.status_code != 200:
+        console.print(f"  [yellow]⚠[/yellow]  LinkedIn returned {resp.status_code} — skipping.\n")
+        return ""
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    for tag in soup(["script", "style", "noscript", "svg", "img"]):
+        tag.decompose()
+    text = soup.get_text(separator=" ", strip=True)
+
+    if len(text) < 200:
+        console.print(
+            "  [yellow]⚠[/yellow]  LinkedIn page returned very little text "
+            "(may require browser login). Skipping.\n"
+        )
+        return ""
+
+    console.print(
+        f"  [green]✓[/green]  LinkedIn profile fetched "
+        f"[dim]({len(text):,} characters)[/dim]\n"
+    )
+    return text[:8_000]   # cap at 8k chars — enough for extraction, stays within token budget
 
 
 # ---------------------------------------------------------------------------
@@ -229,80 +399,120 @@ def _extract_with_claude(api_key: str, text: str, user_context: str = "") -> dic
 # Rich display helpers
 # ---------------------------------------------------------------------------
 
-def _show_profile(profile: dict, console):
+def _show_profile(profile: dict):
     from rich.table import Table
     from rich.panel import Panel
     from rich import box as rich_box
 
-    c   = profile.get("candidate", {})
-    t   = profile.get("target", {})
-    asp = profile.get("aspirations", {})
+    c    = profile.get("candidate", {})
+    t    = profile.get("target", {})
+    asp  = profile.get("aspirations", {})
     pref = profile.get("preferences", {})
+    scr  = profile.get("scoring", {})
 
     # expand=True makes the table fill available panel width so text wraps
     # instead of overflowing the terminal edge.
     tbl = Table(show_header=False, box=None, padding=(0, 2), expand=True)
-    tbl.add_column(style="dim", min_width=16, no_wrap=True, max_width=22)
+    tbl.add_column(style="dim", min_width=18, no_wrap=True, max_width=22)
     tbl.add_column(overflow="fold")
 
+    def _sep(label: str):
+        tbl.add_row(f"[dim]── {label}[/dim]", "")
+
+    # ── Identity ────────────────────────────────────────────
+    _sep("Identity")
     tbl.add_row("Name",     c.get("name", "—"))
     tbl.add_row("Location", c.get("location", "—"))
-
     loc_pref = c.get("location_preference")
     if loc_pref:
-        _lbl = {"remote": "remote only", "local": "local / open to onsite", "flexible": "flexible"}
+        _lbl = {
+            "remote":   "remote only",
+            "local":    "local / open to onsite",
+            "relocate": "open to relocation",
+            "flexible": "flexible",
+        }
         remote_str = _lbl.get(loc_pref, loc_pref)
     else:
-        remote_str = "yes" if c.get("open_to_remote") else "no"
+        remote_str = "remote OK" if c.get("open_to_remote") else "onsite"
     reloc = c.get("open_to_relocation") or []
     if reloc:
         remote_str += f"  [dim]· relocation: {', '.join(reloc)}[/dim]"
-    tbl.add_row("Location", remote_str)
+    tbl.add_row("Work pref", remote_str)
 
-    tbl.add_row("Target roles", "\n".join(t.get("roles", [])) or "—")
-    tbl.add_row("Level",        t.get("level", "—"))
-
+    # ── Target ──────────────────────────────────────────────
+    _sep("Target")
+    tbl.add_row("Roles",    ", ".join(t.get("roles", [])) or "—")
+    tbl.add_row("Level",    t.get("level", "—"))
     if asp.get("track"):
         tbl.add_row("Track", asp["track"])
     if asp.get("direction"):
         first = asp["direction"].strip().splitlines()[0][:80]
-        tbl.add_row("Direction", first)
-    if asp.get("company_types"):
-        tbl.add_row("Drawn to", "\n".join(asp["company_types"]))
-
-    pref_parts = []
+        tbl.add_row("Direction", first + ("[dim]…[/dim]" if len(asp["direction"]) > 80 else ""))
+    if pref.get("industry_targets"):
+        tbl.add_row("Industries", ", ".join(pref["industry_targets"]))
     if pref.get("company_stage"):
-        pref_parts.append(f"stage: {', '.join(pref['company_stage'])}")
-    if pref_parts:
-        tbl.add_row("Preferences", "\n".join(pref_parts))
+        tbl.add_row("Stage pref", ", ".join(pref["company_stage"]))
 
+    # ── Constraints ─────────────────────────────────────────
+    _sep("Constraints")
     dbs = profile.get("deal_breakers", [])
     tbl.add_row("Deal-breakers", "\n".join(dbs) if dbs else "[dim]none set[/dim]")
-
-    gf = profile.get("green_flags", [])
-    if gf:
-        gf_text = gf[0] + (f"\n[dim]… and {len(gf)-1} more[/dim]" if len(gf) > 1 else "")
-        tbl.add_row("Green flags", gf_text)
-
-    strengths = profile.get("strengths", [])
-    if strengths:
-        s_text = strengths[0] + (f"\n[dim]… and {len(strengths)-1} more[/dim]" if len(strengths) > 1 else "")
-        tbl.add_row("Strengths", s_text)
-
     salary = profile.get("salary_floor_usd")
     if salary:
         tbl.add_row("Salary floor", f"${salary:,}")
 
+    # ── Strengths ────────────────────────────────────────────
+    strengths = profile.get("strengths", [])
+    if strengths:
+        _sep("Strengths")
+        s_text = "\n".join(strengths[:3])
+        if len(strengths) > 3:
+            s_text += f"\n[dim]… and {len(strengths)-3} more[/dim]"
+        tbl.add_row("Strengths", s_text)
+
+    # ── Green flags / environment ─────────────────────────────
+    gf = profile.get("green_flags", [])
+    co = asp.get("company_types") or []
+    if gf or co:
+        _sep("Green flags")
+        if co:
+            tbl.add_row("Drawn to", "\n".join(co))
+        if gf:
+            gf_text = "\n".join(gf[:2])
+            if len(gf) > 2:
+                gf_text += f"\n[dim]… and {len(gf)-2} more[/dim]"
+            tbl.add_row("Boost signals", gf_text)
+
+    # ── Gaps ─────────────────────────────────────────────────
+    yf = profile.get("yellow_flags", [])
+    rf = profile.get("red_flags", [])
+    if yf or rf:
+        _sep("Gaps")
+        if yf:
+            tbl.add_row("Yellow flags", "\n".join(yf[:2]) + (f"\n[dim]… and {len(yf)-2} more[/dim]" if len(yf) > 2 else ""))
+        if rf:
+            tbl.add_row("Red flags",    "\n".join(rf[:2]) + (f"\n[dim]… and {len(rf)-2} more[/dim]" if len(rf) > 2 else ""))
+
+    # ── Scoring config ───────────────────────────────────────
+    if scr:
+        _sep("Scoring config")
+        if scr.get("apply_threshold") is not None:
+            tbl.add_row("Apply ≥",    str(scr["apply_threshold"]))
+        if scr.get("consider_threshold") is not None:
+            tbl.add_row("Consider ≥", str(scr["consider_threshold"]))
+
+    # ── Scoring overrides ────────────────────────────────────
     notes = (profile.get("notes") or "").strip()
     if notes:
+        _sep("Scoring overrides")
         first_line = notes.splitlines()[0][:80]
-        tbl.add_row("Scoring notes", first_line + ("[dim]…[/dim]" if len(notes) > len(first_line) else ""))
+        tbl.add_row("Overrides", first_line + ("[dim]…[/dim]" if len(notes) > len(first_line) else ""))
 
     console.print(Panel(
         tbl,
-        title="[bold green]Extracted profile[/bold green]",
+        title="[bold]Extracted profile[/bold]",
         subtitle="[dim]review below — nothing saved yet[/dim]",
-        border_style="green",
+        border_style="dim",
         box=rich_box.ROUNDED,
         padding=(1, 2),
     ))
@@ -312,58 +522,100 @@ def _show_profile(profile: dict, console):
 # Preferences collection — Step 3
 # Three focused sub-functions, merged by _collect_preferences.
 #
-# Design rule: use print() (not console.print()) for any text printed
-# *between* questionary prompts — mixing Rich ANSI and prompt_toolkit
-# mid-sequence causes cursor-tracking bugs on terminal resize.
-# console.print() is safe only before or after a full prompt sequence.
-# Also: no instruction= on questionary.text() — it forces prompt_toolkit
-# to recalculate layout on every keypress, causing duplication on resize.
+# All prompts use the _ask/_ask_select/_ask_checkbox helpers defined above,
+# which enforce the spacing rule (0 blank lines within a block, 1 between)
+# and consistent "  › " pointer alignment.
 # ---------------------------------------------------------------------------
 
-def _collect_hard_filters(Q_STYLE) -> dict:
-    import questionary
+def _collect_goals(Q_STYLE=None) -> dict:
+    """Step 2 — what you want: target roles, career path, direction, domain, stage."""
+    from InquirerPy.base.control import Choice as IChoice
 
-    print()
-    print("  Hard filters  — these disqualify or cap a role's score")
-    print("  ──────────────────────────────────────────────────────")
-    print()
-    print("  Target roles: be aspirational (e.g. Staff PM, Principal PM, Director of Product)")
+    target_roles = _ask(
+        "Target roles",
+        hint="Enter role titles you're targeting next, separated by commas.",
+        examples="Staff Content Designer, Principal Content Designer, Developer Experience Lead",
+    )
 
-    target_roles = questionary.text("  Target roles:", style=Q_STYLE).ask() or ""
-
-    print()
-    print("  Location preference:")
-    location_preference = questionary.select(
-        "  Where do you need to work?",
+    track = _ask_select(
+        "Career track",
+        hint="Select the path you want scorerole to favor.",
         choices=[
-            questionary.Choice("Remote — not willing to relocate",               value="remote"),
-            questionary.Choice("Local or willing to relocate — open to onsite",  value="local"),
-            questionary.Choice("Flexible — either works",                        value="flexible"),
+            IChoice(name="Senior IC — Staff / Principal / Distinguished", value="ic"),
+            IChoice(name="Management — Director / VP / Head of",          value="management"),
+            IChoice(name="Flexible — evaluate both IC and management roles", value="flexible"),
         ],
-        style=Q_STYLE,
-    ).ask() or "flexible"
+    ) or "flexible"
 
-    print()
-    print("  Relocation: leave blank = current location only")
-    relocation = questionary.checkbox(
-        "  Open to relocating to:",
-        choices=_RELOCATION_CITIES,
-        style=Q_STYLE,
-    ).ask() or []
+    direction = _ask(
+        "Career aspiration",
+        hint="1–3 sentences on the kind of work you want next.  Press Enter to skip.",
+        examples="Developer platforms for AI products — CLI, API, SDK, docs systems.",
+    )
 
-    print()
-    print("  Deal-breakers: hard no's, comma-separated (e.g. no equity, on-site 5d/wk)")
-    deal_breakers = questionary.text("  Deal-breakers:", style=Q_STYLE).ask() or ""
+    industry_targets = _ask(
+        "Preferred industries",
+        hint="Enter industries scorerole should prioritize.  Use commas for multiple.  Press Enter to skip.",
+        examples="healthcare, developer tools, AI infrastructure",
+    )
 
-    print()
-    print("  Min. base salary: enter a number like 150000 or 150,000  (leave blank to skip)")
+    company_stage = _ask_checkbox(
+        "Preferred company stage",
+        hint="Used for ranking, not exclusion.  Space to toggle  ·  Enter to confirm",
+        choices=["Seed / Series A", "Growth (Series B–D)", "Late-stage / pre-IPO", "Public / enterprise"],
+    )
+
+    domain_flex = _ask_select(
+        "Domain match weighting",
+        hint="Choose how strongly scorerole should penalize roles outside your past domains.",
+        choices=[
+            IChoice(name="Transferable — adjacent experience counts strongly; small penalty for domain gaps", value="flexible"),
+            IChoice(name="Balanced — domain gaps matter, but strong role fit can compensate  (default)",     value="moderate"),
+            IChoice(name="Specialist — prioritize close domain matches; larger penalty for gaps",             value="strict"),
+        ],
+    ) or "moderate"
+
+    return {
+        "target_roles":     [r.strip() for r in target_roles.split(",") if r.strip()],
+        "track":            track,
+        "direction":        direction.strip(),
+        "industry_targets": [i.strip() for i in industry_targets.split(",") if i.strip()],
+        "company_types":    [],  # inferred from direction + stage, not asked explicitly
+        "company_stage":    company_stage,
+        "domain_flex":      domain_flex,
+    }
+
+
+def _collect_hard_constraints(Q_STYLE=None) -> dict:
+    """Step 3 — hard constraints: location and minimum salary."""
+    from InquirerPy.base.control import Choice as IChoice
+
+    location_preference = _ask_select(
+        "Where do you prefer to work?",
+        choices=[
+            IChoice(name="Remote — no office required, not open to relocation",   value="remote"),
+            IChoice(name="Local — onsite or hybrid in my current city",            value="local"),
+            IChoice(name="Open to relocating — willing to move for the right role", value="relocate"),
+            IChoice(name="Flexible — any arrangement works",                       value="flexible"),
+        ],
+    ) or "flexible"
+
+    relocation: list[str] = []
+    if location_preference in ("relocate", "flexible"):
+        relocation = _ask_checkbox(
+            "Open to relocating to",
+            choices=_RELOCATION_CITIES,
+        )
+
     salary_floor = ""
     while True:
-        raw_salary = questionary.text("  Min. base salary (USD):", style=Q_STYLE).ask() or ""
+        raw_salary = _ask(
+            "Min. base salary (USD)",
+            "Enter a number like 150000 or 150k  ·  leave blank to skip",
+        )
         cleaned = raw_salary.replace(",", "").replace("$", "").strip()
         if not cleaned:
             break
-        # Reject shorthand like "150k" — int() would silently fail downstream
         if cleaned.lower().endswith("k"):
             try:
                 salary_floor = str(int(float(cleaned[:-1]) * 1000))
@@ -374,139 +626,94 @@ def _collect_hard_filters(Q_STYLE) -> dict:
             salary_floor = str(int(cleaned))
             break
         except ValueError:
-            print(f"  ⚠  Couldn't parse '{raw_salary}' as a number. "
-                  f"Try: 150000 or 150,000  (leave blank to skip)")
+            console.print(f"  [yellow]⚠[/yellow]  Couldn't parse '{raw_salary}' as a number. "
+                          "Try: 150000 or 150k  (leave blank to skip)")
 
     return {
-        "target_roles":        [r.strip() for r in target_roles.split(",") if r.strip()],
         "location_preference": location_preference,
         "relocation_cities":   relocation,
-        "deal_breakers":       [d.strip() for d in deal_breakers.split(",") if d.strip()],
         "salary_floor":        salary_floor,
     }
 
 
-def _collect_aspirations(Q_STYLE) -> dict:
-    import questionary
-
-    print()
-    print("  Aspirations  — where you're headed, not just where you've been")
-    print("  ────────────────────────────────────────────────────────────────")
-    print()
-
-    track = questionary.select(
-        "  Career track:",
-        choices=[
-            questionary.Choice("IC-focused  (Staff / Principal / Distinguished)", value="ic"),
-            questionary.Choice("Management  (Director / VP / C-suite)",            value="management"),
-            questionary.Choice("Flexible — open to both",                          value="flexible"),
-        ],
-        style=Q_STYLE,
-    ).ask() or "flexible"
-
-    print()
-    print("  Career direction: 2-3 sentences on where you want to go and why")
-    direction = questionary.text("  Career direction:", style=Q_STYLE).ask() or ""
-
-    print()
-    print("  Company types: e.g. AI-native startup, enterprise SaaS with applied science team")
-    company_types = questionary.text("  Company types drawn to:", style=Q_STYLE).ask() or ""
-
-    return {
-        "track":         track,
-        "direction":     direction.strip(),
-        "company_types": [c.strip() for c in company_types.split(",") if c.strip()],
-    }
-
-
-def _collect_soft_preferences(Q_STYLE) -> dict:
-    import questionary
-
-    print()
-    print("  Soft preferences  — adjust ranking, not hard filters")
-    print("  ─────────────────────────────────────────────────────")
-    print()
-
-    company_stage = questionary.checkbox(
-        "  Company stage:",
-        choices=["Seed / Series A", "Growth (Series B–D)", "Late-stage / pre-IPO", "Public / enterprise"],
-        style=Q_STYLE,
-    ).ask() or []
-
-    print()
-    print("  Industries to move toward: may differ from your past, comma-separated")
-    industry_targets = questionary.text("  Industries to move toward:", style=Q_STYLE).ask() or ""
-
-    print()
-    print("  Domain flexibility: how should scorerole treat roles outside your core domain?")
-    domain_flex = questionary.select(
-        "  Domain experience gaps:",
-        choices=[
-            questionary.Choice(
-                "Flexible — credit transferable skills; domain gaps are friction, not dealbreakers",
-                value="flexible",
-            ),
-            questionary.Choice(
-                "Moderate — penalise significant domain gaps but don't disqualify",
-                value="moderate",
-            ),
-            questionary.Choice(
-                "Strict — only score highly if I have direct domain experience",
-                value="strict",
-            ),
-        ],
-        style=Q_STYLE,
-    ).ask() or "moderate"
-
-    print()
-    print("  Anything else Claude should know? e.g. 'Staff-scope despite Senior title'")
-    calibration = questionary.text("  Anything else:", style=Q_STYLE).ask() or ""
-
-    return {
-        "company_stage":    company_stage,
-        "industry_targets": [i.strip() for i in industry_targets.split(",") if i.strip()],
-        "domain_flex":      domain_flex,
-        "calibration":      calibration.strip(),
-    }
-
-
-def _collect_preferences(console, Q_STYLE) -> dict:
-    """Orchestrate the three preference sub-steps and merge results."""
-    console.print()
-    console.print("[dim]  Step 3 of 4 — Your preferences[/dim]")
-    console.print("[dim]  ─────────────────────────────────[/dim]")
-    console.print()
-    console.print(
-        "  Your resume shows [italic]what you've done.[/italic]  "
-        "These questions capture [italic]where you're headed[/italic]\n"
-        "  and your personal rules — things Claude can't reliably infer.\n"
+def _collect_deal_breakers(Q_STYLE=None) -> dict:
+    """Step 3c — absolute walk-away rules."""
+    deal_breakers = _ask(
+        "Deal-breakers",
+        "Comma-separated  ·  e.g. no equity, on-site 5d/wk, no AI/ML surface",
     )
+    return {
+        "deal_breakers": [d.strip() for d in deal_breakers.split(",") if d.strip()],
+    }
 
-    hard = _collect_hard_filters(Q_STYLE)
-    # ── Summary line after hard filters ─────────────────────────────────────
-    _roles_str = ", ".join(hard["target_roles"][:2]) + ("…" if len(hard["target_roles"]) > 2 else "")
-    _loc_str   = {"remote": "remote only", "local": "local/onsite OK", "flexible": "flexible"}.get(hard.get("location_preference", "flexible"), "flexible")
-    _sal_str   = f"  ·  ${hard['salary_floor']} floor" if hard.get("salary_floor") else ""
-    _db_str    = f"  ·  {len(hard['deal_breakers'])} deal-breaker{'s' if len(hard['deal_breakers']) != 1 else ''}" if hard.get("deal_breakers") else ""
-    print()
-    print(f"  ✓  Hard filters  ·  {_roles_str or '—'}  ·  {_loc_str}{_sal_str}{_db_str}")
 
-    asp = _collect_aspirations(Q_STYLE)
-    # ── Summary line after aspirations ──────────────────────────────────────
-    _track_label = {"ic": "IC track", "management": "Management track", "flexible": "Flexible"}.get(asp["track"], asp["track"])
-    _co_str = ", ".join(asp["company_types"][:2]) + ("…" if len(asp["company_types"]) > 2 else "") if asp["company_types"] else ""
-    print()
-    print(f"  ✓  Aspirations  ·  {_track_label}" + (f"  ·  {_co_str}" if _co_str else ""))
+def _collect_overrides(Q_STYLE) -> dict:
+    """Scoring overrides — skipped in the main wizard flow; available in the review menu."""
+    return {"calibration": ""}
 
-    soft = _collect_soft_preferences(Q_STYLE)
-    # ── Summary line after soft preferences ─────────────────────────────────
-    _stage_str = ", ".join(soft["company_stage"]) if soft["company_stage"] else "any stage"
-    _ind_str   = ", ".join(soft["industry_targets"][:2]) + ("…" if len(soft["industry_targets"]) > 2 else "") if soft["industry_targets"] else ""
-    print()
-    print(f"  ✓  Preferences  ·  {_stage_str}" + (f"  ·  {_ind_str}" if _ind_str else ""))
-    print()
 
-    return {**hard, **asp, **soft}
+def _collect_preferences(Q_STYLE) -> dict:
+    """Orchestrate preference collection: what you want → hard constraints → deal-breakers."""
+    console.print()
+    print_section("Step 2 of 4", "Target roles + aspirations", "— what you want")
+    console.print()
+    print_section_intro(
+        "Your resume and LinkedIn show your past experience and competencies. "
+        "This section captures your next-step goals so scorerole can rank roles "
+        "based on what you want, not only what you've already done.",
+        ctrl_hint=True,
+    )
+    console.print()  # double blank before first question
+
+    try:
+        goals = _collect_goals(Q_STYLE)
+        _track_label = {"ic": "IC track", "management": "Management", "flexible": "Flexible"}.get(goals["track"], goals["track"])
+        _roles_str   = ", ".join(goals["target_roles"][:2]) + ("…" if len(goals["target_roles"]) > 2 else "")
+        _ind_str     = ", ".join(goals["industry_targets"][:2]) + ("…" if len(goals["industry_targets"]) > 2 else "") if goals["industry_targets"] else ""
+        console.print()
+        print_confirmed("What you want", f"{_roles_str or '—'}  ·  {_track_label}", _ind_str)
+        console.print()  # success sandwich — buffer before next section
+        print_separator()
+
+        print_section("Step 3 of 4", "Constraints + deal-breakers", "— what to exclude")
+        console.print()
+        print_section_intro(
+            "Hard filters — roles below these thresholds are excluded, not just ranked lower.",
+        )
+        console.print()  # double blank before first question
+        constraints = _collect_hard_constraints(Q_STYLE)
+        _loc_str = {"remote": "remote only", "local": "local/onsite OK", "relocate": "open to relocation", "flexible": "flexible"}.get(constraints["location_preference"], "flexible")
+        _sal_meta = f"${constraints['salary_floor']} floor" if constraints.get("salary_floor") else ""
+        console.print()
+        print_confirmed("Hard constraints", _loc_str, _sal_meta)
+
+        dbs = _collect_deal_breakers(Q_STYLE)
+        _db_n = len(dbs["deal_breakers"])
+        print_confirmed("Deal-breakers", f"{_db_n} rule{'s' if _db_n != 1 else ''}" if _db_n else "none")
+        console.print()  # success sandwich before next section
+
+        overrides = _collect_overrides(Q_STYLE)
+        console.print()
+
+    except KeyboardInterrupt:
+        console.print()
+        try:
+            save_now = _ask_confirm(
+                "Exit preferences early? (Extraction will use whatever you entered so far)",
+                default=True,
+            )
+        except KeyboardInterrupt:
+            save_now = True
+        if not save_now:
+            sys.exit(0)
+        # Return whatever was collected — missing keys get safe defaults in _apply_prefs_to_profile
+        collected = {}
+        for d in [locals().get("goals", {}), locals().get("constraints", {}),
+                  locals().get("dbs", {}), locals().get("overrides", {})]:
+            collected.update(d)
+        return collected
+
+    return {**goals, **constraints, **dbs, **overrides}
 
 
 def _format_user_context(prefs: dict) -> str:
@@ -517,7 +724,12 @@ def _format_user_context(prefs: dict) -> str:
     if prefs.get("target_roles"):
         lines.append(f"Target roles: {', '.join(prefs['target_roles'])}")
     _loc = prefs.get("location_preference", "flexible")
-    _loc_labels = {"remote": "remote only", "local": "local / open to onsite", "flexible": "flexible"}
+    _loc_labels = {
+        "remote":   "remote only — no relocation",
+        "local":    "local / open to onsite in current city",
+        "relocate": "open to relocation",
+        "flexible": "flexible on location",
+    }
     lines.append(f"Location preference: {_loc_labels.get(_loc, _loc)}")
     reloc = prefs.get("relocation_cities") or []
     if reloc:
@@ -567,7 +779,10 @@ def _apply_prefs_to_profile(profile: dict, prefs: dict) -> None:
     loc_pref = prefs.get("location_preference")
     if loc_pref:
         cand = profile.setdefault("candidate", {})
-        cand["location_preference"] = loc_pref
+        # "relocate" is the wizard value; normalise to "local" for profile storage
+        # (profile.py renders "local" as "local / open to onsite")
+        stored_pref = "local" if loc_pref == "relocate" else loc_pref
+        cand["location_preference"] = stored_pref
         cand["open_to_remote"] = loc_pref in ("remote", "flexible")
     elif prefs.get("work_mode"):
         # Legacy path: old wizard ran and produced work_mode list
@@ -655,14 +870,18 @@ def _apply_prefs_to_profile(profile: dict, prefs: dict) -> None:
 # Proactive sources wizard
 # ---------------------------------------------------------------------------
 
-def _run_proactive_sources_wizard(profile: dict, console, Q_STYLE=None):
+def _run_proactive_sources_wizard(profile: dict, Q_STYLE=None):
     """Wizard step that configures proactive company scraping in profile['proactive_sources']."""
     try:
-        import questionary
+        from InquirerPy.base.control import Choice as IChoice
     except ImportError:
         return  # non-interactive env; skip silently
 
-    from .sources.proactive import count_companies, estimate_monthly_cost
+    try:
+        from .sources.proactive import count_companies, estimate_monthly_cost
+    except (ImportError, ModuleNotFoundError) as e:
+        log.debug("proactive sources not available (%s) — skipping wizard", e)
+        return
 
     n_sa   = count_companies(["S", "A"])
     n_sab  = count_companies(["S", "A", "B"])
@@ -681,30 +900,6 @@ def _run_proactive_sources_wizard(profile: dict, console, Q_STYLE=None):
         f"  Currently [bold]{n_all}[/bold] companies are available across 4 tiers (Anthropic, Figma, Stripe…)\n"
         f"  Based on your profile, we'll filter for: [italic]{target_roles}[/italic]"
     )
-    console.print()
-
-    choices = [
-        questionary.Choice(
-            f"S + A tier only  ({n_sa} companies, +{cost_sa} est.)",
-            value="SA",
-        ),
-        questionary.Choice(
-            f"S + A + B tier   ({n_sab} companies, +{cost_sab} est.)  — broader coverage",
-            value="SAB",
-        ),
-        questionary.Choice(
-            "Add specific companies  (you pick from a list or enter names)",
-            value="custom",
-        ),
-        questionary.Choice(
-            "Other  (describe what you want — free text)",
-            value="other",
-        ),
-        questionary.Choice(
-            "Skip  (LinkedIn alerts only, no extra cost)",
-            value="skip",
-        ),
-    ]
 
     # Pre-select based on existing config
     default_val = "skip"
@@ -717,11 +912,17 @@ def _run_proactive_sources_wizard(profile: dict, console, Q_STYLE=None):
         else:
             default_val = "SA"
 
-    answer = questionary.select(
-        "  Which companies should we check each run?",
-        choices=choices,
-        default=next((c for c in choices if c.value == default_val), choices[0]),
-    ).ask()
+    answer = _ask_select(
+        "Which companies should we check each run?",
+        choices=[
+            IChoice(name=f"S + A tier only  ({n_sa} companies, +{cost_sa} est.)",              value="SA"),
+            IChoice(name=f"S + A + B tier   ({n_sab} companies, +{cost_sab} est.)  — broader", value="SAB"),
+            IChoice(name="Add specific companies  (you pick from a list or enter names)",        value="custom"),
+            IChoice(name="Other  (describe what you want — free text)",                          value="other"),
+            IChoice(name="Skip  (LinkedIn alerts only, no extra cost)",                          value="skip"),
+        ],
+        default=default_val,
+    )
 
     if answer is None or answer == "skip":
         profile["proactive_sources"] = {"enabled": False}
@@ -747,16 +948,14 @@ def _run_proactive_sources_wizard(profile: dict, console, Q_STYLE=None):
         console.print(f"  [green]✓[/green]  Proactive sources enabled: S + A + B tier ({n_sab} companies)")
 
     elif answer == "custom":
-        _configure_custom_companies(profile, existing, console)
+        _configure_custom_companies(profile, existing)
 
     elif answer == "other":
-        freeform = questionary.text(
-            "  Describe what you want (e.g. 'only Anthropic and Stripe', "
-            "'all S-tier plus Notion and Ramp'):",
-            style=Q_STYLE,
-        ).ask()
+        freeform = _ask(
+            "Describe what you want",
+            "e.g. 'only Anthropic and Stripe', 'all S-tier plus Notion and Ramp'",
+        )
         if freeform:
-            # Store as a note and default to S+A — user can edit profile.yaml directly
             profile["proactive_sources"] = {
                 "enabled": True,
                 "tiers": ["S", "A"],
@@ -775,10 +974,10 @@ def _run_proactive_sources_wizard(profile: dict, console, Q_STYLE=None):
     )
 
 
-def _configure_custom_companies(profile: dict, existing: dict, console):
+def _configure_custom_companies(profile: dict, existing: dict):
     """Sub-wizard for the 'Add specific companies' path."""
     try:
-        import questionary
+        from InquirerPy.base.control import Choice as IChoice
     except ImportError:
         return
 
@@ -796,20 +995,20 @@ def _configure_custom_companies(profile: dict, existing: dict, console):
     existing_extras = {c.get("name", "") for c in (existing.get("extra_companies") or [])}
 
     choices = [
-        questionary.Choice(
-            f"[{c['tier']}] {c['name']} ({c.get('ats', '?')})",
+        IChoice(
+            name=f"[{c['tier']}] {c['name']} ({c.get('ats', '?')})",
             value=c["name"],
-            checked=(c.get("tier") in existing_tiers or c["name"] in existing_extras),
+            enabled=(c.get("tier") in existing_tiers or c["name"] in existing_extras),
         )
         for c in sorted(all_companies, key=lambda x: (x.get("tier", "Z"), x.get("name", "")))
     ]
 
-    selected = questionary.checkbox(
-        "  Select companies to include (space to toggle, enter to confirm):",
+    selected = _ask_checkbox(
+        "Select companies to include",
         choices=choices,
-    ).ask()
+    )
 
-    if selected is None:
+    if not selected:
         return
 
     known_names = set(selected)
@@ -839,27 +1038,23 @@ def _configure_custom_companies(profile: dict, existing: dict, console):
 
 def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str = ""):
     try:
-        import questionary
         import yaml
-        from questionary import Style as QStyle
-        from rich.console import Console
         from rich.panel import Panel
         from rich import box as rich_box
+        from InquirerPy.base.control import Choice as IChoice
+        from InquirerPy.separator import Separator as ISep
     except ImportError as e:
-        sys.exit(f"❌  Missing dependency: {e}\n    Run: pip install questionary rich")
+        sys.exit(f"❌  Missing dependency: {e}\n    Run: pip install InquirerPy rich pyyaml")
 
-    Q_STYLE = QStyle([
-        ("qmark",       "fg:#57a55a bold"),
-        ("question",    "bold"),
-        ("answer",      "fg:#57a55a bold"),
-        ("pointer",     "fg:#57a55a bold"),
-        ("highlighted", "fg:#57a55a bold"),
-        ("selected",    "fg:#57a55a"),
-        ("instruction", "fg:#6c6c6c"),
-        ("separator",   "fg:#6c6c6c"),
-    ])
+    cols = shutil.get_terminal_size().columns
+    if cols < 80:
+        console.print(
+            f"\n  Terminal too narrow (currently {cols} cols). "
+            "Resize to at least 80 cols and rerun.\n"
+        )
+        sys.exit(1)
 
-    console = Console()
+    Q_STYLE = QUESTIONARY_STYLE  # kept for schedule_cmd compatibility
 
     # State — full wizard populates these; quick/update_prefs paths set them directly.
     full_text       = ""
@@ -882,22 +1077,21 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
         console.print(Panel(
             "[bold]Profile found[/bold]  [dim]· last updated " + mod_time + "[/dim]"
             + (f"\n  {cand_name}" if cand_name else ""),
-            border_style="green",
+            border_style="dim",
             box=rich_box.ROUNDED,
             padding=(1, 3),
         ))
         console.print()
 
-        mode = questionary.select(
-            "  What do you want to do?",
+        mode = _ask_select(
+            "What do you want to do?",
             choices=[
-                questionary.Choice("Quick edits   — jump to review menu, no re-extraction",  value="quick"),
-                questionary.Choice("Open in editor — edit profile.yaml directly",             value="editor"),
-                questionary.Choice("Start fresh   — new resume, full re-extraction",          value="full"),
-                questionary.Choice("Exit",                                                    value="exit"),
+                IChoice(name="Quick edits    — jump to review menu, no re-extraction", value="quick"),
+                IChoice(name="Open in editor — edit profile.yaml directly",             value="editor"),
+                IChoice(name="Start fresh    — new resume, full re-extraction",         value="full"),
+                IChoice(name="Exit",                                                    value="exit"),
             ],
-            style=Q_STYLE,
-        ).ask()
+        )
 
         if mode is None or mode == "exit":
             sys.exit(0)
@@ -910,38 +1104,43 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
             profile = existing
             skip_extraction = True
             console.print()
-            _show_profile(profile, console)
+            _show_profile(profile)
             console.print()
 
         # mode == "full" falls through to the full wizard below
 
     if not skip_extraction:
         # ── Welcome ──────────────────────────────────────────────────────────
+        from rich.style import Style as _RStyle
+        from .theme import THEME as _T
         console.print()
+        _panel_width = min(88, shutil.get_terminal_size().columns)
         console.print(Panel(
             "[bold]Let's build your scorerole profile![/bold]\n\n"
-            "The more context you provide, the better we can filter and\n"
+            "The more context you provide, the better scorerole can filter and\n"
             "score roles against your background.\n\n"
-            "  [dim]1.[/dim]  Point us to your resume (PDF, DOCX, or TXT)\n"
-            "  [dim]2.[/dim]  Optionally add your LinkedIn profile\n"
-            "  [dim]3.[/dim]  Tell us about your aspirations, deal-breakers,\n"
-            "       and preferences\n"
-            "  [dim]4.[/dim]  Review and tweak the final profile before saving\n\n"
-            "[dim]It takes about 2 mins.  Run `scorerole init` anytime to update.[/dim]",
-            border_style="dim",
+            f"  [{THEME['accent']} bold]1.[/]  [bold]Resume + LinkedIn[/bold]  [{THEME['dim']}]— who you are[/]\n"
+            f"  [{THEME['accent']} bold]2.[/]  [bold]Target roles + aspirations[/bold]  [{THEME['dim']}]— what you want[/]\n"
+            f"  [{THEME['accent']} bold]3.[/]  [bold]Constraints + deal-breakers[/bold]  [{THEME['dim']}]— what to exclude[/]\n"
+            f"  [{THEME['accent']} bold]4.[/]  [bold]Scoring preferences[/bold]  [{THEME['dim']}]— how to rank tradeoffs[/]\n\n"
+            f"[{THEME['dim']}]Takes about 5 mins.  Run `scorerole init` anytime to update.[/]",
+            style=_RStyle(bgcolor=_T["welcome_bg"]),
+            border_style=_RStyle(color=_T["accent"]),
             box=rich_box.ROUNDED,
             padding=(1, 3),
+            width=_panel_width,
         ))
 
-        # ── Step 1: Resume ───────────────────────────────────────────────────
+        # ── Step 1 of 4: Resume + LinkedIn (who you are) ────────────────────
         console.print()
-        console.print("[dim]  Step 1 of 4 — Resume[/dim]")
-        console.print("[dim]  ─────────────────────[/dim]")
+        print_section("Step 1 of 4", "Resume + LinkedIn", "— who you are")
         console.print()
-        console.print(
-            "  [dim]Accepted: PDF, DOCX, TXT/MD"
-            "   ·   Tip: drag the file into this window to paste its path.[/dim]\n"
+        print_section_intro(
+            "Upload your resume so scorerole can extract your experience, skills, and background. "
+            "Adding your LinkedIn profile URL supplements this with endorsements and additional context.",
+            ctrl_hint=True,
         )
+        console.print()  # double blank before first question
 
         resume_path = None
         if resume_path_arg:
@@ -954,83 +1153,88 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
                 resume_path = p
 
         while not resume_path:
-            raw = questionary.path("  Path to your resume:", style=Q_STYLE).ask()
-            if raw is None:
+            raw = _ask_filepath(
+                "Path to your resume",
+                "PDF, DOCX, or TXT  ·  Tip: drag the file into this window to paste its path",
+            )
+            if not raw:
                 sys.exit(0)
             raw = raw.strip().strip("\"'").replace("\\ ", " ")
+
+            # Detect "two paths pasted together" — common drag-and-drop mishap
+            dupe = re.match(r'^(.+) \1$', raw)
+            if dupe:
+                console.print()
+                console.print(
+                    "[bold]File not found.[/bold]",
+                    style=Style(color=THEME["error"]),
+                )
+                console.print(
+                    f"  I read this as:\n    {raw}\n"
+                    "  This looks like two paths pasted together. "
+                    "Paste one full path and try again.",
+                    style=Style(color=THEME["dim"], italic=True),
+                )
+                console.print()
+                continue
+
             p = Path(raw).expanduser().resolve()
             if not p.exists():
-                console.print("  [red]File not found — try again.[/red]\n")
-            elif p.is_dir():
+                console.print()
+                console.print("[bold]File not found.[/bold]", style=Style(color=THEME["error"]))
                 console.print(
-                    "  [red]That's a folder, not a file.[/red]  "
-                    "Drag your resume [italic]file[/italic] into the terminal window.\n"
+                    f"  I read this as:\n    {p}\n  Check the path and try again.",
+                    style=Style(color=THEME["dim"], italic=True),
                 )
+                console.print()
+            elif p.is_dir():
+                console.print()
+                console.print("[bold]That's a folder, not a file.[/bold]", style=Style(color=THEME["error"]))
+                console.print(
+                    "  Drag your resume file into the terminal window to paste its path.",
+                    style=Style(color=THEME["dim"], italic=True),
+                )
+                console.print()
             else:
                 resume_path = p
 
         resume_text = _parse_file(resume_path)
         console.print(
             f"\n  [green]✓[/green]  {resume_path.name} "
-            f"[dim]({len(resume_text):,} characters)[/dim]\n"
+            f"[dim]({len(resume_text):,} characters)[/dim]"
         )
 
-        # ── Step 2: LinkedIn (optional) ──────────────────────────────────────
-        console.print("[dim]  Step 2 of 4 — LinkedIn (optional)[/dim]")
-        console.print("[dim]  ──────────────────────────────────[/dim]")
-        console.print()
-        console.print(
-            "  Your LinkedIn profile often contains skills, endorsements, and role details\n"
-            "  that resumes leave out. Adding it improves how well your profile matches roles.\n"
-        )
-
-        wants_linkedin = questionary.confirm(
-            "  Add your LinkedIn profile?", default=False, style=Q_STYLE
-        ).ask()
-
+        # LinkedIn — single URL prompt, no y/N gate (gate caused the double-advance bug)
+        print_separator()
         supp_text = ""
-        if wants_linkedin:
-            console.print()
-            console.print("  [dim]Export: LinkedIn → Me → Settings & Privacy → Data Privacy[/dim]")
-            console.print("  [dim]        → Get a copy of your data → Profile → Request archive[/dim]")
-            console.print("  [dim]        LinkedIn emails you a link (usually within minutes).[/dim]\n")
-
-            supp_path = None
-            while supp_path is None:
-                raw = questionary.path("  Path to LinkedIn PDF (Enter to skip):", style=Q_STYLE).ask()
-                if raw is None or raw.strip() == "":
-                    break
-                raw = raw.strip().strip("\"'").replace("\\ ", " ")
-                p = Path(raw).expanduser().resolve()
-                if not p.exists():
-                    console.print("  [red]File not found — try again, or press Enter to skip.[/red]\n")
-                elif p.is_dir():
-                    console.print(
-                        "  [red]That's a folder, not a file.[/red]  "
-                        "Drag the LinkedIn PDF into the terminal, or press Enter to skip.\n"
-                    )
-                else:
-                    supp_path = p
-
-            if supp_path:
-                supp_text = _parse_file(supp_path)
-                console.print(
-                    f"\n  [green]✓[/green]  {supp_path.name} "
-                    f"[dim]({len(supp_text):,} characters)[/dim]"
-                )
+        if supplement_path_arg:
+            # Legacy: --supplement flag still accepts a file path
+            p = Path(supplement_path_arg).expanduser().resolve()
+            if p.exists() and not p.is_dir():
+                supp_text = _parse_file(p)
+                console.print(f"  [green]✓[/green]  Supplement: {p.name} [dim]({len(supp_text):,} chars)[/dim]")
+        else:
+            linkedin_raw = _ask(
+                "LinkedIn URL",
+                "Paste your profile URL to add skills + endorsements  ·  Enter to skip",
+            ).strip()
+            if linkedin_raw:
+                supp_text = _scrape_linkedin_url(linkedin_raw, console)
 
         full_text = resume_text
         if supp_text:
             full_text += "\n\n--- SUPPLEMENTARY PROFILE ---\n\n" + supp_text
+        console.print()
 
-        # ── Step 3: Preferences ──────────────────────────────────────────────
-        prefs = _collect_preferences(console, Q_STYLE)
+        # ── Steps 2–3 of 4: Preferences ─────────────────────────────────────
+        print_separator()
+        prefs = _collect_preferences(Q_STYLE)
         user_context = _format_user_context(prefs)
 
-        # ── Step 4: Extract ──────────────────────────────────────────────────
+        # ── Step 4 of 4: Review and save ─────────────────────────────────────
+        print_separator()
         console.print()
-        console.print("[dim]  Step 4 of 4 — Build your profile[/dim]")
-        console.print("[dim]  ──────────────────────────────────[/dim]")
+        print_section("Step 4 of 4", "Review and save")
         console.print()
 
         with console.status("  [dim]Analyzing your resume with Claude…[/dim]"):
@@ -1040,166 +1244,220 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
                 sys.exit(f"\n❌  Extraction failed: {e}")
 
         console.print("  [green]✓[/green]  Extraction complete\n")
-        _show_profile(profile, console)
+        _show_profile(profile)
         console.print()
 
-    # ── Review loop ───────────────────────────────────────────────────────────
-    # "Re-run extraction" only offered when we have a resume to work with.
-    review_choices = [
-        questionary.Choice("Save profile",                                          value="save"),
-        questionary.Separator("  ─────────────────────────────────────────────"),
-        questionary.Choice("  Target roles & level",                                value="roles"),
-        questionary.Choice("  Strengths",                                           value="strengths"),
-        questionary.Choice("  Aspirations & career goals",                          value="asp"),
-        questionary.Choice("  Deal-breakers",                                       value="dbs"),
-        questionary.Choice("  Minimum salary",                                      value="salary"),
-        questionary.Choice("  Nice-to-haves  (company stage, industry)",            value="prefs"),
-        questionary.Choice("  Boost signals  (green flags Claude watches for)",     value="gf"),
-        questionary.Choice("  AI instructions  (custom scoring guidance)",          value="notes"),
+    # ── Review loop ── menu mirrors _show_profile section order 1:1 ─────────
+    _review_base = [
+        IChoice(name="Save profile",                                              value="save"),
+        ISep(),
+        IChoice(name="  Identity          (name, location, work preference)",    value="identity"),
+        IChoice(name="  Target            (roles, level, track, direction)",     value="goals"),
+        IChoice(name="  Constraints       (deal-breakers, salary floor)",        value="constraints"),
+        IChoice(name="  Strengths         (differentiators, proof points)",      value="strengths"),
+        IChoice(name="  Green flags       (environment preferences, signals)",   value="gf"),
+        IChoice(name="  Gaps              (yellow flags, honest risks)",         value="gaps"),
+        IChoice(name="  Scoring config    (apply/consider thresholds)",          value="scoring_config"),
+        IChoice(name="  Scoring overrides (edge cases, AI instructions)",        value="notes"),
     ]
-    if full_text:
-        review_choices.append(questionary.Separator("  ─────────────────────────────────────────────"))
-        review_choices.append(questionary.Choice("  Re-run AI extraction",          value="rerun"))
+    _review_rerun = [ISep(), IChoice(name="  Re-run AI extraction", value="rerun")] if full_text else []
 
     while True:
-        print()
-        print("  Arrow keys to navigate  ·  Enter to select")
+        console.print()
+        print_kb_hint()
         try:
-            action = questionary.select(
-                "  Looks good?",
-                choices=review_choices,
-                style=Q_STYLE,
-            ).ask()
+            action = _ask_select(
+                "Looks good?",
+                choices=_review_base + _review_rerun,
+                hint="",
+            )
         except KeyboardInterrupt:
             print()
             try:
-                save_now = questionary.confirm(
-                    "  Save profile before exiting?", default=True, style=Q_STYLE
-                ).ask()
+                save_now = _ask_confirm("Save profile before exiting?", default=True)
             except KeyboardInterrupt:
                 save_now = False
             if save_now:
                 break          # fall through to the save block below
-            print("  Exited without saving.")
+            console.print("  Exited without saving.")
             sys.exit(0)
 
         if action is None or action == "save":
             break
 
-        elif action == "roles":
-            t = profile.setdefault("target", {})
-            new_roles = questionary.text(
-                "  Target roles:", default=", ".join(t.get("roles", [])), style=Q_STYLE
-            ).ask()
+        elif action == "identity":
+            cand = profile.setdefault("candidate", {})
+            new_name = _ask("Name", default=cand.get("name", ""))
+            if new_name:
+                cand["name"] = new_name.strip()
+            new_loc = _ask("Location", default=cand.get("location", ""))
+            if new_loc is not None:
+                cand["location"] = new_loc.strip()
+            new_pref = _ask_select(
+                "Work preference",
+                choices=[
+                    IChoice(name="Remote — no office required",                         value="remote"),
+                    IChoice(name="Local — onsite or hybrid in current city",            value="local"),
+                    IChoice(name="Open to relocating — willing to move for right role", value="relocate"),
+                    IChoice(name="Flexible — any arrangement works",                    value="flexible"),
+                ],
+                default=cand.get("location_preference", "flexible"),
+            )
+            if new_pref:
+                cand["location_preference"] = new_pref
+                cand["open_to_remote"] = new_pref in ("remote", "flexible")
+
+        elif action == "goals":
+            t   = profile.setdefault("target", {})
+            asp = profile.setdefault("aspirations", {})
+            pref = profile.setdefault("preferences", {})
+
+            new_roles = _ask("Target roles", "Comma-separated", default=", ".join(t.get("roles", [])))
             if new_roles:
                 t["roles"] = [r.strip() for r in new_roles.split(",") if r.strip()]
+
             valid_levels = ["ic", "senior", "staff", "director", "vp", "c-suite"]
-            new_level = questionary.select(
-                "  Seniority level:",
+            new_level = _ask_select(
+                "Seniority level",
                 choices=valid_levels,
                 default=t.get("level") if t.get("level") in valid_levels else "staff",
-                style=Q_STYLE,
-            ).ask()
+            )
             if new_level:
                 t["level"] = new_level
 
-        elif action == "strengths":
-            print()
-            print("  List your key strengths, separated by semicolons.")
-            print("  Be specific: 'ML depth — trained 2k+ models, RLHF at DocuSign' beats 'ML skills'.")
-            current_strengths = "; ".join(profile.get("strengths", []))
-            new_val = questionary.text(
-                "  Strengths:", default=current_strengths, style=Q_STYLE
-            ).ask()
-            if new_val is not None:
-                profile["strengths"] = [s.strip() for s in new_val.split(";") if s.strip()]
-
-        elif action == "asp":
-            asp = profile.setdefault("aspirations", {})
-            new_track = questionary.select(
-                "  Career track:",
+            new_track = _ask_select(
+                "Career track",
                 choices=[
-                    questionary.Choice("IC-focused",            value="ic"),
-                    questionary.Choice("Management",            value="management"),
-                    questionary.Choice("Flexible — open to both", value="flexible"),
+                    IChoice(name="IC-focused  (Staff / Principal / Distinguished)", value="ic"),
+                    IChoice(name="Management  (Director / VP / C-suite)",           value="management"),
+                    IChoice(name="Flexible — open to both",                         value="flexible"),
                 ],
                 default=asp.get("track", "flexible"),
-                style=Q_STYLE,
-            ).ask()
+            )
             if new_track:
                 asp["track"] = new_track
-            new_dir = questionary.text(
-                "  Career direction:", default=(asp.get("direction") or "").strip(), style=Q_STYLE
-            ).ask()
+
+            new_dir = _ask("Career direction", default=(asp.get("direction") or "").strip())
             if new_dir is not None:
                 asp["direction"] = new_dir.strip()
-            new_co = questionary.text(
-                "  Company types drawn to:",
-                default=", ".join(asp.get("company_types") or []),
-                style=Q_STYLE,
-            ).ask()
-            if new_co is not None:
-                asp["company_types"] = [c.strip() for c in new_co.split(",") if c.strip()]
 
-        elif action == "dbs":
-            print()
-            print("  Deal-breakers: absolute walk-away rules. Roles matching any of these score ≤30.")
-            print("  Comma-separated. E.g. no equity, on-site 5d/wk, no AI/ML product surface")
-            new_val = questionary.text(
-                "  Deal-breakers:", default=", ".join(profile.get("deal_breakers", [])), style=Q_STYLE
-            ).ask()
-            if new_val is not None:
-                profile["deal_breakers"] = [d.strip() for d in new_val.split(",") if d.strip()]
-
-        elif action == "prefs":
-            print()
-            print("  Nice-to-haves: soft signals that nudge score up or down — don't disqualify.")
-            pref = profile.setdefault("preferences", {})
-            new_stage = questionary.checkbox(
-                "  Company stage:",
-                choices=["Seed / Series A", "Growth (Series B–D)", "Late-stage / pre-IPO", "Public / enterprise"],
-                default=pref.get("company_stage") or [],
-                style=Q_STYLE,
-            ).ask()
-            if new_stage is not None:
-                pref["company_stage"] = new_stage
-            new_ind = questionary.text(
-                "  Industries to move toward:",
+            new_ind = _ask(
+                "Industries to move toward",
+                "Comma-separated",
                 default=", ".join(pref.get("industry_targets") or []),
-                style=Q_STYLE,
-            ).ask()
+            )
             if new_ind is not None:
                 pref["industry_targets"] = [i.strip() for i in new_ind.split(",") if i.strip()]
 
-        elif action == "gf":
-            print()
-            print("  Boost signals: role/company signals that strongly increase a job's score.")
-            print("  E.g. 'lean team with 0-1 scope', 'AI-native company', 'technical product ownership'")
-            new_val = questionary.text(
-                "  Boost signals:", default=", ".join(profile.get("green_flags", [])), style=Q_STYLE
-            ).ask()
-            if new_val is not None:
-                profile["green_flags"] = [g.strip() for g in new_val.split(",") if g.strip()]
+            current_stages = pref.get("company_stage") or []
+            stage_opts = ["Seed / Series A", "Growth (Series B–D)", "Late-stage / pre-IPO", "Public / enterprise"]
+            new_stage = _ask_checkbox(
+                "Company stage",
+                choices=[IChoice(name=s, value=s, enabled=(s in current_stages)) for s in stage_opts],
+            )
+            if new_stage is not None:
+                pref["company_stage"] = new_stage
 
-        elif action == "salary":
-            print()
-            print("  Minimum salary: hard floor in USD. Roles below this score ≤30 regardless of fit.")
-            current = str(profile.get("salary_floor_usd") or "")
-            new_val = questionary.text("  Minimum salary (USD):", default=current, style=Q_STYLE).ask()
-            if new_val:
+        elif action == "strengths":
+            current_strengths = "; ".join(profile.get("strengths", []))
+            new_val = _ask(
+                "Strengths",
+                "Semicolons between items  ·  Be specific: 'ML depth — 2k+ models, RLHF at DocuSign'",
+                default=current_strengths,
+            )
+            if new_val is not None:
+                profile["strengths"] = [s.strip() for s in new_val.split(";") if s.strip()]
+
+        elif action == "gf":
+            asp = profile.setdefault("aspirations", {})
+            new_gf = _ask(
+                "Boost signals",
+                "Role/company signals that raise the score  ·  e.g. 'lean team, 0-1 scope'  ·  comma-separated",
+                default=", ".join(profile.get("green_flags", [])),
+            )
+            if new_gf is not None:
+                profile["green_flags"] = [g.strip() for g in new_gf.split(",") if g.strip()]
+            new_co = _ask(
+                "Company types you're drawn to",
+                "e.g. AI-native startup, mission-driven enterprise  ·  comma-separated",
+                default=", ".join(asp.get("company_types") or []),
+            )
+            if new_co is not None:
+                asp["company_types"] = [c.strip() for c in new_co.split(",") if c.strip()]
+
+        elif action == "gaps":
+            current_yf = ", ".join(profile.get("yellow_flags", []))
+            new_yf = _ask(
+                "Yellow flags",
+                "Honest gaps or risks  ·  Claude surfaces these; you can correct them  ·  comma-separated",
+                default=current_yf,
+            )
+            if new_yf is not None:
+                profile["yellow_flags"] = [y.strip() for y in new_yf.split(",") if y.strip()]
+
+        elif action == "scoring_config":
+            scoring = profile.setdefault("scoring", {})
+            new_apply = _ask(
+                "Apply threshold",
+                "Minimum score to show in the apply tier  (default 75)",
+                default=str(scoring.get("apply_threshold", 75)),
+            )
+            if new_apply:
                 try:
-                    profile["salary_floor_usd"] = int(new_val.replace(",", "").replace("$", ""))
+                    scoring["apply_threshold"] = int(new_apply)
+                except ValueError:
+                    console.print("  [yellow]⚠[/yellow]  Not a valid integer — keeping current value.")
+            new_consider = _ask(
+                "Consider threshold",
+                "Minimum score for the consider tier  (default 55)",
+                default=str(scoring.get("consider_threshold", 55)),
+            )
+            if new_consider:
+                try:
+                    scoring["consider_threshold"] = int(new_consider)
+                except ValueError:
+                    console.print("  [yellow]⚠[/yellow]  Not a valid integer — keeping current value.")
+
+        elif action == "constraints":
+            cand = profile.setdefault("candidate", {})
+            new_loc = _ask_select(
+                "Where do you prefer to work?",
+                choices=[
+                    IChoice(name="Remote — no office required, not open to relocation",   value="remote"),
+                    IChoice(name="Local — onsite or hybrid in my current city",            value="local"),
+                    IChoice(name="Open to relocating — willing to move for the right role", value="relocate"),
+                    IChoice(name="Flexible — any arrangement works",                       value="flexible"),
+                ],
+                default=cand.get("location_preference", "flexible"),
+            )
+            if new_loc:
+                cand["location_preference"] = new_loc
+                cand["open_to_remote"] = new_loc in ("remote", "flexible")
+            current_sal = str(profile.get("salary_floor_usd") or "")
+            new_sal = _ask(
+                "Min. base salary (USD)",
+                "Hard floor — roles below this are excluded, not ranked lower",
+                default=current_sal,
+            )
+            if new_sal:
+                try:
+                    profile["salary_floor_usd"] = int(new_sal.replace(",", "").replace("$", ""))
                 except ValueError:
                     console.print("  [red]Could not parse — keeping current value.[/red]")
+            new_dbs = _ask(
+                "Deal-breakers",
+                "Comma-separated  ·  e.g. no equity, on-site 5d/wk, no AI/ML surface",
+                default=", ".join(profile.get("deal_breakers", [])),
+            )
+            if new_dbs is not None:
+                profile["deal_breakers"] = [d.strip() for d in new_dbs.split(",") if d.strip()]
 
         elif action == "notes":
-            print()
-            print("  AI instructions: free-text guidance for the scoring model.")
-            print("  E.g. 'Staff-scope despite Senior title — weight scope over title'")
-            print("       'Deduct 15 pts for roles that require people management as primary duty'")
-            new_val = questionary.text(
-                "  AI instructions:", default=(profile.get("notes") or "").strip(), style=Q_STYLE
-            ).ask()
+            new_val = _ask(
+                "Scoring overrides",
+                "Injected into Claude's scoring prompt  ·  e.g. 'Staff-scope despite Senior title — weight scope over title'",
+                default=(profile.get("notes") or "").strip(),
+            )
             if new_val is not None:
                 profile["notes"] = new_val.strip()
 
@@ -1212,11 +1470,11 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
                     continue
 
         console.print()
-        _show_profile(profile, console)
+        _show_profile(profile)
         console.print()
 
     # ── Proactive sources ─────────────────────────────────────────────────────
-    _run_proactive_sources_wizard(profile, console, Q_STYLE)
+    _run_proactive_sources_wizard(profile, Q_STYLE)
 
     # ── Save ──────────────────────────────────────────────────────────────────
     DATA_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)  # restrict to owner
@@ -1234,42 +1492,22 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
         console.print(
             f"\n  [dim]Automated schedule already active: {label} at {existing_schedule.get('time', '?')}[/dim]"
         )
-        change = questionary.confirm(
-            "  Update the schedule?", default=False, style=Q_STYLE
-        ).ask()
+        change = _ask_confirm("Update the schedule?", default=False)
         if change:
             run_schedule_wizard()
     else:
-        console.print()
-        setup_schedule = questionary.confirm(
-            "  Set up automated digests? scorerole can email you on a schedule without manual runs.",
+        setup_schedule = _ask_confirm(
+            "Set up automated digests? scorerole can email you on a schedule without manual runs.",
             default=True,
-            style=Q_STYLE,
-        ).ask()
+        )
         if setup_schedule:
             run_schedule_wizard()
         else:
             console.print(
-                "  [dim]You can set this up later with: scorerole schedule --set[/dim]"
+                "  [dim]You can set this up later with: scorerole schedule set[/dim]"
             )
 
-    # ── What next ─────────────────────────────────────────────────────────────
-    next_action = questionary.select(
-        "  What next?",
-        choices=[
-            questionary.Choice("Open profile in editor", value="profile"),
-            questionary.Choice("Open .env in editor",    value="env"),
-            questionary.Choice("Done",                   value="exit"),
-        ],
-        style=Q_STYLE,
-    ).ask()
-
-    if next_action == "profile":
-        open_in_editor(PROFILE_PATH)
-    elif next_action == "env":
-        env_example = Path(__file__).parent.parent / ".env.example"
-        open_in_editor(env_example if env_example.exists() else PROFILE_PATH.parent)
-
     console.print(
-        "\n  [dim]Run `scorerole init` any time to update your profile or schedule.[/dim]\n"
+        "\n  [dim]Run [bold]scorerole[/bold] to fetch your first digest.[/dim]\n"
+        "  [dim]Run [bold]scorerole init[/bold] any time to update your profile.[/dim]\n"
     )

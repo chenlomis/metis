@@ -60,12 +60,12 @@ class TestSeenRolesTTL:
         assert "abc123" in seen
 
     def test_expired_entries_are_pruned_on_load(self, tmp_path):
-        """An entry from 15 days ago must not appear in load_seen_roles."""
+        """An entry from 31 days ago must not appear in load_seen_roles (TTL is 30d)."""
         from scorerole.state import save_seen_roles, load_seen_roles
         with patch("scorerole.state.DATA_DIR", tmp_path):
             old_ts = (
                 datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
-                - datetime.timedelta(days=15)
+                - datetime.timedelta(days=31)
             ).isoformat()
             p = tmp_path / "seen_roles.json"
             p.write_text(json.dumps({"deadbeef1234": old_ts}))
@@ -73,12 +73,12 @@ class TestSeenRolesTTL:
         assert "deadbeef1234" not in seen
 
     def test_save_prunes_stale_entries(self, tmp_path):
-        """Saving new entries must evict old ones from the file."""
+        """Saving new entries must evict old ones from the file (TTL is 30d)."""
         from scorerole.state import save_seen_roles
         with patch("scorerole.state.DATA_DIR", tmp_path):
             old_ts = (
                 datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
-                - datetime.timedelta(days=15)
+                - datetime.timedelta(days=31)
             ).isoformat()
             now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None).isoformat()
             p = tmp_path / "seen_roles.json"

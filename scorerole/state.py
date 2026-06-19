@@ -37,7 +37,7 @@ def _read_seen_json(p: Path) -> dict:
         return {}
 
 
-def load_seen_roles(ttl_days: int = 14) -> set:
+def load_seen_roles(ttl_days: int = 30) -> set:
     """Return hashes of roles seen within the TTL window."""
     p = DATA_DIR / "seen_roles.json"
     raw = _read_seen_json(p)
@@ -114,10 +114,10 @@ def promote_skipped_role(title: str, company: str) -> None:
         SKIPPED_FILE.chmod(0o600)
 
 
-def save_seen_roles(new_entries: dict, ttl_days: int = 14):
+def save_seen_roles(new_entries: dict, ttl_days: int = 30):
     """Merge new {hash: iso_timestamp} entries into the store, pruning expired ones.
 
-    Prunes on every write so the file stays bounded to ~14 days of roles
+    Prunes on every write so the file stays bounded to ~30 days of roles
     rather than growing unboundedly over months of daily use.
     """
     p = DATA_DIR / "seen_roles.json"

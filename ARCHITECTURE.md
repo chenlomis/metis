@@ -265,7 +265,7 @@ scorerole can run unattended via an OS-level scheduled job so digests arrive
 without any manual command. The schedule is configured either:
 
 - **during `scorerole init`** — offered at the end of the wizard; re-runnable
-- **at any time via `scorerole schedule --set`** — standalone setup or update
+- **at any time via `scorerole schedule set`** — standalone setup or update
 
 ### OS integration
 
@@ -288,9 +288,9 @@ or off at that time. The plist encodes:
 Follows the same argparse conventions as the other subcommands:
 
 ```
-scorerole schedule              # show current schedule + OS job health check
-scorerole schedule --set        # interactive wizard (install or replace)
-scorerole schedule --remove     # unload OS job, delete plist + schedule.json
+scorerole schedule          # show current schedule + OS job health check
+scorerole schedule set      # interactive wizard (install or replace)
+scorerole schedule remove   # unload OS job, delete plist + schedule.json
 ```
 
 ### Persistence
@@ -316,13 +316,24 @@ it at install time — the JSON is the source of truth.
 
 - No root or admin required — launchd user agents run in the `gui/<uid>` domain
 - Venv path is baked into the plist at install time; if the venv is moved,
-  `scorerole schedule` warns and `scorerole schedule --set` reinstalls cleanly
+  `scorerole schedule` warns and `scorerole schedule set` reinstalls cleanly
 - `run_pipeline()` is entirely unchanged — the scheduled job is `scorerole --lookback Xd`
 - SMTP failure behavior (T-07) applies equally to scheduled runs
 
 ---
 
 ## Known Issues & Tech Debt
+
+### Recently resolved (June 2026)
+
+**init_cmd.py fully migrated from questionary → InquirerPy** (June 17 2026)
+All `_ask*` helpers use InquirerPy with consistent `"  › "` pointer and centralized `INQUIRER_STYLE` (created via `get_style()` in theme.py — must be an `InquirerPyStyle` object, not a plain dict). Fixed: cursor duplication on UP/DOWN nav, inconsistent indentation, user input color buried in gray.
+
+**`score_jobs_batch` now public + accepts profile dict** (June 16 2026)
+`build_score_system(profile: dict)` is public and wired through from pipeline so there's no double disk read. `score_jobs_batch(client, jobs, profile=None)` accepts optional profile; shim `_build_score_system()` retained for test backward compat.
+
+**`scorerole feedback` subcommand added** (June 16 2026)
+`~/.job_pipeline/feedback.md` is injected into every scoring run system prompt. Use `scorerole feedback` to add calibration notes after reviewing a digest.
 
 ### P1 — Would break things silently
 
