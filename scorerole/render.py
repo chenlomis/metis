@@ -55,19 +55,30 @@ def _render_tags(tags: list, max_tags: int = 5, size: int = 11) -> str:
     return "".join(_tag(t["text"], t.get("sentiment", "green"), size) for t in tags[:max_tags])
 
 
-def _leverage_friction(leverage_pts: list, friction_pts: list) -> str:
+def _coerce_list(val) -> list:
+    """Ensure val is a list — coerces bare strings Claude occasionally returns."""
+    if isinstance(val, list):
+        return val
+    if isinstance(val, str) and val.strip():
+        return [val.strip()]
+    return []
+
+
+def _leverage_friction(leverage_pts, friction_pts) -> str:
+    leverage_pts = _coerce_list(leverage_pts)
+    friction_pts = _coerce_list(friction_pts)
     html = ""
-    if leverage_pts:
+    for pt in leverage_pts:
         html += (
-            f'<p style="margin:0 0 3px 0;font-size:13px;line-height:1.6;font-family:{_FONT}">'
-            f'<span style="color:{_C_MUTED}">&#8593; Leverage: </span>'
-            f'<span style="color:{_C_BODY}">{"; ".join(leverage_pts)}</span></p>'
+            f'<p style="margin:0 0 4px 0;font-size:13px;line-height:1.6;font-family:{_FONT}">'
+            f'<span style="color:{_C_MUTED}">&#8593; </span>'
+            f'<span style="color:{_C_BODY}">{pt}</span></p>'
         )
-    if friction_pts:
+    for pt in friction_pts:
         html += (
             f'<p style="margin:0 0 10px 0;font-size:13px;line-height:1.6;font-family:{_FONT}">'
-            f'<span style="color:{_C_MUTED}">&#8595; Friction: </span>'
-            f'<span style="color:#854F0B">{"; ".join(friction_pts)}</span></p>'
+            f'<span style="color:{_C_MUTED}">&#8595; </span>'
+            f'<span style="color:#854F0B">{pt}</span></p>'
         )
     if html and not friction_pts:
         html = html.replace('margin:0 0 3px 0', 'margin:0 0 10px 0')
@@ -97,6 +108,56 @@ def _section_header(label: str, count_text: str, bar_color: str, label_color: st
         f'<td style="font-size:12px;color:{_C_MUTED};text-align:right;'
         f'font-family:{_FONT};padding:8px 0">{count_text}</td>'
         f'</tr></table>'
+    )
+
+
+def render_score_breakdown(job: dict) -> str:
+    """Return a self-contained <details> block showing the 6-dimension score table.
+
+    Returns "" when no dimensions are present (old runs, parse errors, filtered roles)
+    so callers can safely concatenate without an if-guard.
+    """
+    dims = job.get("eval", {}).get("dimensions", [])
+    if not dims:
+        return ""
+
+    rows = ""
+    for d in dims:
+        name    = d.get("name", "").replace("_", " ").title()
+        weight  = d.get("weight", 0.0)
+        score   = d.get("score", 0)
+        contrib = d.get("weighted_contribution", 0.0)
+        rat     = d.get("rationale", "")
+        bar_w   = max(2, int(score * 0.6))  # max bar width ~60px
+        bar_col = "#3B6D11" if score >= 75 else ("#854F0B" if score >= 55 else "#A32D2D")
+        rows += (
+            f'<tr style="border-bottom:1px solid #f0efeb">'
+            f'<td style="padding:6px 8px 6px 0;font-size:11px;color:#5F5E5A;'
+            f'font-family:{_FONT};white-space:nowrap;width:140px">{name}</td>'
+            f'<td style="padding:6px 4px;text-align:center;font-size:11px;'
+            f'color:{_C_MUTED};font-family:{_FONT};white-space:nowrap">'
+            f'{int(weight * 100)}%</td>'
+            f'<td style="padding:6px 4px">'
+            f'<div style="background:#f0efeb;border-radius:2px;height:6px;width:60px">'
+            f'<div style="background:{bar_col};border-radius:2px;height:6px;width:{bar_w}px"></div>'
+            f'</div></td>'
+            f'<td style="padding:6px 4px;text-align:right;font-size:11px;font-weight:500;'
+            f'color:{bar_col};font-family:{_FONT};white-space:nowrap">{score}</td>'
+            f'<td style="padding:6px 0 6px 8px;font-size:11px;color:{_C_MUTED};'
+            f'font-family:{_FONT};line-height:1.4">{rat}</td>'
+            f'</tr>'
+        )
+
+    return (
+        f'<details style="margin:8px 0 4px 0">'
+        f'<summary style="font-size:11px;color:{_C_MUTED};cursor:pointer;'
+        f'font-family:{_FONT};list-style:none;outline:none">'
+        f'&#9656; Score breakdown</summary>'
+        f'<table width="100%" cellpadding="0" cellspacing="0" border="0" '
+        f'style="margin-top:8px;border-top:1px solid #eeece5">'
+        f'{rows}'
+        f'</table>'
+        f'</details>'
     )
 
 
@@ -134,8 +195,10 @@ def _job_card(job: dict, bg: str, pill_bg: str, pill_color: str) -> str:
         # Row 3 — rationale (leverage / friction)
         f'{rationale}'
         # Row 4 — tags
-        f'<div style="margin-bottom:10px">{tags_html}</div>'
-        # Row 5 — footer: alumni count left, view link right
+        f'<div style="margin-bottom:6px">{tags_html}</div>'
+        # Row 5 — expandable score breakdown
+        f'{render_score_breakdown(job)}'
+        # Row 6 — footer: alumni count left, view link right
         f'<table width="100%" cellpadding="0" cellspacing="0" border="0"><tr>'
         f'<td style="font-size:11px;color:{_C_MUTED};font-family:{_FONT}">{alumni_html}</td>'
         f'<td style="text-align:right">'
@@ -150,7 +213,7 @@ def _job_card(job: dict, bg: str, pill_bg: str, pill_color: str) -> str:
 
 def _skipped_cell(job: dict) -> str:
     ev = job["eval"]
-    friction = ev.get("frictionPoints", [])
+    friction = _coerce_list(ev.get("frictionPoints", []))
     first = friction[0] if friction else ""
     skip_tags = [t for t in ev.get("tags", []) if t.get("sentiment") in ("red", "amber", "orange")]
     tags = _render_tags(skip_tags, max_tags=3, size=10)
