@@ -56,6 +56,23 @@ _REJECTION_PHRASES = [
     "moving forward with other candidates",
 ]
 
+_RECRUITER_SCREEN_PHRASES = [
+    # Scheduling language — primary signal, mutually exclusive with rejection
+    "let me know your availability",              # Klaviyo
+    "please let us know your availability",       # SeekOut
+    "please feel free to find time",              # Datadog
+    "please select a time through",               # Descript (Calendly)
+    "select a time that will work for you",       # Microsoft (eightfold)
+    "set up time for a phone screen",             # Microsoft (eightfold)
+    "schedule some time for us to",               # generic recruiter
+    "i'd like to schedule some time",             # Klaviyo variant
+    "we'd like to invite you for a virtual",      # SeekOut
+    # Forward-moving framing — next-step context
+    "we're excited to move forward with the interview",  # Descript
+    "interested in speaking with you about our",         # NVIDIA
+    "complete the availability questionnaire",           # NVIDIA (Workday)
+]
+
 _CONFIRMATION_PHRASES = [
     "your application has been received",
     "we have received your application",
@@ -120,10 +137,19 @@ _SUBJECT_IMPLIES_CONFIRMATION = re.compile(
     r"we have received your application|"
     r"thank you for your application to|"
     r"your application to \w|"
-    r"next steps|"
     r"we got it|"              # "Gen Digital | We Got It!"
     r"welcome to .+ careers|"
     r"we look forward to",
+    re.IGNORECASE,
+)
+
+# Subject patterns that strongly imply recruiter screen (used as body tiebreaker)
+_SUBJECT_IMPLIES_RECRUITER_SCREEN = re.compile(
+    r"next steps with |"                  # "Next Steps with Descript"
+    r"\w[\w ]+ next steps$|"             # "SeekOut Next Steps", "Klaviyo - Next Steps"
+    r"let's set up your phone screen|"   # Microsoft eightfold
+    r"phone screen with |"               # generic
+    r"hello from \w",                    # Datadog "Hello from Datadog"
     re.IGNORECASE,
 )
 
@@ -356,6 +382,10 @@ def fetch_candidate_emails(gmail_address: str, app_password: str, since_dt: date
         "application feedback",
         # Confirmation/Rejection — "Your Application to {Company}" (Anduril direct)
         "your application to",
+        # Recruiter screen — "Action Requested: Let's set up your phone screen" (Microsoft)
+        "phone screen",
+        # Recruiter screen — "Hello from Datadog" (named recruiter outreach)
+        "hello from",
         # Update — "Application Follow Up" (GitHub/iCIMS)
         "application follow up",
         # Update — "We look forward to" (various)
@@ -436,23 +466,28 @@ def _normalize_body(text: str) -> str:
 
 
 def classify_email(body: str, subject: str = "") -> str:
-    """Return 'confirmation', 'rejection', or 'unknown'.
+    """Return 'confirmation', 'rejection', 'recruiter_screen', or 'unknown'.
 
-    Body phrases take priority. When the body is ambiguous (no phrase matches),
-    the subject line is used as a tiebreaker — it's often unambiguous even when
-    the body text uses unusual phrasing.
+    Body phrases take priority. Recruiter screen is checked before confirmation
+    because scheduling language is unambiguous and some forward-moving phrases
+    ("we'd like to move forward") could otherwise collide with confirmation.
+    When the body is ambiguous, the subject tiebreaker runs.
     """
     body_norm = _normalize_body(body)
 
-    # Body-based signals take priority (most reliable)
     for phrase in _REJECTION_PHRASES:
         if phrase in body_norm:
             return "rejection"
+    for phrase in _RECRUITER_SCREEN_PHRASES:
+        if phrase in body_norm:
+            return "recruiter_screen"
     for phrase in _CONFIRMATION_PHRASES:
         if phrase in body_norm:
             return "confirmation"
 
     # Subject-line tiebreaker for empty/unusual bodies
+    if _SUBJECT_IMPLIES_RECRUITER_SCREEN.search(subject):
+        return "recruiter_screen"
     if _SUBJECT_IMPLIES_CONFIRMATION.search(subject):
         return "confirmation"
     if _SUBJECT_IMPLIES_REJECTION.search(subject):
@@ -703,12 +738,13 @@ def find_tracker_row(ws, company: str, role: str | None) -> int | None:
 def _apply_status_fill(ws, row_idx: int, col: int, value: str) -> None:
     from openpyxl.styles import PatternFill
     _STATUS_FILL = {
-        "Applied":     "C6EFCE",
-        "Not Applied": "D9D9D9",
-        "Pending":     "FFEB9C",
-        "Proceeding":  "C6EFCE",
-        "Rejected":    "FFC7CE",
-        "Skipped":     "D9D9D9",
+        "Applied":          "C6EFCE",
+        "Not Applied":      "D9D9D9",
+        "Pending":          "FFEB9C",
+        "Proceeding":       "C6EFCE",
+        "Rejected":         "FFC7CE",
+        "Skipped":          "D9D9D9",
+        "Recruiter Screen": "BDD7EE",  # light blue
     }
     color = _STATUS_FILL.get(value)
     if color:
@@ -728,6 +764,15 @@ def update_rejection(ws, row_idx: int) -> None:
     """Set application_status → Rejected."""
     ws.cell(row_idx, 8).value = "Rejected"
     _apply_status_fill(ws, row_idx, 8, "Rejected")
+
+
+def update_recruiter_screen(ws, row_idx: int) -> None:
+    """Set action_taken → Applied (if not already) and application_status → Recruiter Screen."""
+    if ws.cell(row_idx, 6).value != "Applied":
+        ws.cell(row_idx, 6).value = "Applied"
+        _apply_status_fill(ws, row_idx, 6, "Applied")
+    ws.cell(row_idx, 8).value = "Recruiter Screen"
+    _apply_status_fill(ws, row_idx, 8, "Recruiter Screen")
 
 
 def _write_row_from_email(ws, parsed: dict, suggestion_status: str,
@@ -995,14 +1040,16 @@ def run_track(gmail_address: str, app_password: str, since_dt: datetime.datetime
 
     parsed_emails = [parse_email(e) for e in emails]
 
-    actionable = [p for p in parsed_emails if p["classification"] in ("confirmation", "rejection")
+    actionable = [p for p in parsed_emails
+                  if p["classification"] in ("confirmation", "rejection", "recruiter_screen")
                   and p["company"]]
     unknown    = [p for p in parsed_emails if p["classification"] == "unknown"]
 
-    log.info("track: %d actionable (%d confirmation, %d rejection), %d unknown",
+    log.info("track: %d actionable (%d confirmation, %d rejection, %d recruiter_screen), %d unknown",
              len(actionable),
              sum(1 for p in actionable if p["classification"] == "confirmation"),
              sum(1 for p in actionable if p["classification"] == "rejection"),
+             sum(1 for p in actionable if p["classification"] == "recruiter_screen"),
              len(unknown))
 
     if unknown:
@@ -1067,6 +1114,12 @@ def run_track(gmail_address: str, app_password: str, since_dt: datetime.datetime
             changed += 1
         elif kind == "rejection" and current_status == "Rejected":
             log.info("track: skip rejection (already Rejected) — %s", company)
+        elif kind == "recruiter_screen" and current_status not in ("Recruiter Screen", "Rejected"):
+            log.info("track: ★ recruiter screen — %s / %s → Recruiter Screen", company, role or "?")
+            update_recruiter_screen(ws, row_idx)
+            changed += 1
+        elif kind == "recruiter_screen":
+            log.info("track: skip recruiter screen (already %s) — %s", current_status, company)
 
     from .tracker import _sort_rows_by_date
     _sort_rows_by_date(ws)   # always re-sort so date order is maintained
