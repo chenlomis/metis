@@ -76,6 +76,36 @@ types.ts            — DigestPayload, Job TypeScript interfaces
 ## Profile location
 `~/.job_pipeline/profile.yaml` — owner-only (chmod 600). Contains salary floor, deal-breakers, strengths. Never commit.
 
+`profile.yaml` is the **active profile** — the only file scorerole reads at runtime. `lomis-profile.md` in the same directory is a legacy free-text version predating the YAML wizard; the code falls back to it only if `profile.yaml` is missing. It is not actively maintained.
+
+**`SCOREROLE_PROFILE` env var** overrides the profile path without touching `profile.yaml`. Used by `run_persona_test.py` for persona testing. Never set this in `.env`. Safe to unset anytime: `unset SCOREROLE_PROFILE`.
+
+## Persona / e2e testing
+
+`run_persona_test.py` (repo root) runs the full pipeline for each persona **without modifying `~/.job_pipeline/profile.yaml`**. Sets `SCOREROLE_PROFILE` per persona — safe to Ctrl-C at any time.
+
+```bash
+python run_persona_test.py              # 7-day lookback (default)
+python run_persona_test.py --lookback 3
+```
+
+Persona profiles live at `~/.job_pipeline/` (outside repo — never commit):
+- `profile_ml_eng.yaml` — Alex Rivera, Senior ML Engineer
+- `profile_designer.yaml` — Jordan Lee, Senior Product Designer
+- `profile_pm.yaml` — if present, auto-detected as PM persona
+
+## Test strategy
+
+```bash
+# Fast pass — run after any routine change (~60 tests, <3s, no API calls)
+python -m pytest tests/test_core.py tests/test_schedule.py -q
+
+# Full pass — before releases or after large refactors
+python -m pytest tests/ -q
+```
+
+`test_extract.py` is the heavyweight suite (~70+ tests, mocked API). Only run when `extract.py` changes — skip during routine iteration.
+
 ## Critical constraints
 
 ### 1. Rich + InquirerPy output ordering

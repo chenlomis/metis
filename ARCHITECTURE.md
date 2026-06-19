@@ -215,6 +215,11 @@ Key `.env` fields:
 | `MODEL` | `claude-sonnet-4-6` | Sonnet model for full scoring |
 | `PRESCREEN_MODEL` | `claude-haiku-4-5` | Haiku model for pre-screen pass |
 
+Dev-only env vars (never put in `.env`):
+| Variable | Effect |
+|---|---|
+| `SCOREROLE_PROFILE` | Override profile path — points `profile.py` at a different YAML without touching `~/.job_pipeline/profile.yaml`. Used by `run_persona_test.py`. Unset with `unset SCOREROLE_PROFILE`. |
+
 ---
 
 ## Data Files

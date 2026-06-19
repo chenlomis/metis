@@ -154,6 +154,19 @@ Do not paper over a "Blocks" finding as a "Known limitation." The test is: would
 
 ---
 
+## Test speed tiers
+
+Not all tests need to run on every change:
+
+| When | Command | Tests | Time |
+|---|---|---|---|
+| Routine change | `pytest tests/test_core.py tests/test_schedule.py -q` | ~60 | <3s |
+| `extract.py` changed | add `tests/test_extract.py` | +70 | ~10s |
+| Pre-release / big refactor | `pytest tests/ -q` | all | ~4s |
+| E2e spot-check | `python run_persona_test.py` | real pipeline | ~10–20 min |
+
+`test_extract.py` is the heavyweight suite — it mocks the Claude API for structured data extraction tests. Skip it unless `extract.py` was touched.
+
 ## Persona test tooling
 
 `run_persona_test.py` (repo root) runs the full pipeline against real Gmail input under a mock profile:
@@ -162,12 +175,9 @@ Do not paper over a "Blocks" finding as a "Known limitation." The test is: would
 python run_persona_test.py
 ```
 
-It:
-1. Backs up `~/.job_pipeline/profile.yaml` and `seen_roles.json`
-2. Swaps in each persona profile in turn
-3. Runs `pipeline.run_pipeline()` with `score_all=True` and 7-day lookback
-4. Sends a labelled digest: `[Persona Name] Personalized Job Alert Digest — <date>`
-5. Restores original state
+It sets `SCOREROLE_PROFILE` env var per persona so **`~/.job_pipeline/profile.yaml` is never modified**. Safe to Ctrl-C at any point — no cleanup needed. Then for each persona it:
+1. Runs `pipeline.run_pipeline()` with `score_all=True` and configurable lookback
+2. Sends a labelled digest: `[Persona Name] Personalized Job Alert Digest — <date>`
 
 Add new personas to the `personas` list in `run_persona_test.py`. Persona profiles live at
 `~/.job_pipeline/profile_<slug>.yaml` (outside the repo — never commit real profiles).
