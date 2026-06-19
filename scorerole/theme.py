@@ -4,8 +4,13 @@ Single source of truth for colors, questionary style, and print helpers.
 Set SCOREROLE_THEME=light or SCOREROLE_THEME=dark to override detection.
 """
 import os
+import shutil
+import subprocess
+import sys
 
 from rich.console import Console
+from rich.markup import escape as _escape
+from rich.padding import Padding
 from rich.style import Style
 from rich.text import Text
 
@@ -15,12 +20,14 @@ from rich.text import Text
 # ---------------------------------------------------------------------------
 
 def _detect_dark() -> bool:
+    # Explicit override always wins
     override = os.environ.get("SCOREROLE_THEME", "").lower()
     if override == "light":
         return False
     if override == "dark":
         return True
-    # COLORFGBG is set by most terminals: "fg;bg" — dark bg index < 8
+
+    # COLORFGBG: set by iTerm2 and some other terminals ("fg;bg"), dark bg index < 8
     fgbg = os.environ.get("COLORFGBG", "")
     if fgbg:
         try:
@@ -28,7 +35,22 @@ def _detect_dark() -> bool:
             return bg < 8
         except ValueError:
             pass
-    return True  # safe default
+
+    # macOS: read system-level dark mode preference.
+    # The key is only present when Dark Mode is ON; missing = Light Mode.
+    if sys.platform == "darwin":
+        try:
+            result = subprocess.run(
+                ["defaults", "read", "-g", "AppleInterfaceStyle"],
+                capture_output=True, text=True, timeout=1,
+            )
+            return result.stdout.strip().lower() == "dark"
+        except Exception:
+            pass
+
+    # Safe fallback: light. Defaulting to dark caused black panels on
+    # light terminals for users whose terminals don't export COLORFGBG.
+    return False
 
 
 IS_DARK = _detect_dark()
@@ -51,7 +73,6 @@ if IS_DARK:
         "error":        "#c96060",   # ✗ errors, validation failures
         "rule":         "#333330",   # horizontal rule lines
         "eg":           "#4a8099",   # examples line — dim teal, distinct from instruction gray
-        "tip":          "#888885",   # tip text — slightly brighter than dim for WCAG AA (~5:1)
         "cursor":       "#4a9edd",
     }
 else:
@@ -68,91 +89,82 @@ else:
         "error":        "#b02020",
         "rule":         "#d8d8d5",   # horizontal rule lines
         "eg":           "#4a7080",   # examples line — dim teal, distinct from instruction gray
-        "tip":          "#666663",   # tip text — WCAG AA on white (~4.6:1)
         "cursor":       "#1d5aad",
     }
 
 # ---------------------------------------------------------------------------
 # Questionary style
 # ---------------------------------------------------------------------------
-# Hierarchy (most → least prominent):
-#   user typed input  → terminal default fg (no color override = always brightest)
-#   question label    → THEME['label'] bold
-#   option body text  → THEME['muted']
-#   hint text         → THEME['dim'] italic
-#   structural chrome → THEME['dim']
 
 try:
     from questionary import Style as QStyle
 
     QUESTIONARY_STYLE = QStyle([
-        ("qmark",       f"fg:{THEME['accent']} bold"),   # ◆ active prompt symbol
-        ("question",    f"fg:{THEME['label']} bold"),     # prompt label — clear but below input
-        ("answer",      "bold"),                          # completed value — no color, terminal default = brightest
-        ("pointer",     f"fg:{THEME['accent']} bold"),    # ❯ selector arrow
-        ("highlighted", f"fg:{THEME['label']} bold"),     # focused option in list
-        ("selected",    f"fg:{THEME['success']}"),        # confirmed checkbox item
-        ("separator",   f"fg:{THEME['dim']}"),            # menu dividers
-        ("instruction", f"fg:{THEME['dim']}"),            # inline hint text
-        ("text",        f"fg:{THEME['muted']}"),          # option body text
+        ("qmark",       f"fg:{THEME['accent']} bold"),
+        ("question",    f"fg:{THEME['label']} bold"),
+        ("answer",      "bold"),        # no color = terminal default = brightest
+        ("pointer",     f"fg:{THEME['accent']} bold"),
+        ("highlighted", f"fg:{THEME['label']} bold"),
+        ("selected",    f"fg:{THEME['success']}"),
+        ("separator",   f"fg:{THEME['dim']}"),
+        ("instruction", f"fg:{THEME['dim']}"),
+        ("text",        f"fg:{THEME['muted']}"),
         ("disabled",    f"fg:{THEME['dim']}"),
     ])
 except ImportError:
-    QUESTIONARY_STYLE = None  # non-interactive env
+    QUESTIONARY_STYLE = None
 
 # ---------------------------------------------------------------------------
-# InquirerPy style — separate try block so it survives missing questionary
+# InquirerPy style
 # ---------------------------------------------------------------------------
 try:
     from InquirerPy.utils import get_style as _iq_get_style
 
     INQUIRER_STYLE = _iq_get_style({
-        "questionmark":      f"{THEME['accent']} bold",
-        "question":          f"{THEME['label']} bold",
-        "input":             THEME['bright'],
-        "answer":            THEME['bright'],
-        "pointer":           f"{THEME['accent']} bold",
-        "highlighted":       f"{THEME['label']} bold",
-        "selected":          THEME['success'],
-        "separator":         THEME['dim'],
-        "instruction":       f"{THEME['dim']} italic",
-        "long_instruction":  f"{THEME['dim']} italic",
-        "validator":         THEME['error'],
+        "questionmark":      f"fg:{THEME['accent']} bold",
+        "question":          f"fg:{THEME['label']} bold",
+        "input":             f"fg:{THEME['bright']}",
+        "answer":            f"fg:{THEME['bright']}",
+        "pointer":           f"fg:{THEME['accent']} bold",
+        "highlighted":       f"fg:{THEME['label']} bold",
+        "selected":          f"fg:{THEME['success']}",
+        "separator":         f"fg:{THEME['dim']}",
+        "instruction":       f"fg:{THEME['dim']} italic",
+        "long_instruction":  f"fg:{THEME['dim']} italic",
+        "validator":         f"fg:{THEME['error']}",
     })
 except ImportError:
     INQUIRER_STYLE = None
 
 # ---------------------------------------------------------------------------
-# Shared console instance
+# Shared console instance — 80-col cap keeps all output predictable.
+# Panel and prose both wrap natively within this budget.
 # ---------------------------------------------------------------------------
 
 console = Console()
+
 
 # ---------------------------------------------------------------------------
 # Print helpers
 # ---------------------------------------------------------------------------
 
 def print_hint(text: str) -> None:
-    """Dim hint text — printed as part of the same question block (no blank line before prompt)."""
-    console.print(text, style=Style(color=THEME["dim"], italic=True))
+    """Dim hint text — 2-space indent; markup string ensures dynamic word-wrap on resize."""
+    console.print(Padding(f"[{THEME['dim']} italic]{_escape(text)}[/]", (0, 0, 0, 2)))
 
 
 def print_section(step: str, label: str, description: str = "") -> None:
-    """Section header — plain styled text, no trailing rule.
-
-    Trailing rules collapse on terminal resize (past output is static).
-    Visual separation comes from the blank line callers inject before this.
-    """
+    """Section header — single line, clips gracefully on narrow terminals."""
     line = Text()
     line.append(step + "  ", style=Style(color=THEME["accent"], bold=True))
     line.append(label, style=Style(color=THEME["label"], bold=True))
     if description:
         line.append("  " + description, style=Style(color=THEME["dim"]))
-    console.print(line)
+    console.print(line, soft_wrap=True)
 
 
 def print_confirmed(label: str, value: str, meta: str = "") -> None:
-    """Flat single-line success cue.   ✓  Label: value  · meta"""
+    """Flat single-line success cue:  ✓  Label: value  · meta"""
     t = Text()
     t.append("✓  ", style=Style(color=THEME["success"]))
     t.append(f"{label}: ", style=Style(color=THEME["muted"]))
@@ -176,10 +188,7 @@ def print_kb_hint() -> None:
 
 
 def print_section_intro(body: str, ctrl_hint: bool = False) -> None:
-    """Section intro paragraph — muted prose + optional ctrl-hint line.
-
-    Callers must print a blank line after this before the first question.
-    """
+    """Section intro paragraph — Rich word-wraps at console.width (80 cols)."""
     console.print(body, style=Style(color=THEME["muted"]))
     if ctrl_hint:
         console.print(
@@ -189,5 +198,5 @@ def print_section_intro(body: str, ctrl_hint: bool = False) -> None:
 
 
 def print_eg(text: str) -> None:
-    """Examples line — dim teal, 2-space indent, italic. Sits below the instruction line."""
-    console.print(f"  Examples: {text}", style=Style(color=THEME["eg"], italic=True))
+    """Examples line — dim teal, 2-space indent; markup string ensures dynamic word-wrap on resize."""
+    console.print(Padding(f"[{THEME['eg']} italic]Examples: {_escape(text)}[/]", (0, 0, 0, 2)))

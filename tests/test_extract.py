@@ -4,6 +4,8 @@ Philosophy: extraction failures must never block scoring. Every test validates
 either the schema contract, gate logic, or graceful degradation.
 """
 from __future__ import annotations
+
+from __future__ import annotations
 import json
 from unittest.mock import MagicMock, patch
 

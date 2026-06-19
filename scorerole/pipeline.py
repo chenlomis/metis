@@ -139,15 +139,23 @@ def _stage_ingest(since_dt: datetime.datetime, seen_roles: set, profile=None) ->
       [...]           — new, unseen roles ready for cap + scoring
     """
     threads = fetch_alerts(since_dt, profile=profile)
-    if not threads:
-        log.info("No emails in lookback window. Done.")
-        return None
 
     all_jobs: list[dict] = []
     seen_job_ids:   set[str]   = set()
     seen_role_keys: set[tuple] = set()
 
-    for t in threads:
+    def _ingest(job: dict):
+        role_key  = (job["title"].lower().strip(), job["company"].lower().strip())
+        role_hash = _role_hash(job["title"], job["company"])
+        if (job["job_id"] not in seen_job_ids
+                and role_key not in seen_role_keys
+                and role_hash not in seen_roles):
+            seen_job_ids.add(job["job_id"])
+            seen_role_keys.add(role_key)
+            seen_roles.add(role_hash)
+            all_jobs.append(job)
+
+    for t in (threads or []):
         jobs_from_thread = extract_jobs(t["body"])
         # Recommendation emails ("Company is hiring" / "Similar jobs") have no plain-text
         # "View job:" line — fall back to HTML link extraction.
@@ -156,15 +164,23 @@ def _stage_ingest(since_dt: datetime.datetime, seen_roles: set, profile=None) ->
             if jobs_from_thread:
                 log.info(f"HTML extraction found {len(jobs_from_thread)} jobs in recommendation email")
         for job in jobs_from_thread:
-            role_key  = (job["title"].lower().strip(), job["company"].lower().strip())
-            role_hash = _role_hash(job["title"], job["company"])
-            if (job["job_id"] not in seen_job_ids
-                    and role_key not in seen_role_keys
-                    and role_hash not in seen_roles):
-                seen_job_ids.add(job["job_id"])
-                seen_role_keys.add(role_key)
-                seen_roles.add(role_hash)   # in-memory dedup; disk write deferred until after cap
-                all_jobs.append(job)
+            _ingest(job)
+
+    # Proactive company career-page scraping (enabled via profile proactive_sources)
+    if profile and profile.get("proactive_sources", {}).get("enabled"):
+        try:
+            from .sources.proactive import fetch_proactive
+            proactive_jobs = fetch_proactive(profile, seen_roles)
+            for job in proactive_jobs:
+                _ingest(job)
+            if proactive_jobs:
+                log.info("proactive: ingested %d new roles after dedup", len(proactive_jobs))
+        except Exception as e:
+            log.warning("proactive source failed — skipping: %s", e)
+
+    if not threads and not all_jobs:
+        log.info("No emails in lookback window and no proactive sources active. Done.")
+        return None
 
     return all_jobs
 
@@ -536,8 +552,23 @@ def main():
         help="Run the interactive setup wizard to install or replace the schedule.",
     )
     schedule_sub.add_parser(
+        "pause",
+        help="Temporarily disable the schedule without losing your settings.",
+    )
+    schedule_sub.add_parser(
+        "resume",
+        help="Re-enable a paused schedule.",
+    )
+    schedule_sub.add_parser(
         "remove",
         help="Remove the scheduled job and clear ~/.job_pipeline/schedule.json.",
+    )
+    _run_p = schedule_sub.add_parser(
+        "run",
+        help=argparse.SUPPRESS,   # internal: called by launchd/cron
+    )
+    _run_p.add_argument(
+        "--lookback", dest="run_lookback", default="1d", metavar="DURATION",
     )
 
     # track subcommand
@@ -560,6 +591,28 @@ def main():
         "--dry-run", dest="dry_run", action="store_true",
         help="Parse and classify emails; print matches to stdout without writing or opening the tracker.",
     )
+
+    # sources subcommand
+    sources_p = subparsers.add_parser(
+        "sources",
+        help="Manage company career-page sources.",
+        description=(
+            "View and manage the company career pages scorerole checks each run.\n\n"
+            "  scorerole sources              show active sources\n"
+            "  scorerole sources list         show active sources\n"
+            "  scorerole sources add Stripe   add a company by name\n"
+            "  scorerole sources remove       interactively remove companies\n"
+            "  scorerole sources on           enable company sources\n"
+            "  scorerole sources off          disable company sources"
+        ),
+    )
+    sources_sub = sources_p.add_subparsers(dest="sources_action")
+    sources_sub.add_parser("list",   help="Show active sources.")
+    sources_add_p = sources_sub.add_parser("add",    help="Add a company by name.")
+    sources_add_p.add_argument("company_name", nargs="+", help="Company name to add.")
+    sources_sub.add_parser("remove", help="Interactively remove companies.")
+    sources_sub.add_parser("on",     help="Enable company sources.")
+    sources_sub.add_parser("off",    help="Disable company sources.")
 
     # feedback subcommand
     subparsers.add_parser(
@@ -619,13 +672,44 @@ def main():
             print("Run `scorerole init` to rebuild your scoring profile.")
 
     elif args.command == "schedule":
-        from .schedule_cmd import show_schedule, run_schedule_wizard, remove_schedule
+        from .schedule_cmd import (
+            show_schedule, run_schedule_wizard, remove_schedule,
+            pause_schedule, resume_schedule,
+        )
         action = getattr(args, "schedule_action", None)
-        if action == "remove":
+        if action == "set":
+            run_schedule_wizard()
+        elif action == "pause":
+            paused = pause_schedule()
+            if paused:
+                print("  Schedule paused. Run `scorerole schedule resume` to re-enable.")
+            else:
+                print("  Nothing to pause — schedule is already paused or not configured.")
+        elif action == "resume":
+            resumed = resume_schedule()
+            if resumed:
+                print("  Schedule resumed.")
+            else:
+                print("  Nothing to resume — schedule is already active or not configured.")
+        elif action == "remove":
             removed = remove_schedule()
             print("  Schedule removed." if removed else "  No schedule was configured.")
-        elif action == "set":
-            run_schedule_wizard()
+        elif action == "run":
+            _validate_env()
+            lookback_str = getattr(args, "run_lookback", "1d") or "1d"
+            since_dt = _parse_lookback(lookback_str)
+            if not since_dt:
+                print(f"Could not parse --lookback '{lookback_str}'. Try: '1d', '4d', '7d'")
+                raise SystemExit(1)
+            log.info("=== Scheduled run: digest + track (lookback %s) ===", lookback_str)
+            run_pipeline(since_dt=since_dt)
+            from .track import run_track
+            run_track(
+                gmail_address=GMAIL_ADDRESS,
+                app_password=GMAIL_APP_PASSWORD,
+                since_dt=since_dt,
+                dry_run=False,
+            )
         else:
             show_schedule()
 
@@ -642,6 +726,13 @@ def main():
             since_dt=since_dt,
             dry_run=getattr(args, "dry_run", False),
         )
+
+    elif args.command == "sources":
+        from .sources_cmd import run_sources
+        action = getattr(args, "sources_action", None)
+        name_parts = getattr(args, "company_name", None)
+        name = " ".join(name_parts) if name_parts else None
+        run_sources(action, name)
 
     elif args.command == "feedback":
         from .feedback_cmd import run_feedback

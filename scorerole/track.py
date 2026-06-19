@@ -12,6 +12,8 @@ Pipeline:
     4. Update the row: action_taken, date_applied, application_status
        For skipped-role confirmations: create a new row from skipped_roles.json
 """
+from __future__ import annotations
+
 
 from __future__ import annotations
 import re, sys, datetime, logging, imaplib, email as email_lib

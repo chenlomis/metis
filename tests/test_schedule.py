@@ -21,10 +21,13 @@ from scorerole.schedule_cmd import (
     SCHEDULE_FILE,
     WEEKDAY_TO_INT,
     _parse_time,
+    _schedule_label,
     build_crontab_line,
     build_plist,
     load_schedule,
+    pause_schedule,
     remove_schedule,
+    resume_schedule,
     show_schedule,
 )
 
@@ -53,8 +56,24 @@ class TestFrequencyOptions:
         assert FREQUENCY_OPTIONS["weekly"]["lookback"]       == "7d"
 
     def test_twice_weekly_label(self):
-        assert "Mon" in FREQUENCY_OPTIONS["twice_weekly"]["label"]
-        assert "Thu" in FREQUENCY_OPTIONS["twice_weekly"]["label"]
+        # Base label is generic; actual days are reflected via _schedule_label()
+        assert "Twice a week" in FREQUENCY_OPTIONS["twice_weekly"]["label"]
+
+    def test_schedule_label_twice_weekly_default_days(self):
+        cfg = {"frequency": "twice_weekly"}
+        label = _schedule_label(cfg)
+        assert "Monday" in label
+        assert "Thursday" in label
+
+    def test_schedule_label_twice_weekly_custom_days(self):
+        cfg = {"frequency": "twice_weekly", "weekdays": [2, 5]}   # Tue, Fri
+        label = _schedule_label(cfg)
+        assert "Tuesday" in label
+        assert "Friday" in label
+
+    def test_schedule_label_weekly(self):
+        cfg = {"frequency": "weekly", "weekday": 3}   # Wednesday
+        assert "Wednesday" in _schedule_label(cfg)
 
     def test_weekday_map_monday(self):
         assert WEEKDAY_TO_INT["Monday"] == 1
@@ -315,6 +334,125 @@ class TestShowSchedule:
         show_schedule()
         out = capsys.readouterr().out
         assert "active" in out
+
+
+# ---------------------------------------------------------------------------
+# build_plist — scheduled entry point is `scorerole schedule run`
+# ---------------------------------------------------------------------------
+
+class TestBuildPlistScheduledEntryPoint:
+    def test_plist_calls_schedule_run(self):
+        plist = build_plist({"frequency": "daily", "time": "08:00"}, "/venv/bin/scorerole", "/project")
+        assert "<string>schedule</string>" in plist
+        assert "<string>run</string>" in plist
+
+    def test_twice_weekly_custom_days(self):
+        cfg = {"frequency": "twice_weekly", "time": "08:00", "weekdays": [2, 5]}  # Tue, Fri
+        plist = build_plist(cfg, "/venv/bin/scorerole", "/project")
+        weekday_ints = re.findall(r"<key>Weekday</key><integer>(\d+)</integer>", plist)
+        assert set(weekday_ints) == {"2", "5"}
+
+    def test_twice_weekly_defaults_to_mon_thu_when_no_weekdays(self):
+        cfg = {"frequency": "twice_weekly", "time": "08:00"}
+        plist = build_plist(cfg, "/venv/bin/scorerole", "/project")
+        weekday_ints = re.findall(r"<key>Weekday</key><integer>(\d+)</integer>", plist)
+        assert set(weekday_ints) == {"1", "4"}
+
+
+# ---------------------------------------------------------------------------
+# build_crontab_line — custom twice_weekly days
+# ---------------------------------------------------------------------------
+
+class TestBuildCrontabCustomDays:
+    def test_twice_weekly_custom_days(self):
+        cfg = {"frequency": "twice_weekly", "time": "08:00", "weekdays": [2, 5]}  # Tue, Fri
+        line = build_crontab_line(cfg, "/venv/bin/scorerole", "/project")
+        parts = line.split()
+        assert parts[4] == "2,5"
+
+    def test_crontab_calls_schedule_run(self):
+        cfg = {"frequency": "daily", "time": "08:00"}
+        line = build_crontab_line(cfg, "/venv/bin/scorerole", "/project")
+        assert "schedule run" in line
+
+
+# ---------------------------------------------------------------------------
+# pause_schedule / resume_schedule
+# ---------------------------------------------------------------------------
+
+class TestPauseResume:
+    def _write_schedule(self, tmp_path, enabled=True) -> Path:
+        sf = tmp_path / "schedule.json"
+        sf.write_text(json.dumps({
+            **_fake_config(),
+            "enabled": enabled,
+        }))
+        return sf
+
+    def test_pause_sets_enabled_false(self, tmp_path, monkeypatch):
+        sf = self._write_schedule(tmp_path, enabled=True)
+        monkeypatch.setattr("scorerole.schedule_cmd.SCHEDULE_FILE", sf)
+        monkeypatch.setattr("scorerole.schedule_cmd.LAUNCHD_PLIST", tmp_path / "plist")
+        with mock.patch("subprocess.run") as mock_run:
+            mock_run.return_value = mock.MagicMock(returncode=0)
+            result = pause_schedule()
+        assert result is True
+        assert json.loads(sf.read_text())["enabled"] is False
+
+    def test_pause_returns_false_when_already_paused(self, tmp_path, monkeypatch):
+        sf = self._write_schedule(tmp_path, enabled=False)
+        monkeypatch.setattr("scorerole.schedule_cmd.SCHEDULE_FILE", sf)
+        result = pause_schedule()
+        assert result is False
+
+    def test_pause_returns_false_when_no_schedule(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("scorerole.schedule_cmd.SCHEDULE_FILE", tmp_path / "no.json")
+        assert pause_schedule() is False
+
+    def test_resume_sets_enabled_true(self, tmp_path, monkeypatch):
+        sf = self._write_schedule(tmp_path, enabled=False)
+        monkeypatch.setattr("scorerole.schedule_cmd.SCHEDULE_FILE", sf)
+        monkeypatch.setattr("scorerole.schedule_cmd.LAUNCHD_PLIST", tmp_path / "plist")
+        with mock.patch("subprocess.run") as mock_run:
+            mock_run.return_value = mock.MagicMock(returncode=0)
+            result = resume_schedule()
+        assert result is True
+        assert json.loads(sf.read_text())["enabled"] is True
+
+    def test_resume_returns_false_when_already_active(self, tmp_path, monkeypatch):
+        sf = self._write_schedule(tmp_path, enabled=True)
+        monkeypatch.setattr("scorerole.schedule_cmd.SCHEDULE_FILE", sf)
+        result = resume_schedule()
+        assert result is False
+
+    def test_resume_returns_false_when_no_schedule(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("scorerole.schedule_cmd.SCHEDULE_FILE", tmp_path / "no.json")
+        assert resume_schedule() is False
+
+
+# ---------------------------------------------------------------------------
+# show_schedule — paused state display
+# ---------------------------------------------------------------------------
+
+class TestShowSchedulePaused:
+    def test_shows_paused_status(self, tmp_path, monkeypatch, capsys):
+        sf = tmp_path / "schedule.json"
+        sf.write_text(json.dumps({**_fake_config(), "enabled": False}))
+        monkeypatch.setattr("scorerole.schedule_cmd.SCHEDULE_FILE", sf)
+        monkeypatch.setattr("scorerole.schedule_cmd.LAUNCHD_PLIST", tmp_path / "plist")
+        show_schedule()
+        out = capsys.readouterr().out
+        assert "Paused" in out
+        assert "resume" in out.lower()
+
+    def test_shows_runs_digest_and_track(self, tmp_path, monkeypatch, capsys):
+        sf = tmp_path / "schedule.json"
+        sf.write_text(json.dumps(_fake_config()))
+        monkeypatch.setattr("scorerole.schedule_cmd.SCHEDULE_FILE", sf)
+        monkeypatch.setattr("scorerole.schedule_cmd.LAUNCHD_PLIST", tmp_path / "plist")
+        show_schedule()
+        out = capsys.readouterr().out
+        assert "track" in out.lower()
 
 
 # ---------------------------------------------------------------------------

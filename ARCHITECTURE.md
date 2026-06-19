@@ -327,6 +327,139 @@ it at install time — the JSON is the source of truth.
 
 ---
 
+## Target Persona (updated June 2026)
+
+The better-fit user is a **passive job seeker** — someone selectively open to the right
+role, not urgently mass-applying. Key implications:
+
+- Biweekly or weekly digest cadence is preferred over daily
+- Score quality matters more than throughput — they'll act on fewer, better recommendations
+- They're willing to configure once and let it run unattended
+- They will NOT apply to every role regardless of score (unlike active seekers)
+- Churn is inherently high (users leave when hired) — acceptable given the use case
+
+**Design consequence:** Scoring precision and filtering quality are more important than
+speed or volume. The two-layer Haiku extraction → Sonnet scoring architecture is the
+right call for this persona.
+
+---
+
+## Interface Roadmap (decided June 2026)
+
+scorerole has one current interface (CLI) and a planned sequence of additional surfaces.
+Each stage is independent — later stages don't replace earlier ones.
+
+```
+Stage 0 (done)   CLI              scorerole [subcommand]
+                                  Entry point for the author and technical users.
+
+Stage 1 (next)   MCP server       scorerole/mcp_server.py, local subprocess
+                                  Claude Code users add via: claude mcp add scorerole
+                                  No hosting required. Runs on user's machine with
+                                  their own credentials. Natural language → tool calls
+                                  → real pipeline.
+                                  Prerequisite: config-as-parameters refactor.
+
+Stage 2           Python package  pip install scorerole (PyPI)
+                                  Developers can import score_jobs(), extract_jd() etc.
+                                  into their own agents or workflows.
+                                  Prerequisite: stable public API + Stage 1 complete.
+
+Stage 3           Docker image    docker run -p 3000:3000 scorerole/scorerole
+                                  Browser-based setup wizard. No Python/venv/cron.
+                                  Still runs locally — no user data leaves machine.
+                                  Prerequisite: demand signal from Stage 1/2 users.
+
+Stage 4           Web app         OAuth Gmail login, server-side scheduling.
+                                  Only if demonstrated demand AND compliance overhead
+                                  is justified (Google OAuth verification for >100 users).
+                                  Do not build speculatively.
+```
+
+### MCP server — implementation notes
+
+Thin wrapper around existing functions. Does NOT require a rewrite.
+
+Tools to expose:
+- `score_jobs`       → wraps `run_pipeline()`
+- `get_last_digest`  → reads last_run.json, returns summary
+- `check_tracker`    → reads Applications xlsx, returns recent rows
+- `run_track`        → wraps `run_track()` from track.py
+- `get_profile`      → returns current profile.yaml summary
+
+**Key prerequisite — config as parameters:**
+MCP server runs as a subprocess in an arbitrary working directory and cannot rely on
+`.env` being present. All config (api_key, gmail_address, gmail_app_password,
+profile_path) must be passable as explicit parameters to core functions. The CLI layer
+continues reading from `.env` and passing values through — the change is that the
+library layer accepts explicit parameters rather than reading env vars at import time.
+
+**Discovery:** Publish to MCP registry after Stage 1 is stable. The CLI audience is
+the author; the MCP audience is Claude Code users — technical, self-selecting, more
+likely to share.
+
+---
+
+## Reusable Package Design (for Stage 2)
+
+Three requirements before publishing to PyPI:
+
+1. **Clean public API** — 3–4 stable importable functions:
+   ```python
+   from scorerole import score_jobs, extract_jd, load_profile
+   profile = load_profile("~/.job_pipeline/profile.yaml")
+   results = score_jobs(jobs, profile, api_key="sk-ant-...")
+   ```
+   CLI and MCP server become consumers of this API, not the inverse.
+
+2. **Config as parameters** — same refactor as MCP prerequisite above.
+
+3. **Stable surface first** — don't publish to PyPI while core functions are still
+   changing signatures. Finish `scorerole report` and the feedback loop first.
+
+---
+
+## Feedback Capture Design (decided June 2026)
+
+**No silent auto-calibration.** All calibration is explicit and user-initiated.
+
+**Signal source:** `scorerole track` detects deviations between scored verdicts and
+actual apply behavior (confirmation emails for skipped roles; no confirmation for
+apply-verdicted roles).
+
+**Delivery:** Deviation flag written to `~/.job_pipeline/deviation.json` when threshold
+is crossed (e.g. 2+ skipped roles applied to). Next digest reads the flag and appends
+a footer nudge:
+
+> "Last week: you applied to 2 roles scored 'skip' and passed on 1 scored 'apply'.
+> If scores feel off, run `scorerole init → Quick edits` to adjust thresholds."
+
+Flag cleared after nudge is shown. User decides whether to act.
+
+**Explicit feedback:** `scorerole feedback` injects free-text notes into the scoring
+system prompt via `~/.job_pipeline/feedback.md`.
+
+**What we deliberately don't do:**
+- Auto-adjust score thresholds based on apply behavior
+- Prompt the user mid-run to explain deviations
+- Track individual role outcomes for ML training
+
+---
+
+## OSS Strategy (decided June 2026)
+
+OSS (public repo) and a hosted web app are not mutually exclusive. Recommended sequence:
+
+1. OSS the repo when the core is stable (finish report + feedback loop first)
+2. Write one honest launch post — "Show HN" or r/jobsearch. Meta angle works:
+   "I built a tool to fix my own LinkedIn job search" is a genuine hook.
+3. MCP registry submission alongside or just after OSS launch
+4. Facebook job search groups / PM communities are underrated surfaces —
+   warmer referral dynamics than HN, directly reaches the target persona
+5. Web app only if there's demonstrated inbound demand from OSS users
+
+---
+
 ## Known Issues & Tech Debt
 
 ### Recently resolved (June 2026)

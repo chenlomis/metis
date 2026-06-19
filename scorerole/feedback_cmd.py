@@ -8,6 +8,8 @@ Usage:
     scorerole feedback
 """
 from __future__ import annotations
+
+from __future__ import annotations
 import datetime
 import json
 import logging

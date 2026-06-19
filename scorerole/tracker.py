@@ -9,6 +9,8 @@ This is sufficient for the pipeline write path — fuzzy matching is deferred
 to the confirmation-email parser (Phase 2), which needs to match ATS titles
 that may differ from LinkedIn titles.
 """
+from __future__ import annotations
+
 
 from __future__ import annotations
 import re, datetime, logging, os

@@ -71,10 +71,12 @@ def _ask(label: str, hint: str = "", default: str = "", examples: str = "", **kw
     from InquirerPy import inquirer
     console.print(f"\n[bold]{label}[/bold]")
     if hint:
-        console.print(f"  {hint}", style="dim italic")
+        print_hint(hint)
     if examples:
         print_eg(examples)
-    return inquirer.text(message="  › ", default=default, style=INQUIRER_STYLE, **kw).execute() or ""
+    return inquirer.text(
+        message="  › ", default=default, style=INQUIRER_STYLE, multiline=False, **kw
+    ).execute() or ""
 
 
 def _ask_select(label: str, choices: list, hint: str = "", default=None, examples: str = "", **kw):
@@ -87,7 +89,7 @@ def _ask_select(label: str, choices: list, hint: str = "", default=None, example
     from InquirerPy import inquirer
     console.print(f"\n[bold]{label}[/bold]")
     if hint:
-        console.print(f"  {hint}", style="dim italic")
+        print_hint(hint)
     if examples:
         print_eg(examples)
     return inquirer.select(
@@ -100,7 +102,7 @@ def _ask_checkbox(label: str, choices: list, hint: str = "Space to toggle  ·  E
     from InquirerPy import inquirer
     console.print(f"\n[bold]{label}[/bold]")
     if hint:
-        console.print(f"  {hint}", style="dim italic")
+        print_hint(hint)
     return inquirer.checkbox(message="", qmark="", choices=choices, style=INQUIRER_STYLE).execute() or []
 
 
@@ -116,7 +118,7 @@ def _ask_filepath(label: str, hint: str = "", examples: str = "") -> str:
     from InquirerPy import inquirer
     console.print(f"\n[bold]{label}[/bold]")
     if hint:
-        console.print(f"  {hint}", style="dim italic")
+        print_hint(hint)
     if examples:
         print_eg(examples)
     return inquirer.filepath(message="  › ", style=INQUIRER_STYLE).execute() or ""
@@ -219,10 +221,6 @@ def _scrape_linkedin_url(url: str, console) -> str:
         )
         return ""
 
-    console.print(
-        f"  [green]✓[/green]  LinkedIn profile fetched "
-        f"[dim]({len(text):,} characters)[/dim]\n"
-    )
     return text[:8_000]   # cap at 8k chars — enough for extraction, stays within token budget
 
 
@@ -873,105 +871,52 @@ def _apply_prefs_to_profile(profile: dict, prefs: dict) -> None:
 def _run_proactive_sources_wizard(profile: dict, Q_STYLE=None):
     """Wizard step that configures proactive company scraping in profile['proactive_sources']."""
     try:
-        from InquirerPy.base.control import Choice as IChoice
-    except ImportError:
-        return  # non-interactive env; skip silently
-
-    try:
-        from .sources.proactive import count_companies, estimate_monthly_cost
+        from .sources.proactive import count_companies
     except (ImportError, ModuleNotFoundError) as e:
         log.debug("proactive sources not available (%s) — skipping wizard", e)
         return
 
-    n_sa   = count_companies(["S", "A"])
-    n_sab  = count_companies(["S", "A", "B"])
-    n_all  = count_companies(["S", "A", "B", "C"])
-    cost_sa  = estimate_monthly_cost(["S", "A"])
-    cost_sab = estimate_monthly_cost(["S", "A", "B"])
-
+    n_curated = count_companies(["S", "A"])
     target_roles = ", ".join(profile.get("target", {}).get("roles", ["your target role"]))
-    existing = profile.get("proactive_sources", {})
+    already_enabled = profile.get("proactive_sources", {}).get("enabled", False)
 
     console.print()
-    console.rule("[dim]Proactive job sources[/dim]")
+    console.rule("[dim]Company career pages[/dim]")
     console.print()
     console.print(
-        f"  Beyond LinkedIn alerts, scorerole can check company career pages directly each run.\n"
-        f"  Currently [bold]{n_all}[/bold] companies are available across 4 tiers (Anthropic, Figma, Stripe…)\n"
-        f"  Based on your profile, we'll filter for: [italic]{target_roles}[/italic]"
+        f"  LinkedIn alerts are already included. scorerole can also check a curated set of\n"
+        f"  company career pages directly each run, then score matching roles against your profile.\n"
+        f"  ({n_curated} companies: Anthropic, Figma, Stripe, Databricks and more)\n"
+        f"\n"
+        f"  Roles will be filtered for: [italic]{target_roles}[/italic]"
+    )
+    console.print()
+
+    answer = _ask_confirm(
+        "Check curated company career pages too?",
+        default=True,
     )
 
-    # Pre-select based on existing config
-    default_val = "skip"
-    if existing.get("enabled"):
-        tiers = set(existing.get("tiers", []))
-        if "B" in tiers:
-            default_val = "SAB"
-        elif existing.get("extra_companies"):
-            default_val = "custom"
-        else:
-            default_val = "SA"
-
-    answer = _ask_select(
-        "Which companies should we check each run?",
-        choices=[
-            IChoice(name=f"S + A tier only  ({n_sa} companies, +{cost_sa} est.)",              value="SA"),
-            IChoice(name=f"S + A + B tier   ({n_sab} companies, +{cost_sab} est.)  — broader", value="SAB"),
-            IChoice(name="Add specific companies  (you pick from a list or enter names)",        value="custom"),
-            IChoice(name="Other  (describe what you want — free text)",                          value="other"),
-            IChoice(name="Skip  (LinkedIn alerts only, no extra cost)",                          value="skip"),
-        ],
-        default=default_val,
-    )
-
-    if answer is None or answer == "skip":
-        profile["proactive_sources"] = {"enabled": False}
-        console.print("  [dim]Skipped — LinkedIn alerts only. Run `scorerole init` any time to change this.[/dim]")
-        return
-
-    if answer == "SA":
+    if answer:
         profile["proactive_sources"] = {
             "enabled": True,
             "tiers": ["S", "A"],
-            "extra_companies": [],
-            "exclude_companies": [],
+            "extra_companies": profile.get("proactive_sources", {}).get("extra_companies", []),
+            "exclude_companies": profile.get("proactive_sources", {}).get("exclude_companies", []),
         }
-        console.print(f"  [green]✓[/green]  Proactive sources enabled: S + A tier ({n_sa} companies)")
-
-    elif answer == "SAB":
-        profile["proactive_sources"] = {
-            "enabled": True,
-            "tiers": ["S", "A", "B"],
-            "extra_companies": [],
-            "exclude_companies": [],
-        }
-        console.print(f"  [green]✓[/green]  Proactive sources enabled: S + A + B tier ({n_sab} companies)")
-
-    elif answer == "custom":
-        _configure_custom_companies(profile, existing)
-
-    elif answer == "other":
-        freeform = _ask(
-            "Describe what you want",
-            "e.g. 'only Anthropic and Stripe', 'all S-tier plus Notion and Ramp'",
+        console.print(
+            f"  [green]✓[/green]  Curated company sources enabled — {n_curated} companies.\n"
+            f"  [dim]Manage sources anytime with: scorerole sources list / add / remove[/dim]"
         )
-        if freeform:
-            profile["proactive_sources"] = {
-                "enabled": True,
-                "tiers": ["S", "A"],
-                "extra_companies": [],
-                "exclude_companies": [],
-                "notes": freeform.strip(),
-            }
-            console.print(
-                f"  [green]✓[/green]  Saved your preference. Starting with S + A tier as baseline.\n"
-                f"  [dim]Edit [bold]proactive_sources[/bold] in your profile.yaml to fine-tune, "
-                f"or run `scorerole init` again.[/dim]"
-            )
-
-    console.print(
-        "  [dim]You can always reconfigure proactive sources via `scorerole init`.[/dim]"
-    )
+    else:
+        profile["proactive_sources"] = {
+            "enabled": False,
+            "extra_companies": profile.get("proactive_sources", {}).get("extra_companies", []),
+            "exclude_companies": profile.get("proactive_sources", {}).get("exclude_companies", []),
+        }
+        console.print(
+            "  [dim]LinkedIn alerts only. Enable company sources anytime with: scorerole sources on[/dim]"
+        )
 
 
 def _configure_custom_companies(profile: dict, existing: dict):
@@ -1073,11 +1018,19 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
         mod_time  = _dt.datetime.fromtimestamp(PROFILE_PATH.stat().st_mtime).strftime("%b %d, %Y")
         cand_name = (existing.get("candidate") or {}).get("name", "")
 
+        from rich.text import Text as _RText
+
+        _body = _RText()
+        if cand_name:
+            _body.append(cand_name + "\n", style=Style(bold=True))
+        _body.append("Last updated ", style=Style(color=THEME["muted"]))
+        _body.append(mod_time, style=Style(color=THEME["bright"], bold=True))
+
         console.print()
         console.print(Panel(
-            "[bold]Profile found[/bold]  [dim]· last updated " + mod_time + "[/dim]"
-            + (f"\n  {cand_name}" if cand_name else ""),
-            border_style="dim",
+            _body,
+            title="[dim]scorerole profile[/dim]",
+            border_style=Style(color=THEME["rule"]),
             box=rich_box.ROUNDED,
             padding=(1, 3),
         ))
@@ -1117,8 +1070,7 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
         _panel_width = min(88, shutil.get_terminal_size().columns)
         console.print(Panel(
             "[bold]Let's build your scorerole profile![/bold]\n\n"
-            "The more context you provide, the better scorerole can filter and\n"
-            "score roles against your background.\n\n"
+            "The more context you provide, the better scorerole can filter and score roles against your background.\n\n"
             f"  [{THEME['accent']} bold]1.[/]  [bold]Resume + LinkedIn[/bold]  [{THEME['dim']}]— who you are[/]\n"
             f"  [{THEME['accent']} bold]2.[/]  [bold]Target roles + aspirations[/bold]  [{THEME['dim']}]— what you want[/]\n"
             f"  [{THEME['accent']} bold]3.[/]  [bold]Constraints + deal-breakers[/bold]  [{THEME['dim']}]— what to exclude[/]\n"
@@ -1216,10 +1168,13 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
         else:
             linkedin_raw = _ask(
                 "LinkedIn URL",
-                "Paste your profile URL to add skills + endorsements  ·  Enter to skip",
+                hint="Paste your profile URL to add skills + endorsements.  Enter to skip.",
+                examples="https://www.linkedin.com/in/your-name/",
             ).strip()
             if linkedin_raw:
                 supp_text = _scrape_linkedin_url(linkedin_raw, console)
+                if supp_text:
+                    print_confirmed("LinkedIn", f"{len(supp_text):,} characters loaded")
 
         full_text = resume_text
         if supp_text:
