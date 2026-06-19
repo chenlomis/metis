@@ -1,107 +1,92 @@
 # scorerole candidate profile template
 # ─────────────────────────────────────────────────────────────────────────────
-# Copy this to ~/.job_pipeline/profile.yaml and fill it in, OR run:
-#   scorerole init --resume path/to/resume.pdf
-# to have Claude generate it from your resume automatically.
+# Copy to ~/.job_pipeline/profile.yaml and fill in, OR run:
+#   scorerole init   (structured wizard)
+#   scorerole init2  (conversational, beta)
+#
+# Mental model:
+#   candidate.*   — who you are  (from resume + LinkedIn)
+#   target.*      — what titles you're after
+#   aspirations.* — how you want to work and grow
+#   preferences.* — soft signals (affect ranking, not hard filters)
+#   deal_breakers — hard no's (hard filter)
+#   salary_floor_usd — hard comp floor (hard filter)
+#   inferred.*    — derived by scorerole init, rarely edited manually
+#   notes         — free-text calibration injected into scoring prompt
 # ─────────────────────────────────────────────────────────────────────────────
 
 candidate:
   name: "Your Name"
   email: "you@example.com"
-  location: "City, State"           # e.g. "San Francisco, CA"
-  location_preference: "remote"     # remote / local / flexible
-  open_to_remote: true              # derived from location_preference; kept for compat
-  open_to_relocation:               # list cities/regions, or leave empty
-    - "New York City"
+  location: "City, State"
+  location_preference: "remote"     # remote / flexible / local
+  open_to_relocation: []            # list cities/regions, or leave empty
+
+  experience:
+    - company: "Most Recent Company"
+      title: "Your Title"
+      dates: "Jan 2022 – Present"
+      highlights:
+        - "Key accomplishment or responsibility"
+        - "Another highlight with specific impact"
+    - company: "Previous Company"
+      title: "Your Title"
+      dates: "2018 – 2022"
+      highlights:
+        - "Key accomplishment"
+
+  education:
+    - institution: "University Name"
+      degree: "BS Computer Science"
+      year: 2018
+
+  strengths:
+    - "0-1 product builds — launched X, resulting in Y"
+    - "Cross-functional leadership at [scale/scope]"
 
 target:
-  roles:                            # aspirational titles — be ambitious, not just historical
+  roles:                            # aspirational titles (be ambitious, not just historical)
     - "Staff PM"
     - "Principal PM"
     - "Director of Product"
   level: "staff"                    # ic / senior / staff / director / vp / c-suite
-  industries:                       # inferred from background
 
 aspirations:
   track: "flexible"                 # ic / management / flexible
   direction: |
-    Two or three sentences about where you want to go and why — forward-looking,
-    not a summary of your resume. E.g. "Moving from Senior PM at DocuSign toward
-    a Staff/Principal IC role at an AI-native company where I can own 0-1 product
-    strategy, work closely with ML researchers, and build for enterprise scale."
-  company_types:                    # company archetypes you're drawn to
+    Two or three sentences: where you want to go and why — forward-looking,
+    not a resume summary. E.g. "Moving from Senior PM toward a Staff IC role
+    at an AI-native company where I can own 0-1 product strategy."
+  company_types:
     - "AI-native startup with applied science team"
     - "Enterprise SaaS with clear AI roadmap"
   avoid_company_types:              # soft avoids — hard no's go in deal_breakers
     - "pure consulting / services"
 
-preferences:                        # soft signals — adjust ranking, don't hard-filter
+preferences:                        # soft signals — affect ranking, not hard filters
   company_stage:                    # seed / series-a / growth / public
     - "growth"
     - "public"
   company_size: null                # "startup (<200)" / "mid-size (200-2000)" / "enterprise (2000+)"
-  industry_targets:                 # industries to move toward (may differ from past)
+  company_environment: null         # e.g. "startup", "enterprise", "mission-driven"
+  industry_targets:
     - "AI/ML Platform"
     - "Developer Tools"
-  industry_avoid: []                # soft avoids
-  base_salary_target_usd: null      # aspirational base salary (vs salary_floor_usd which is the hard floor)
+  industry_avoid: []
+  base_salary_target_usd: null      # aspirational target (vs salary_floor_usd which is the hard floor)
 
-scoring:
-  apply_threshold: 75               # score >= this → "apply" verdict
-  consider_threshold: 55            # score >= this → "consider" verdict
-  level_mismatch_deduction: 10      # deducted when title doesn't match target level
-
-experience:
-  - company: "Most Recent Company"
-    title: "Your Title"
-    dates: "Jan 2022 – Present"
-    highlights:
-      - "Key accomplishment or responsibility"
-      - "Another highlight with specific impact"
-  - company: "Previous Company"
-    title: "Your Title"
-    dates: "2018 – 2022"
-    highlights:
-      - "Key accomplishment"
-
-education:
-  - institution: "University Name"
-    degree: "BS Computer Science"
-    year: 2018
-
-strengths:                          # 5-10 concrete strengths with evidence
-  - "0-1 product builds — launched X from zero, resulting in Y"
-  - "ML/data background — [specific experience]"
-  - "Cross-functional leadership — [specific scale/scope]"
-
-green_flags:                        # role/company types you'd love
-  - "lean team, genuine 0-1 scope"
-  - "technical depth with real product ownership"
-  - "mission-driven, async/remote"
-
-yellow_flags:                       # things to watch out for
-  - "large org matrix without clear ownership"
-  - "GTM-heavy without product depth"
-
-red_flags:                          # hard blockers
-  - "pure execution/order-taking"
-  - "no product ownership"
-
-deal_breakers:                      # absolute no's — will not apply
+deal_breakers:                      # absolute no's — hard filter, will not apply
   - "no equity"
   - "on-site 5 days/week"
 
-salary_floor_usd: 150000            # set to null if not applicable
+salary_floor_usd: 150000            # hard comp floor; set to null if not applicable
 
-# Inferred by scorerole init from your resume — set to null if uncertain
-inferred:
-  customer_types:                   # b2b, b2c, b2b2c, marketplace, developer, internal
+inferred:                           # set by scorerole init from resume; rarely edited manually
+  customer_types:                   # b2b / b2c / b2b2c / marketplace / developer / internal
     - "b2b"
   degree_level: "bs"                # none / bs / ms_phd
 
 notes: |
-  Add any custom scoring calibration notes here.
-  For example:
-  - Level rules (e.g. deduct X points for titles below target level)
-  - Domain preferences or caveats
-  - Anything Claude should weigh specially when evaluating fit
+  Free-text calibration notes. Appended to the scoring system prompt verbatim.
+  Use for: level rules, domain caveats, anything Claude should weigh specially.
+  Also updated by: scorerole feedback

@@ -51,13 +51,22 @@ candidate:
   name: string
   email: string or null
   location: "City, State"
-  open_to_remote: bool
-  open_to_relocation: []
+  location_preference: string    # "remote", "flexible", or "local"
+  open_to_relocation: []         # list of cities/regions, or []
+  experience:
+    - company: string
+      title: string
+      dates: string
+      highlights: []
+  education:
+    - institution: string or null
+      degree: string
+      year: int or null
+  strengths: []
 
 target:
   roles: []
   level: string
-  industries: []
 
 aspirations:
   track: string                  # "ic", "management", or "flexible"
@@ -68,37 +77,19 @@ aspirations:
 preferences:
   company_stage: []
   company_size: null
+  company_environment: null      # e.g. "startup", "enterprise", "mission-driven"
   industry_targets: []
   industry_avoid: []
   base_salary_target_usd: null
 
-scoring:
-  apply_threshold: 75
-  consider_threshold: 55
-  level_mismatch_deduction: 10
-
-experience:
-  - company: string
-    title: string
-    dates: string
-    highlights: []
-
-education:
-  - institution: string or null
-    degree: string
-    year: int or null
-
-strengths: []
-green_flags: []
-yellow_flags: []
-red_flags: []
 deal_breakers: []
 salary_floor_usd: int or null
-notes: string
 
 inferred:
   customer_types: []
   degree_level: null
+
+notes: string
 
 _followups: []
 
@@ -106,12 +97,14 @@ _followups: []
 
 Rules for profile extraction:
 - WHAT_I_WANT overrides anything inferred from the resume for: target.roles,
-  aspirations.track, aspirations.direction, aspirations.company_types,
-  preferences.*, salary_floor_usd, candidate.open_to_remote.
+  target.level, aspirations.track, aspirations.direction, aspirations.company_types,
+  preferences.*, salary_floor_usd, candidate.location_preference.
 - WHAT_I_DONT_WANT populates deal_breakers and aspirations.avoid_company_types.
   Convert described avoidances into crisp deal-breaker strings.
 - If salary mentioned: extract the number into salary_floor_usd. Whether it is
   a hard floor vs aspiration is determined by the _followups logic below.
+- candidate.experience, candidate.education, and candidate.strengths come from
+  the resume and LinkedIn only — never from WHAT_I_WANT or WHAT_I_DONT_WANT.
 - Return ONLY the YAML block. No markdown fences.
 
 ---
@@ -589,11 +582,27 @@ def _apply_clarification_answer(kind, answer, from_text, profile):
 def _run_review(profile, console, THEME, INQUIRER_STYLE, api_key=None,
                 resume_text="", linkedin_text=""):
     """Review loop — menu mirrors the three wizard entry points."""
+    import os, shutil
     from InquirerPy import inquirer
     from InquirerPy.base.control import Choice
     from rich.style import Style as _RS
     from .init_cmd import _show_profile, open_in_editor
     import yaml as _yaml
+
+    # Determine editor label: prefer $VISUAL/$EDITOR name, then check installed GUI editors
+    _editor_env = os.environ.get("VISUAL") or os.environ.get("EDITOR") or ""
+    if _editor_env:
+        _editor_label = os.path.basename(_editor_env)
+    elif shutil.which("code"):
+        _editor_label = "VS Code"
+    elif shutil.which("cursor"):
+        _editor_label = "Cursor"
+    elif shutil.which("zed"):
+        _editor_label = "Zed"
+    else:
+        _editor_label = "your default editor"
+
+    can_rerun = bool(api_key and resume_text)
 
     console.print()
     console.print(
@@ -611,16 +620,19 @@ def _run_review(profile, console, THEME, INQUIRER_STYLE, api_key=None,
         _show_profile(profile)
         console.print()
 
+        choices = [
+            Choice("want",    "Step 2 — What you're looking for"),
+            Choice("dontwant","Step 3 — What you'd pass on"),
+            Choice("editor",  f"Open profile in {_editor_label}"),
+        ]
+        if can_rerun:
+            choices.append(Choice("rerun", "Re-run extraction  [re-enter Steps 2 + 3]"))
+        choices.append(Choice("save", "Save and continue"))
+
         action = inquirer.select(
             message="What would you like to update?",
             qmark="",
-            choices=[
-                Choice("want",    "Step 2 — What you're looking for"),
-                Choice("dontwant","Step 3 — What you'd pass on"),
-                Choice("editor",  "Open full profile in editor"),
-                Choice("rerun",   "Re-run extraction  [re-enter Steps 2 + 3]"),
-                Choice("save",    "Save and continue"),
-            ],
+            choices=choices,
             style=INQUIRER_STYLE,
         ).execute()
 
