@@ -14,8 +14,11 @@ Pipeline:
 """
 from __future__ import annotations
 
-import re, sys, datetime, logging, imaplib, email as email_lib
+import re, sys, datetime, logging, imaplib, email as email_lib, time
 from email.header import decode_header
+
+_IMAP_MAX_RETRIES = 3
+_IMAP_RETRY_DELAY = 30   # seconds between retries on transient network errors
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -392,56 +395,69 @@ def fetch_candidate_emails(gmail_address: str, app_password: str, since_dt: date
 
     emails = []
 
-    with imaplib.IMAP4_SSL("imap.gmail.com") as imap:
-        imap.login(gmail_address, app_password)
-        imap.select("INBOX")
+    for attempt in range(1, _IMAP_MAX_RETRIES + 1):
+        try:
+            with imaplib.IMAP4_SSL("imap.gmail.com") as imap:
+                imap.login(gmail_address, app_password)
+                imap.select("INBOX")
 
-        # Union of all subject searches — deduplicated
-        matching_ids: set[bytes] = set()
-        for term in _SUBJECT_SEARCHES:
-            _, data = imap.search(None, f'SINCE {since_str} SUBJECT "{term}"')
-            if data and data[0]:
-                matching_ids.update(data[0].split())
+                # Union of all subject searches — deduplicated
+                matching_ids: set[bytes] = set()
+                for term in _SUBJECT_SEARCHES:
+                    _, data = imap.search(None, f'SINCE {since_str} SUBJECT "{term}"')
+                    if data and data[0]:
+                        matching_ids.update(data[0].split())
 
-        if not matching_ids:
-            log.info("track: no candidate emails found since %s", since_str)
-            return []
+                if not matching_ids:
+                    log.info("track: no candidate emails found since %s", since_str)
+                    return []
 
-        log.info("track: %d subject-matched emails — fetching bodies…", len(matching_ids))
+                log.info("track: %d subject-matched emails — fetching bodies…", len(matching_ids))
 
-        for msg_id in sorted(matching_ids):
-            _, raw = imap.fetch(msg_id, "(RFC822)")
-            if not raw or not raw[0]:
-                continue
-            raw_bytes = raw[0][1] if isinstance(raw[0], tuple) else raw[0]
-            msg = email_lib.message_from_bytes(raw_bytes)
+                for msg_id in sorted(matching_ids):
+                    _, raw = imap.fetch(msg_id, "(RFC822)")
+                    if not raw or not raw[0]:
+                        continue
+                    raw_bytes = raw[0][1] if isinstance(raw[0], tuple) else raw[0]
+                    msg = email_lib.message_from_bytes(raw_bytes)
 
-            subject     = _decode_header_value(msg.get("Subject", ""))
-            sender      = _decode_header_value(msg.get("From", ""))
-            date_header = msg.get("Date", "")
+                    subject     = _decode_header_value(msg.get("Subject", ""))
+                    sender      = _decode_header_value(msg.get("From", ""))
+                    date_header = msg.get("Date", "")
 
-            # Skip out-of-office auto-replies — they're triggered by our own emails
-            if re.search(r"\bout of office\b|auto.?reply|automatic reply|autoreply", subject, re.IGNORECASE):
-                log.debug("track: skipping OOO/auto-reply — %s", subject[:80])
-                continue
-            # Also check X-Auto-Submitted header (RFC 3834)
-            if msg.get("X-Auto-Submitted", "").lower() not in ("", "no"):
-                log.debug("track: skipping auto-submitted — %s", subject[:80])
-                continue
+                    # Skip out-of-office auto-replies — they're triggered by our own emails
+                    if re.search(r"\bout of office\b|auto.?reply|automatic reply|autoreply", subject, re.IGNORECASE):
+                        log.debug("track: skipping OOO/auto-reply — %s", subject[:80])
+                        continue
+                    # Also check X-Auto-Submitted header (RFC 3834)
+                    if msg.get("X-Auto-Submitted", "").lower() not in ("", "no"):
+                        log.debug("track: skipping auto-submitted — %s", subject[:80])
+                        continue
 
-            try:
-                email_date = parsedate_to_datetime(date_header).date().isoformat()
-            except Exception:
-                email_date = datetime.date.today().isoformat()
+                    try:
+                        email_date = parsedate_to_datetime(date_header).date().isoformat()
+                    except Exception:
+                        email_date = datetime.date.today().isoformat()
 
-            body = _extract_body(msg)
-            log.debug("track: fetched — %s | from: %s", subject[:80], sender[:50])
-            emails.append({
-                "subject": subject,
-                "sender":  sender,
-                "body":    body,
-                "date":    email_date,
-            })
+                    body = _extract_body(msg)
+                    log.debug("track: fetched — %s | from: %s", subject[:80], sender[:50])
+                    emails.append({
+                        "subject": subject,
+                        "sender":  sender,
+                        "body":    body,
+                        "date":    email_date,
+                    })
+            break   # success
+        except OSError as e:
+            if attempt < _IMAP_MAX_RETRIES:
+                log.warning(
+                    "track: IMAP connect failed (attempt %d/%d): %s — retrying in %ds…",
+                    attempt, _IMAP_MAX_RETRIES, e, _IMAP_RETRY_DELAY,
+                )
+                time.sleep(_IMAP_RETRY_DELAY)
+            else:
+                log.error("track: IMAP connect failed after %d attempts: %s", _IMAP_MAX_RETRIES, e)
+                return []
 
     log.info("track: fetched %d candidate emails since %s", len(emails), since_str)
     return emails
@@ -1024,59 +1040,74 @@ def backfill_from_digests(
 
     since_str = since_dt.strftime("%d-%b-%Y")
     added_total = 0
+    n_digests = 0
 
-    with imaplib.IMAP4_SSL("imap.gmail.com") as imap:
-        imap.login(gmail_address, app_password)
-        imap.select("INBOX")
+    for attempt in range(1, _IMAP_MAX_RETRIES + 1):
+        try:
+            with imaplib.IMAP4_SSL("imap.gmail.com") as imap:
+                imap.login(gmail_address, app_password)
+                imap.select("INBOX")
 
-        _, data = imap.search(None, f'SINCE {since_str} SUBJECT "Personalized Job Alert Digest"')
-        if not data or not data[0]:
-            log.info("track: no digest emails found since %s", since_str)
-            return 0
+                _, data = imap.search(None, f'SINCE {since_str} SUBJECT "Personalized Job Alert Digest"')
+                if not data or not data[0]:
+                    log.info("track: no digest emails found since %s", since_str)
+                    return 0
 
-        digest_ids = data[0].split()
-        n_digests = len(digest_ids)
-        log.info("track: found %d digest email(s) to backfill from", n_digests)
+                digest_ids = data[0].split()
+                n_digests = len(digest_ids)
+                log.info("track: found %d digest email(s) to backfill from", n_digests)
 
-        for msg_id in digest_ids:
-            _, raw = imap.fetch(msg_id, "(RFC822)")
-            if not raw or not raw[0]:
-                continue
-            raw_bytes = raw[0][1] if isinstance(raw[0], tuple) else raw[0]
-            msg = email_lib.message_from_bytes(raw_bytes)
+                for msg_id in digest_ids:
+                    _, raw = imap.fetch(msg_id, "(RFC822)")
+                    if not raw or not raw[0]:
+                        continue
+                    raw_bytes = raw[0][1] if isinstance(raw[0], tuple) else raw[0]
+                    msg = email_lib.message_from_bytes(raw_bytes)
 
-            date_header = msg.get("Date", "")
-            try:
-                email_date = parsedate_to_datetime(date_header).date().isoformat()
-            except Exception:
-                email_date = datetime.date.today().isoformat()
+                    date_header = msg.get("Date", "")
+                    try:
+                        email_date = parsedate_to_datetime(date_header).date().isoformat()
+                    except Exception:
+                        email_date = datetime.date.today().isoformat()
 
-            # Extract HTML body from digest email
-            html_body = ""
-            if msg.is_multipart():
-                for part in msg.walk():
-                    if part.get_content_type() == "text/html":
-                        payload = part.get_payload(decode=True)
-                        if payload:
-                            html_body = _safe_decode(payload, part.get_content_charset())
-                            break
+                    # Extract HTML body from digest email
+                    html_body = ""
+                    if msg.is_multipart():
+                        for part in msg.walk():
+                            if part.get_content_type() == "text/html":
+                                payload = part.get_payload(decode=True)
+                                if payload:
+                                    html_body = _safe_decode(payload, part.get_content_charset())
+                                    break
+                    else:
+                        if msg.get_content_type() == "text/html":
+                            payload = msg.get_payload(decode=True)
+                            if payload:
+                                html_body = _safe_decode(payload, msg.get_content_charset())
+
+                    if not html_body:
+                        log.debug("track: digest %s has no HTML body — skipping", email_date)
+                        continue
+
+                    jobs = _parse_digest_html(html_body, email_date)
+                    if jobs:
+                        log.info("track: digest %s → %d role(s) parsed", email_date, len(jobs))
+                        write_to_tracker(jobs, run_date=email_date)
+                        added_total += len(jobs)
+                    else:
+                        log.warning("track: digest %s → 0 roles parsed (HTML structure mismatch?)", email_date)
+            break   # success
+        except OSError as e:
+            if attempt < _IMAP_MAX_RETRIES:
+                log.warning(
+                    "track: IMAP connect failed (attempt %d/%d): %s — retrying in %ds…",
+                    attempt, _IMAP_MAX_RETRIES, e, _IMAP_RETRY_DELAY,
+                )
+                time.sleep(_IMAP_RETRY_DELAY)
             else:
-                if msg.get_content_type() == "text/html":
-                    payload = msg.get_payload(decode=True)
-                    if payload:
-                        html_body = _safe_decode(payload, msg.get_content_charset())
-
-            if not html_body:
-                log.debug("track: digest %s has no HTML body — skipping", email_date)
-                continue
-
-            jobs = _parse_digest_html(html_body, email_date)
-            if jobs:
-                log.info("track: digest %s → %d role(s) parsed", email_date, len(jobs))
-                write_to_tracker(jobs, run_date=email_date)
-                added_total += len(jobs)
-            else:
-                log.warning("track: digest %s → 0 roles parsed (HTML structure mismatch?)", email_date)
+                log.error("track: IMAP connect failed after %d attempts: %s — skipping backfill",
+                          _IMAP_MAX_RETRIES, e)
+                return 0
 
     log.info("track: digest backfill complete — %d role(s) eligible across %d digest(s)",
              added_total, n_digests)

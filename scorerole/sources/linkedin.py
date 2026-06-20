@@ -406,31 +406,48 @@ def _fetch_emails(imap, search_criteria: str, max_recent: int) -> list[dict]:
 
 
 
+_IMAP_MAX_RETRIES = 3
+_IMAP_RETRY_DELAY = 30   # seconds between retries on transient network errors
+
+
 def fetch_linkedin_alerts_since(since_dt: datetime.datetime) -> list[dict]:
     """Fetch all LinkedIn emails on or after since_dt. Read-only — ignores seen_ids."""
     date_str = since_dt.strftime("%d-%b-%Y")
     criteria = f'{_LINKEDIN_SENDER_SEARCH} SINCE "{date_str}"'
-    try:
-        with imaplib.IMAP4_SSL("imap.gmail.com") as imap:
-            try:
-                imap.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
-            except imaplib.IMAP4.error as e:
+    threads: list[dict] = []
+
+    for attempt in range(1, _IMAP_MAX_RETRIES + 1):
+        try:
+            with imaplib.IMAP4_SSL("imap.gmail.com") as imap:
+                try:
+                    imap.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
+                except imaplib.IMAP4.error as e:
+                    raise SystemExit(
+                        f"\n❌  Gmail login failed: {e}\n\n"
+                        f"   GMAIL_ADDRESS:      {GMAIL_ADDRESS or '(not set)'}\n"
+                        f"   GMAIL_APP_PASSWORD: {'(set)' if GMAIL_APP_PASSWORD else '(not set)'}\n\n"
+                        f"   Make sure GMAIL_APP_PASSWORD is a Gmail App Password (not your account password).\n"
+                        f"   Generate one at: https://myaccount.google.com/apppasswords\n"
+                        f"   Requires 2-Step Verification to be enabled on your Google account.\n"
+                    ) from None
+                imap.select("INBOX")
+                threads = _fetch_emails(imap, criteria, 100)
+            break   # success — exit retry loop
+        except SystemExit:
+            raise   # auth errors are not retried
+        except OSError as e:
+            if attempt < _IMAP_MAX_RETRIES:
+                log.warning(
+                    "Gmail IMAP connect failed (attempt %d/%d): %s — "
+                    "retrying in %ds (network may not be ready yet)…",
+                    attempt, _IMAP_MAX_RETRIES, e, _IMAP_RETRY_DELAY,
+                )
+                time.sleep(_IMAP_RETRY_DELAY)
+            else:
                 raise SystemExit(
-                    f"\n❌  Gmail login failed: {e}\n\n"
-                    f"   GMAIL_ADDRESS:      {GMAIL_ADDRESS or '(not set)'}\n"
-                    f"   GMAIL_APP_PASSWORD: {'(set)' if GMAIL_APP_PASSWORD else '(not set)'}\n\n"
-                    f"   Make sure GMAIL_APP_PASSWORD is a Gmail App Password (not your account password).\n"
-                    f"   Generate one at: https://myaccount.google.com/apppasswords\n"
-                    f"   Requires 2-Step Verification to be enabled on your Google account.\n"
+                    f"\n❌  Could not connect to Gmail IMAP after {_IMAP_MAX_RETRIES} attempts: {e}\n"
+                    f"   Check your internet connection and try again.\n"
                 ) from None
-            imap.select("INBOX")
-            threads = _fetch_emails(imap, criteria, 100)
-    except SystemExit:
-        raise
-    except OSError as e:
-        raise SystemExit(
-            f"\n❌  Could not connect to Gmail IMAP: {e}\n"
-            f"   Check your internet connection and try again.\n"
-        ) from None
+
     log.info(f"{len(threads)} LinkedIn emails matched for --since {date_str} rerun")
     return threads

@@ -15,7 +15,6 @@ Scheduled entry point: `scorerole schedule run --lookback {X}`
 """
 from __future__ import annotations
 
-from __future__ import annotations
 import json, os, platform, re, subprocess, sys
 import datetime
 from pathlib import Path
@@ -167,6 +166,11 @@ def build_plist(config: dict, scorerole_bin: str, working_dir: str) -> str:
         <key>HOME</key><string>{home}</string>
         <key>PATH</key><string>{bin_dir}:/usr/bin:/bin:/usr/sbin:/sbin</string>
     </dict>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key><false/>
+    </dict>
+    <key>ThrottleInterval</key><integer>900</integer>
 </dict>
 </plist>
 """
