@@ -14,8 +14,6 @@ Pipeline:
 """
 from __future__ import annotations
 
-
-from __future__ import annotations
 import re, sys, datetime, logging, imaplib, email as email_lib
 from email.header import decode_header
 from pathlib import Path
@@ -465,13 +463,57 @@ def _normalize_body(text: str) -> str:
     return text.lower()
 
 
-def classify_email(body: str, subject: str = "") -> str:
+_LLM_CLASSIFY_PROMPT = """\
+You are classifying a job-application email into exactly one of four categories.
+
+Categories:
+- confirmation   : the sender acknowledges receiving the application or confirms a next step
+- rejection      : the sender declines the application or ends consideration
+- recruiter_screen : the sender requests to schedule a call, phone screen, or interview
+- unknown        : none of the above (newsletters, automated alerts, unrelated)
+
+Reply with exactly one lowercase word from the list above. No punctuation, no explanation.
+
+Subject: {subject}
+
+Body (truncated):
+{body}"""
+
+_LLM_BODY_CHAR_LIMIT = 1500
+_LLM_VALID_CLASSES = frozenset(["confirmation", "rejection", "recruiter_screen", "unknown"])
+
+
+def _classify_with_llm(subject: str, body: str, client) -> str:
+    """Ask Haiku to classify an email that phrase matching left as 'unknown'.
+
+    Returns one of the four classification strings; falls back to 'unknown'
+    on any API error or unexpected response.
+    """
+    truncated_body = body[:_LLM_BODY_CHAR_LIMIT]
+    prompt = _LLM_CLASSIFY_PROMPT.format(subject=subject, body=truncated_body)
+    try:
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=10,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        result = response.content[0].text.strip().lower()
+        if result in _LLM_VALID_CLASSES:
+            return result
+        log.warning("track: LLM returned unexpected class %r — falling back to 'unknown'", result)
+    except Exception as exc:
+        log.warning("track: LLM classification failed (%s) — falling back to 'unknown'", exc)
+    return "unknown"
+
+
+def classify_email(body: str, subject: str = "", llm_client=None) -> str:
     """Return 'confirmation', 'rejection', 'recruiter_screen', or 'unknown'.
 
     Body phrases take priority. Recruiter screen is checked before confirmation
     because scheduling language is unambiguous and some forward-moving phrases
     ("we'd like to move forward") could otherwise collide with confirmation.
-    When the body is ambiguous, the subject tiebreaker runs.
+    When the body is ambiguous, the subject tiebreaker runs. If still unknown
+    and an llm_client is provided, Haiku is called as a last-resort classifier.
     """
     body_norm = _normalize_body(body)
 
@@ -492,6 +534,9 @@ def classify_email(body: str, subject: str = "") -> str:
         return "confirmation"
     if _SUBJECT_IMPLIES_REJECTION.search(subject):
         return "rejection"
+
+    if llm_client is not None:
+        return _classify_with_llm(subject, body, llm_client)
 
     return "unknown"
 
@@ -594,12 +639,12 @@ def extract_role(subject: str, body: str) -> str | None:
     return None
 
 
-def parse_email(email_dict: dict) -> dict:
+def parse_email(email_dict: dict, llm_client=None) -> dict:
     """Classify and extract structured fields from a candidate email."""
     subject = email_dict["subject"]
     body    = email_dict["body"]
 
-    classification = classify_email(body, subject)
+    classification = classify_email(body, subject, llm_client=llm_client)
     company = extract_company(subject, body)
 
     # Sender domain fallback: "no-reply@databricks.com" → "Databricks"
@@ -870,10 +915,18 @@ def _parse_digest_html(html: str, email_date: str) -> list[dict]:
             pass  # fall through to HTML parsing
 
     # ── HTML fallback: parse job cards by "View posting" links ──────────────
-    # React Email renders: title in <td color:#1f2118 font-size:15px>,
+    # React Email renders: title in <td font-size:15px font-weight:500>,
     # company in <p color:#72716d>, score in <span border-radius:20px>.
     # Python fallback uses slightly different colors but same structure.
     # Both use "View posting" anchor text to identify job cards.
+
+    def _nstyle(tag) -> str:
+        """Normalize a tag's style for robust substring matching."""
+        return re.sub(r"\s+", "", (tag.get("style") or "").lower())
+
+    # Known muted colors across React Email and Python fallback renderers.
+    _MUTED = ("72716d", "888780", "726f6a", "6b6b6b", "757575", "666666")
+
     jobs = []
     for anchor in soup.find_all("a"):
         if "View posting" not in anchor.get_text():
@@ -888,19 +941,37 @@ def _parse_digest_html(html: str, email_date: str) -> list[dict]:
         if not card:
             continue
 
-        # Title: <td> with font-size:15px and font-weight:500
+        # Title: font-size 15px with bold/500/600 weight.
+        # _nstyle() strips spaces so "font-size: 15px" and "font-size:15px" both match.
+        # Expanded tag names cover <td>, <div>, <p>, <span> across renderer variants.
         title_td = card.find(
-            lambda t: t.name in ("td", "div")
-            and "15px" in (t.get("style") or "")
-            and "500" in (t.get("style") or "")
+            lambda t: t.name in ("td", "div", "p", "span")
+            and "15px" in _nstyle(t)
+            and any(w in _nstyle(t) for w in ("font-weight:500", "font-weight:600",
+                                               "font-weight:bold"))
         )
         title = title_td.get_text(strip=True) if title_td else ""
 
-        # Company+location: muted <p> or <div> — React uses #72716d, Python uses #888780
+        # Company+location: muted color element (primary), or "·" separator (fallback).
+        # Primary handles both React Email and Python fallback color palettes.
+        # Fallback catches any renderer variant where the color doesn't match exactly.
         co_tag = card.find(
-            lambda t: t.name in ("p", "div")
-            and ("72716d" in (t.get("style") or "") or "888780" in (t.get("style") or ""))
+            lambda t: t.name in ("p", "div", "td", "span")
+            and any(c in _nstyle(t) for c in _MUTED)
+            and t is not title_td
         )
+        if not co_tag or not co_tag.get_text(strip=True):
+            # Structural fallback: find a leaf-ish element containing "·".
+            # Two guards prevent matching a card container:
+            #   - t not in title_td.parents → skip ancestors of the title element
+            #   - len < 120 → skip container elements whose text spans the whole card
+            co_tag = card.find(
+                lambda t: t.name in ("p", "div", "td", "span")
+                and "·" in t.get_text()
+                and t is not title_td
+                and (title_td is None or t not in title_td.parents)
+                and len(t.get_text(strip=True)) < 120
+            )
         company_raw = co_tag.get_text(strip=True) if co_tag else ""
         company = company_raw.split("·")[0].strip()
 
@@ -1013,10 +1084,45 @@ def backfill_from_digests(
 
 
 # ---------------------------------------------------------------------------
+# LLM client factory
+# ---------------------------------------------------------------------------
+
+def _build_llm_client(api_key: str | None):
+    """Return an Anthropic client if profile.yaml has track.llm_fallback: true.
+
+    Returns None when the flag is absent, false, or the api_key is missing —
+    so classify_email() runs phrase-only (safe for OSS users with no key).
+    """
+    if not api_key:
+        return None
+    try:
+        from .profile import load_profile_yaml
+        profile = load_profile_yaml() or {}
+    except Exception:
+        return None
+    if not profile.get("track", {}).get("llm_fallback", False):
+        return None
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+        log.info("track: LLM fallback enabled (Haiku) for unknown emails")
+        return client
+    except Exception as exc:
+        log.warning("track: could not build LLM client (%s) — running phrase-only", exc)
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
-def run_track(gmail_address: str, app_password: str, since_dt: datetime.datetime, dry_run: bool = False) -> None:
+def run_track(
+    gmail_address: str,
+    app_password: str,
+    since_dt: datetime.datetime,
+    dry_run: bool = False,
+    api_key: str | None = None,
+) -> None:
     """Parse confirmation/rejection emails and update the Applications tracker."""
     try:
         import openpyxl
@@ -1025,6 +1131,9 @@ def run_track(gmail_address: str, app_password: str, since_dt: datetime.datetime
 
     from .tracker import TRACKER_PATH
     from .state   import lookup_skipped_role, promote_skipped_role
+
+    # Build LLM client if the profile has llm_fallback enabled
+    llm_client = _build_llm_client(api_key)
 
     # Step 1: backfill tracker from past digest emails FIRST so every suggested
     # role has a proper row (with score, URL, suggestion_status) before we try
@@ -1038,7 +1147,7 @@ def run_track(gmail_address: str, app_password: str, since_dt: datetime.datetime
         log.info("track: no candidate emails found in lookback window.")
         return
 
-    parsed_emails = [parse_email(e) for e in emails]
+    parsed_emails = [parse_email(e, llm_client=llm_client) for e in emails]
 
     actionable = [p for p in parsed_emails
                   if p["classification"] in ("confirmation", "rejection", "recruiter_screen")

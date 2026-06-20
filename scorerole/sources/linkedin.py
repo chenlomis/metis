@@ -37,6 +37,35 @@ _ALUMNI_LINE = re.compile(
     re.IGNORECASE,
 )
 
+# Company name with legal suffix that bleeds into the title slot
+_CO_SUFFIX = re.compile(r',\s*(Inc\.?|LLC|Corp\.?|Ltd\.?|GmbH|S\.A\.|PBC)$', re.I)
+
+# Used for shift detection: company slot contains a bare location string
+# (city, state, region) rather than a company name.
+# Anchored ^…$ so "San Francisco Health" and "New York Times" are NOT matched.
+_LOCATION_LIKE = re.compile(
+    r"^(?:"
+    r"san\s+francisco|new\s+york(?:\s+city)?|los\s+angeles|seattle|"
+    r"austin|boston|chicago|denver|atlanta|miami|new\s+jersey|"
+    r"bay\s+area|silicon\s+valley|remote|united\s+states|"
+    r"greater\s+\w+(?:\s+\w+)?\s+area|"
+    r"[a-z\s]+,\s*(?:CA|NY|WA|TX|MA|IL|CO|GA|FL|OR|VA|NC|AZ|OH|PA|"
+    r"NJ|MN|MI|MO|IN|TN|UT|MD|WI|SC|NV|CT|LA|AL|AR|IA|KS|KY|ME|MS|"
+    r"MT|NE|NH|NM|ND|OK|RI|SD|VT|WV|WY|DC|HI|AK|ID|DE)"
+    r")$",
+    re.IGNORECASE,
+)
+
+# Used for shift detection: a real job title contains at least one of these words.
+# A company name or bare location will not match.
+_TITLE_JOB_KEYWORDS = re.compile(
+    r"\b(?:manager|director|lead|head|officer|president|vp|principal|"
+    r"staff|senior|associate|engineer|analyst|scientist|designer|"
+    r"architect|specialist|coordinator|owner|product|program|project|"
+    r"operations|strategy|general\s+manager)\b",
+    re.IGNORECASE,
+)
+
 _BROWSER_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -148,17 +177,33 @@ def extract_jobs(body: str) -> list[dict]:
 
         if len(before_lines) < 3:
             continue
-        # Last 3 layout lines (bottom-up) = location, company, title
-        location, company, title = (
-            before_lines[-1],
-            before_lines[-2],
-            before_lines[-3],
-        )
-        # Guard: if extracted "title" looks like a company name (e.g. "Qventus, Inc"),
-        # the card had an extra line above — shift up one level if available.
-        _CO_SUFFIX = re.compile(r',\s*(Inc\.?|LLC|Corp\.?|Ltd\.?|GmbH|S\.A\.|PBC)$', re.I)
-        if _CO_SUFFIX.search(title) and len(before_lines) >= 4:
-            title = before_lines[-4]
+
+        # Default positional assignment: bottom-up = location, company, title
+        location = before_lines[-1]
+        company  = before_lines[-2]
+        title    = before_lines[-3]
+
+        # ── Shift detection (runs in priority order, mutually exclusive) ──────
+        #
+        # Case A — trailing garbage line pushed all three fields down one slot.
+        # Signal: the "company" slot contains a bare city/state/region string.
+        # Fix: shift all three fields up by one.
+        if _LOCATION_LIKE.match(company.strip()) and len(before_lines) >= 4:
+            location = before_lines[-2]
+            company  = before_lines[-3]
+            title    = before_lines[-4]
+        else:
+            # Case B — company name with legal suffix bled into the title slot
+            # (e.g. "Qventus, Inc"). Fix: title shifts up one.
+            if _CO_SUFFIX.search(title) and len(before_lines) >= 4:
+                title = before_lines[-4]
+            # Case C — company/location name in title slot, no legal suffix.
+            # Signal: title has no job-role keywords. Only shift if the slot
+            # above does contain job keywords (avoids false positives).
+            elif not _TITLE_JOB_KEYWORDS.search(title) and len(before_lines) >= 4:
+                candidate = before_lines[-4]
+                if _TITLE_JOB_KEYWORDS.search(candidate):
+                    title = candidate
         seen.add(job_id)
         jobs.append({
             "title":        title,
