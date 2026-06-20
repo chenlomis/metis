@@ -11,8 +11,6 @@ that may differ from LinkedIn titles.
 """
 from __future__ import annotations
 
-
-from __future__ import annotations
 import re, datetime, logging, os
 from pathlib import Path
 
@@ -71,6 +69,49 @@ _STATUS_FILL = {
     "Proceeding":   _GREEN,
     "Rejected":     _RED,
 }
+
+# ---------------------------------------------------------------------------
+# Input validation — guard against LinkedIn extractor mis-parsing
+# ---------------------------------------------------------------------------
+
+# Any real job title contains at least one of these role-level words.
+# Company names and locations will not match.
+_JOB_TITLE_KEYWORDS = re.compile(
+    r"\b(?:manager|director|lead|head|officer|president|vp|principal|"
+    r"staff|senior|associate|engineer|analyst|scientist|designer|"
+    r"architect|specialist|coordinator|owner|operations|strategy|"
+    r"product|program|project|general\s+manager|gm)\b",
+    re.IGNORECASE,
+)
+
+# Company field looks like a location when the entire value is a city, state, or region.
+# Uses ^…$ anchors to avoid flagging "San Francisco Health" as a location.
+_COMPANY_IS_LOCATION = re.compile(
+    r"^(?:"
+    r"san\s+francisco|new\s+york(?:\s+city)?|los\s+angeles|seattle|"
+    r"austin|boston|chicago|denver|atlanta|miami|new\s+jersey|"
+    r"bay\s+area|silicon\s+valley|remote|united\s+states|"
+    r"greater\s+\w+(?:\s+\w+)?\s+area|"
+    r"[a-z\s]+,\s*(?:CA|NY|WA|TX|MA|IL|CO|GA|FL|OR|VA|NC|AZ|OH|PA|"
+    r"NJ|MN|MI|MO|IN|TN|UT|MD|WI|SC|NV|CT|LA|AL|AR|IA|KS|KY|ME|MS|"
+    r"MT|NE|NH|NM|ND|OK|RI|SD|VT|WV|WY|DC|HI|AK|ID|DE)"
+    r")$",
+    re.IGNORECASE,
+)
+
+
+def _is_plausible_job_row(title: str, company: str) -> bool:
+    """Return False when title or company look like mis-parsed LinkedIn fields.
+
+    Rejects rows where:
+    - title contains no job-role keywords (likely a company name or location)
+    - company field is a city, state, or region string (likely the location field)
+    """
+    if not _JOB_TITLE_KEYWORDS.search(title):
+        return False
+    if _COMPANY_IS_LOCATION.match(company.strip()):
+        return False
+    return True
 
 
 def _sort_rows_by_date(ws) -> None:
@@ -287,7 +328,17 @@ def write_to_tracker(jobs: list[dict], run_date: str | None = None) -> None:
     skipped = 0
 
     for job in eligible:
-        key = _norm_key(job.get("title", ""), job.get("company", ""))
+        title   = job.get("title", "")
+        company = job.get("company", "")
+        if not _is_plausible_job_row(title, company):
+            log.warning(
+                "Tracker: skipping likely-misparsed row — title=%r  company=%r  "
+                "(title lacks job-role keywords or company looks like a location)",
+                title, company,
+            )
+            skipped += 1
+            continue
+        key = _norm_key(title, company)
         if key in existing:
             skipped += 1
             continue
