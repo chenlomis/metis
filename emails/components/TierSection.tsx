@@ -21,7 +21,8 @@ function scoreRange(jobs: Job[]): string {
 export default function TierSection({ tier, jobs }: Props) {
   if (!jobs.length) return null;
   const { bar, label } = SECTION_ACCENT[tier];
-  const tierLabel = tier.charAt(0).toUpperCase() + tier.slice(1);
+  const TIER_LABELS: Record<Tier, string> = { apply: 'Solid Match', consider: 'Moderate Match', skipped: 'Limited Match' };
+  const tierLabel = TIER_LABELS[tier] ?? (tier.charAt(0).toUpperCase() + tier.slice(1));
 
   return (
     <Section style={{ marginBottom: '14px' }}>
@@ -31,7 +32,7 @@ export default function TierSection({ tier, jobs }: Props) {
           <tr>
             <td style={{ width: '3px', background: bar, borderRadius: '2px', fontSize: '0', lineHeight: '0', paddingTop: '8px', paddingBottom: '8px' }}>&nbsp;</td>
             <td style={{ width: '8px' }}>&nbsp;</td>
-            <td style={{ fontSize: '13px', fontWeight: 500, color: label, fontFamily: FONT, paddingTop: '8px', paddingBottom: '8px' }}>
+            <td style={{ fontSize: '14px', fontWeight: 600, color: label, fontFamily: FONT, paddingTop: '8px', paddingBottom: '8px' }}>
               {tierLabel}
             </td>
             <td style={{ fontSize: '12px', color: C_MUTED, textAlign: 'right', fontFamily: FONT, paddingTop: '8px', paddingBottom: '8px' }}>

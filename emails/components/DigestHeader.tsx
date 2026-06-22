@@ -15,6 +15,7 @@ interface Props {
   considerCount: number;
   candidateName: string;
   greeting: string;
+  greetingSub?: string;
 }
 
 function StatTile({
@@ -27,7 +28,7 @@ function StatTile({
       width="33%"
       style={{ background: bg, padding: '12px 14px', borderRadius: '6px', verticalAlign: 'top' }}
     >
-      <p style={{ fontSize: '26px', fontWeight: 500, color: numColor, margin: '0 0 3px 0', fontFamily: FONT, lineHeight: '1' }}>
+      <p style={{ fontSize: '32px', fontWeight: 600, color: numColor, margin: '0 0 3px 0', fontFamily: FONT, lineHeight: '1' }}>
         {number}
       </p>
       <p style={{ fontSize: '10px', color: lblColor, textTransform: 'uppercase', letterSpacing: '0.06em', margin: 0, fontFamily: FONT }}>
@@ -37,7 +38,7 @@ function StatTile({
   );
 }
 
-export default function DigestHeader({ date, totalEvaluated, applyCount, considerCount, greeting }: Props) {
+export default function DigestHeader({ date, totalEvaluated, applyCount, considerCount, greeting, greetingSub }: Props) {
   return (
     <Section style={{ background: C_BG_PRIMARY, border: `1px solid ${C_BORDER}`, borderRadius: '8px', marginBottom: '12px' }}>
 
@@ -68,23 +69,25 @@ export default function DigestHeader({ date, totalEvaluated, applyCount, conside
         </tbody>
       </table>
 
-      {/* Greeting + title */}
-      <table width="100%" cellPadding={0} cellSpacing={0} border={0} style={{ borderCollapse: 'collapse' }}>
-        <tbody>
-          <tr>
-            <td style={{ padding: '16px 20px 0' }}>
-              {greeting ? (
-                <Text style={{ fontSize: '14px', color: C_MUTED, margin: '0 0 6px 0', fontFamily: FONT, lineHeight: '1.5' }}>
+      {/* Greeting — salutation on line 1, evaluation summary on line 2 */}
+      {greeting ? (
+        <table width="100%" cellPadding={0} cellSpacing={0} border={0} style={{ borderCollapse: 'collapse' }}>
+          <tbody>
+            <tr>
+              <td style={{ padding: '14px 20px 0' }}>
+                <Text style={{ fontSize: '18px', fontWeight: 600, color: C_HEADING, margin: '0 0 4px 0', fontFamily: FONT, lineHeight: '1.3' }}>
                   {greeting}
                 </Text>
-              ) : null}
-              <Text style={{ fontSize: '18px', fontWeight: 500, color: C_HEADING, margin: '0', fontFamily: FONT, lineHeight: '1.2' }}>
-                Personalized job alert digest
-              </Text>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+                {greetingSub ? (
+                  <Text style={{ fontSize: '13px', color: C_MUTED, margin: '0', fontFamily: FONT, lineHeight: '1.5' }}>
+                    {greetingSub}
+                  </Text>
+                ) : null}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      ) : null}
 
       {/* Stat tiles */}
       <table width="100%" cellPadding={0} cellSpacing={0} border={0} style={{ borderCollapse: 'collapse' }}>
@@ -104,7 +107,7 @@ export default function DigestHeader({ date, totalEvaluated, applyCount, conside
                     <td width={8}>&nbsp;</td>
                     <StatTile
                       number={applyCount}
-                      label="Apply now"
+                      label="Solid Match"
                       bg={C_STAT_APPLY_BG}
                       numColor={C_STAT_APPLY_NUM}
                       lblColor={C_STAT_APPLY_LBL}
@@ -112,7 +115,7 @@ export default function DigestHeader({ date, totalEvaluated, applyCount, conside
                     <td width={8}>&nbsp;</td>
                     <StatTile
                       number={considerCount}
-                      label="Consider"
+                      label="Moderate Match"
                       bg={C_STAT_CONSIDER_BG}
                       numColor={C_STAT_CONSIDER_NUM}
                       lblColor={C_STAT_CONSIDER_LBL}
