@@ -4,7 +4,7 @@ import Tag from './Tag';
 import PointRow from './PointRow';
 import CardFooter from './CardFooter';
 import { FONT, C_MUTED, C_BORDER, C_BG_PRIMARY, C_BG_CONSIDER, C_HEADING, SCORE_COLORS } from '../../utils/colors';
-import { capLeverage, capFriction, capTags, shortenTag, cleanPoints } from '../../utils/format';
+import { capLeverage, capFriction, capTags, sortTagsBySentiment, shortenTag, cleanPoints } from '../../utils/format';
 import type { Job, Tier } from '../../types';
 
 interface Props {
@@ -17,13 +17,13 @@ export default function JobCard({ job, tier }: Props) {
   const cardBg     = tier === 'consider' ? C_BG_CONSIDER : C_BG_PRIMARY;
   const leverage   = cleanPoints(capLeverage(job.leveragePoints));
   const friction   = cleanPoints(capFriction(job.frictionPoints));
-  const tags       = capTags(job.tags);
+  const tags       = capTags(sortTagsBySentiment(job.tags));
 
   return (
     <Section
       style={{ background: cardBg, border: `1px solid ${C_BORDER}`, borderRadius: '8px', padding: '14px 16px', marginBottom: '0' }}
     >
-      {/* Title + score pill */}
+      {/* Title row — title left, score pill top-right */}
       <table cellPadding={0} cellSpacing={0} border={0} style={{ width: '100%', marginBottom: '3px', borderCollapse: 'collapse' }}>
         <tbody>
           <tr>
@@ -31,7 +31,7 @@ export default function JobCard({ job, tier }: Props) {
               {job.title}
             </td>
             <td style={{ width: '1px', whiteSpace: 'nowrap', paddingLeft: '8px', verticalAlign: 'top' }}>
-              <span style={{ background: pillColors.background, color: pillColors.color, fontSize: '11px', fontWeight: 500, padding: '3px 9px', borderRadius: '20px', fontFamily: FONT, whiteSpace: 'nowrap', display: 'inline-block' }}>
+              <span style={{ background: pillColors.background, color: pillColors.color, fontSize: '12px', fontWeight: 500, padding: '3px 9px', borderRadius: '20px', fontFamily: FONT, whiteSpace: 'nowrap', display: 'inline-block' }}>
                 {job.score}%
               </span>
             </td>
@@ -50,8 +50,8 @@ export default function JobCard({ job, tier }: Props) {
         {friction.map((pt, i) => <PointRow key={`f${i}`} direction="down" text={pt} />)}
       </div>
 
-      {/* Tags (max 5) */}
-      <div style={{ marginBottom: '10px' }}>
+      {/* Tags (max 4, green→amber→red→neutral) */}
+      <div style={{ marginBottom: '8px' }}>
         {tags.map((tag, i) => <Tag key={i} text={shortenTag(tag.text)} sentiment={tag.sentiment} />)}
       </div>
 

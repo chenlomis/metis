@@ -24,13 +24,13 @@ export const C_STAT_TOTAL_BG  = '#f5f5f3';
 export const C_STAT_TOTAL_NUM = '#1f2118';
 export const C_STAT_TOTAL_LBL = '#888780';
 
-export const C_STAT_APPLY_BG  = '#f0fdf4';
-export const C_STAT_APPLY_NUM = '#15803d';
-export const C_STAT_APPLY_LBL = '#166534';
+export const C_STAT_APPLY_BG  = '#eef2ee';
+export const C_STAT_APPLY_NUM = '#2d5a2d';
+export const C_STAT_APPLY_LBL = '#2d5a2d';
 
-export const C_STAT_CONSIDER_BG  = '#fefce8';
-export const C_STAT_CONSIDER_NUM = '#854d0e';
-export const C_STAT_CONSIDER_LBL = '#713f12';
+export const C_STAT_CONSIDER_BG  = '#faeeda';
+export const C_STAT_CONSIDER_NUM = '#854f0b';
+export const C_STAT_CONSIDER_LBL = '#854f0b';
 
 // Score tier pills — tints, not fills; all within same lightness band
 export const SCORE_COLORS = {
@@ -60,7 +60,7 @@ export const C_ARROW_DOWN = '#7a5c1e';  // amber — friction signal
 
 // Legend dot definitions (display order)
 export const LEGEND_DOTS = [
-  { color: '#2d5a2d', label: 'Strength match' },
-  { color: '#7a5c1e', label: 'Caution / domain gap' },
-  { color: '#8b2e2e', label: 'Hard blocker' },
+  { color: '#2d5a2d', label: 'Strengths' },
+  { color: '#7a5c1e', label: 'Caution' },
+  { color: '#8b2e2e', label: 'Blocker' },
 ] as const;

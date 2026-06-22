@@ -32,7 +32,7 @@ export default function PointRow({ direction, text }: Props) {
           >
             {isUp ? '↑' : '↓'}
           </td>
-          <td style={{ fontSize: '13px', color: textColor, lineHeight: '1.5', fontFamily: FONT }}>
+          <td style={{ fontSize: '13px', color: textColor, lineHeight: '1.4', fontFamily: FONT }}>
             {text}
           </td>
         </tr>
