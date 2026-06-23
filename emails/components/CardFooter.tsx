@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { Link } from '@react-email/components';
-import { FONT, C_BORDER, C_LINK, C_SUBTLE } from '../../utils/colors';
+import { FONT, C_BORDER, C_LINK, C_BTN, C_SUBTLE } from '../../utils/colors';
 
 interface Props {
   postingUrl: string;
@@ -38,9 +38,9 @@ export default function CardFooter({ postingUrl, alumniCount }: Props) {
               style={{
                 fontSize: '12px',
                 fontWeight: 500,
-                color: C_LINK,
+                color: C_BTN,
                 textDecoration: 'none',
-                border: `1px solid ${C_LINK}`,
+                border: `1px solid ${C_BTN}`,
                 padding: '5px 12px',
                 borderRadius: '4px',
                 fontFamily: FONT,

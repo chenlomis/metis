@@ -72,10 +72,27 @@ def _build_prescreen_context() -> str:
     target_roles = data.get("target", {}).get("roles", [])
     # Use first target role as the function signal; fall back to PM for legacy profiles.
     function_hint = target_roles[0] if target_roles else "Product Management"
+
+    # Derive the job function label for the filter instruction.
+    # Be explicit about common confusable pairs so Haiku doesn't conflate them.
+    fn_lower = function_hint.lower()
+    if "designer" in fn_lower or "design" in fn_lower:
+        function_label = "Product Design / UX Design"
+        not_function = (
+            "Product Manager, Program Manager, Data Scientist, Engineer, or any non-design role. "
+            "NOTE: 'Product Designer' and 'Product Manager' are DIFFERENT functions — filter PM roles."
+        )
+    elif "engineer" in fn_lower or "ml" in fn_lower or "machine learning" in fn_lower:
+        function_label = "Engineering / ML Engineering"
+        not_function = "Product Manager, Data Analyst, or non-engineering roles"
+    else:
+        function_label = function_hint
+        not_function = "completely unrelated functions (e.g., Finance, Legal, Marketing)"
+
     lines: list[str] = [
-        f"Candidate is seeking: {function_hint} (and similar roles at same level).",
-        "Filter ONLY if the role is a completely different function "
-        "(e.g., candidate seeks ML Engineering but role is Marketing or Finance).",
+        f"Candidate is seeking: {function_label} roles (e.g. {function_hint}).",
+        f"Filter ONLY if the role is clearly NOT {function_label} — i.e. it is a {not_function}.",
+        "When in doubt, PASS the role through (do not over-filter).",
     ]
 
     deal_breakers = data.get("deal_breakers", [])
@@ -154,12 +171,11 @@ def prescreen_jobs_batch(client: anthropic.Anthropic, jobs: list[dict]) -> list[
                 f"{context}\n\n"
                 "Quick function filter. For each numbered job output only the number "
                 "and Y or N — nothing else.\n"
-                "N = wrong function entirely: engineering, design, marketing, sales, "
-                "data science, finance, operations, or legal role — NOT a PM/product role. "
-                "OR the title+company obviously matches a hard-no deal-breaker above.\n"
-                "Y = everything else, including all seniority levels of PM/product roles "
-                "(IC, Senior, Lead, Staff, Principal, Director, VP). "
-                "Never filter on seniority — scope must be assessed from the JD, not the title.\n"
+                "N = the role is clearly the WRONG function for this candidate "
+                "(see candidate target above). OR the title+company obviously matches "
+                "a hard-no deal-breaker above.\n"
+                "Y = the role is the RIGHT function or close enough to warrant a full JD review. "
+                "Never filter on seniority level — scope must be assessed from the full JD, not the title.\n"
                 "When uncertain, Y."
             ),
             messages=[{"role": "user", "content": job_lines}],
@@ -264,12 +280,14 @@ def _build_bullet_style_guide(profile_data: dict) -> str:
    If a sentence exceeds 20 words, it is wrong — rewrite it, do not submit it.
 2. NO em-dash constructions. "topic — evidence — more evidence" is banned. One clause only.
 3. Lead with the specific skill or fact; name something concrete from the JD.
-4. PRONOUNS BANNED everywhere. No she/her/he/him/his/they/them in any position.
-   Subject position: always "{first}", never "{first}'s background", "{first}'s experience".
-   Object position: restructure to avoid "for her", "giving him", "with his experience".
-   Possessive subject also banned: "{first}'s MCS..." → "Her MCS..." is wrong; write
-   "{first} holds an MCS..." instead.
-5. Active verb: "shipped", "led", "owns", "built" — not "has experience in" or "maps to".
+4. SECOND-PERSON ALWAYS. Address the reader directly — "You shipped", "Your beta program", "You hold".
+   Never use "{first}" or any third-person framing in bullet text.
+   Third-person pronouns (she/her/he/him/they/them) are also banned.
+   Possessive: "Your MCS in Data Science..." not "{first}'s MCS..." or "Her MCS...".
+5. Active verb + correct tense:
+   - Candidate's past actions → simple past: "shipped", "led", "built", "ran", "delivered".
+   - Role requirements / what the JD asks for → present: "requires", "covers", "fits", "applies to".
+   - Never mix: "You shipped X, which shows Y" is correct; "You ship X" for a past act is wrong.
 6. Specific over generic: name a product, metric, customer type, or technology.
    "at scale" is banned — replace with the actual scale: "across 2,000+ models", "for 350+ customers".
 7. NEVER mention score adjustments, deductions, multipliers, or numerical scoring mechanics.
@@ -282,18 +300,18 @@ Do not default to the most prominent-sounding entries. If a less-prominent entry
 closer match to what the JD specifically asks for, cite that one instead.
 {proof_lines}
 
-EXPERIENCE VOCABULARY — cite these when referencing {first}'s background:
+EXPERIENCE VOCABULARY — cite these when writing "You [verb]..." bullets:
 {exp_vocab}
 
 BAD (these are wrong — reject before submitting):
-  ↑  "{first} built AI features at DocuSign — including model evaluation and semantic recommendation at enterprise scale — mapping directly to the JD."  [em-dash + "at scale" + "directly" = 3 violations]
-  ↑  "{first}'s MCS in Data Science from UIUC satisfies Google's preferred master's degree qualification."  [possessive subject — rewrite as "{first} holds an MCS..."]
-  ↑  "...giving her direct fluency with the developer context..."  [pronoun in object position]
-  ↓  "There may be some leveling uncertainty worth exploring in the interview."  [vague]
+  ✓  "{first} built AI features at DocuSign — mapping directly to the JD."  [third-person + em-dash + "directly"]
+  ✓  "{first}'s MCS in Data Science satisfies the degree requirement."  [third-person possessive]
+  ✓  "You build AI features at DocuSign..."  [present tense for a past action]
+  ?  "There may be some leveling uncertainty worth exploring."  [vague, no concrete fact]
 
-GOOD (15–20 words, no em-dash, no pronouns, no banned words):
-  ↑  {good_leverage}
-  ↓  "The title sits below {first}'s Staff/Principal target — verify scope and comp before applying." """
+GOOD (15–20 words, second-person, correct tense, no em-dash):
+  ✓  "You {good_leverage_verb} — fits {jd_requirement}."  [past act → present fit]
+  ?  "The title sits below your Staff/Principal target — verify scope and comp before applying." """
 
 
 def _build_score_suffix(name: str, apply_t: int, consider_t: int) -> str:
