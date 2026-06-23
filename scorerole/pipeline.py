@@ -20,6 +20,7 @@ DEFAULT_LOOKBACK   = os.getenv("DEFAULT_LOOKBACK", "3d")  # fallback only; main(
 from .state import (
     DATA_DIR, LOG_DIR, SEEN_FILE,
     load_seen_roles, save_seen_roles, save_skipped_roles, _role_hash,
+    load_role_queue, save_role_queue,
 )
 from .feedback import save_last_run
 from .sources import fetch_alerts
@@ -141,6 +142,35 @@ def _prompt_score_all(n_found: int, cap: int) -> int:
 # Pipeline stages (private — called in sequence by run_pipeline)
 # ---------------------------------------------------------------------------
 
+# Keywords that, when found in a LinkedIn alert's quoted search term, mean the
+# entire email is for a different job function and should be skipped before parsing.
+# "When in doubt, don't filter" — only reject on unambiguous non-PM signals.
+_NON_PM_SUBJECT_SIGNALS = frozenset({
+    "designer", "design", "ux", "ui",
+    "engineer", "engineering", "developer", "swe",
+    "ml", "machine learning", "data scientist", "data science",
+    "researcher",
+    "finance", "accounting", "legal", "marketing", "sales",
+    "recruiter", "recruiting",
+})
+
+
+def _is_pm_email(subject: str) -> bool:
+    """Return False only when the email subject clearly indicates a non-PM function.
+
+    LinkedIn alert subjects often start with a quoted search term:
+      '"senior designer": Company - Role Title at ...'
+    We extract that term and check for non-PM function signals. If the subject
+    has no quoted term we can't tell, so we pass it through (return True).
+    """
+    m = re.match(r'^"([^"]+)"', subject.strip())
+    if not m:
+        return True  # ambiguous subject — don't filter
+    search_term = m.group(1).lower()
+    words = set(re.sub(r"[^a-z\s]", "", search_term).split())
+    return not bool(words & _NON_PM_SUBJECT_SIGNALS)
+
+
 def _stage_ingest(since_dt: datetime.datetime, seen_roles: set, profile=None) -> "list[dict] | None":
     """Fetch job alerts (LinkedIn + proactive sources) and return deduplicated new jobs.
 
@@ -171,7 +201,14 @@ def _stage_ingest(since_dt: datetime.datetime, seen_roles: set, profile=None) ->
             seen_roles.add(role_hash)
             all_jobs.append(job)
 
+    skipped_emails = 0
     for t in (threads or []):
+        subject = t.get("subject", "")
+        if subject and not _is_pm_email(subject):
+            log.info("Subject filter: skipping non-PM alert — %s", subject[:80])
+            skipped_emails += 1
+            continue
+        email_date = t.get("email_date")
         jobs_from_thread = extract_jobs(t["body"])
         # Recommendation emails ("Company is hiring" / "Similar jobs") have no plain-text
         # "View job:" line — fall back to HTML link extraction.
@@ -180,7 +217,12 @@ def _stage_ingest(since_dt: datetime.datetime, seen_roles: set, profile=None) ->
             if jobs_from_thread:
                 log.info(f"HTML extraction found {len(jobs_from_thread)} jobs in recommendation email")
         for job in jobs_from_thread:
+            if email_date:
+                job["email_date"] = email_date
             _ingest(job)
+
+    if skipped_emails:
+        log.info("Subject filter: skipped %d non-PM alert email(s)", skipped_emails)
 
     # Proactive company career-page scraping (enabled via profile proactive_sources)
     if profile and profile.get("proactive_sources", {}).get("enabled"):
@@ -197,6 +239,24 @@ def _stage_ingest(since_dt: datetime.datetime, seen_roles: set, profile=None) ->
     if not threads and not all_jobs:
         log.info("No emails in lookback window and no proactive sources active. Done.")
         return None
+
+    # Merge staged roles from prior capped runs, deduping against already-ingested jobs.
+    staged = load_role_queue()
+    if staged:
+        ingested_hashes = {_role_hash(j["title"], j["company"]) for j in all_jobs}
+        merged = 0
+        for job in staged:
+            h = _role_hash(job["title"], job["company"])
+            if h not in ingested_hashes and h not in seen_roles:
+                ingested_hashes.add(h)
+                seen_roles.add(h)
+                all_jobs.append(job)
+                merged += 1
+        log.info("Role queue: merged %d staged role(s) (%d in queue, %d already seen/ingested)",
+                 merged, len(staged), len(staged) - merged)
+
+    # Sort freshest first so the cap always scores the most recent roles.
+    all_jobs.sort(key=lambda j: j.get("email_date", ""), reverse=True)
 
     return all_jobs
 
@@ -230,6 +290,8 @@ def _stage_cap(
             f"  (Haiku pre-screen will filter obvious mismatches — actual cost typically lower.)\n"
         )
 
+    # Determine effective cap for this run (cap_to=None means score everything).
+    cap_to: int | None = None
     if MAX_JOBS_PER_RUN > 0 and n_found > MAX_JOBS_PER_RUN:
         if score_all:
             log.info(f"{n_found} roles to evaluate (--no-limit flag; Haiku pre-screen will filter)")
@@ -240,17 +302,16 @@ def _stage_cap(
                 log.info(f"Scoring all {n_found} roles (Haiku pre-screen will filter first)")
                 should_prescreen = True
             else:
-                all_jobs = all_jobs[:chosen]
-                log.info(f"Scoring {chosen} roles")
+                cap_to = chosen
+                should_prescreen = True  # always prescreen before a custom cap too
+                log.info(f"Scoring up to {chosen} role(s) (Haiku pre-screen runs first)")
         else:
-            log.warning(
-                f"{n_found} roles found but capped at {MAX_JOBS_PER_RUN} "
-                f"(non-interactive run). Use --no-limit to score everything, "
-                f"or set MAX_JOBS_PER_RUN=0 in .env to remove the cap entirely."
-            )
-            all_jobs = all_jobs[:MAX_JOBS_PER_RUN]
+            # Non-interactive (cron): prescreen full batch, then cap to MAX_JOBS_PER_RUN.
+            cap_to = MAX_JOBS_PER_RUN
+            should_prescreen = True
+            log.info(f"{n_found} roles found — Haiku pre-screen before capping to {MAX_JOBS_PER_RUN}")
     else:
-        log.info(f"{n_found} unique roles to evaluate")
+        log.info(f"{n_found} unique role(s) to evaluate")
 
     if should_prescreen:
         from .score import prescreen_jobs_batch
@@ -262,6 +323,16 @@ def _stage_cap(
             if id(job) not in passed_ids:
                 job["eval"] = {"score": 0, "verdict": "prescreened", "reason": "haiku_prescreen_filtered"}
                 write_trace(job)
+
+    # Apply effective cap after pre-screen. Excess roles are queued for the next run.
+    if cap_to is not None and len(all_jobs) > cap_to:
+        excess = all_jobs[cap_to:]
+        all_jobs = all_jobs[:cap_to]
+        save_role_queue(excess)
+        log.info("Capping to %d role(s); %d queued for next run → role_queue.json",
+                 cap_to, len(excess))
+    else:
+        save_role_queue([])  # everything scored this run — queue is now empty
 
     return all_jobs, should_prescreen
 
@@ -659,6 +730,32 @@ def main():
     # debug subcommand
     subparsers.add_parser("debug", help="Dump the most recent LinkedIn alert email for inspection.")
 
+    # report subcommand
+    report_p = subparsers.add_parser(
+        "report",
+        help="Generate and send the Scorerole market report.",
+        description=(
+            "Compiles cumulative pipeline metrics from the tracker and sends\n"
+            "the report to your email address.\n\n"
+            "  scorerole report                       # send to email\n"
+            "  scorerole report --output report.html  # save as HTML\n"
+            "  scorerole report --output report.pdf   # save as PDF\n"
+            "  scorerole report --lookback 60d        # scope market intel to 60 days"
+        ),
+    )
+    report_p.add_argument(
+        "--output", default=None, metavar="FILE",
+        help="Save report to FILE (.html or .pdf) instead of sending by email.",
+    )
+    report_p.add_argument(
+        "--lookback", default="30d", metavar="DURATION",
+        help="How far back to scope market intelligence sections. Default: 30d",
+    )
+    report_p.add_argument(
+        "--send", action="store_true",
+        help="Send as a real report email (no [DRAFT PREVIEW] prefix).",
+    )
+
 
 
     args = parser.parse_args()
@@ -779,6 +876,18 @@ def main():
     elif args.command == "debug":
         _validate_env()
         debug_emails()
+
+    elif args.command == "report":
+        _validate_env()
+        from .report_cmd import run_report
+        from .xlsx import TRACKER_PATH
+        run_report(
+            tracker_path=TRACKER_PATH,
+            gmail_address=GMAIL_ADDRESS,
+            app_password=GMAIL_APP_PASSWORD,
+            output=getattr(args, "output", None),
+            preview=not getattr(args, "send", False),
+        )
 
     else:
         # Default: run the digest pipeline

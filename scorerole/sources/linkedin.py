@@ -401,7 +401,19 @@ def _fetch_emails(imap, search_criteria: str, max_recent: int) -> list[dict]:
         body = _extract_text(msg)
         html  = _get_html_body(msg)
         if body or html:
-            threads.append({"msg_id": msg_id, "body": body, "html": html})
+            subject = msg.get("Subject", "")
+            try:
+                import email.utils as _eu
+                email_date = _eu.parsedate_to_datetime(msg.get("Date", "")).isoformat()
+            except Exception:
+                email_date = datetime.datetime.now().isoformat()
+            threads.append({
+                "msg_id": msg_id,
+                "body": body,
+                "html": html,
+                "subject": subject,
+                "email_date": email_date,
+            })
     return threads
 
 

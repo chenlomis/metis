@@ -7,6 +7,7 @@ LOG_DIR       = DATA_DIR / "logs"
 SEEN_FILE     = DATA_DIR / "seen_roles.json"     # canonical dedup store
 SKIPPED_FILE  = DATA_DIR / "skipped_roles.json"  # metadata for skipped roles (backport store)
 LAST_RUN_FILE = DATA_DIR / "last_run.json"        # summary of most recent pipeline run
+QUEUE_FILE    = DATA_DIR / "role_queue.json"      # roles capped out of prior runs, awaiting scoring
 FEEDBACK_FILE     = DATA_DIR / "feedback.md"          # user calibration notes (appended via `scorerole feedback`)
 FEEDBACK_LOG_FILE = DATA_DIR / "feedback_log.jsonl"   # structured audit log of parsed feedback entries
 RUNS_PATH         = DATA_DIR / "runs.jsonl"            # per-job trace records written by trace.py
@@ -130,3 +131,21 @@ def save_seen_roles(new_entries: dict, ttl_days: int = 30):
     pruned = {h: ts for h, ts in existing.items() if ts > cutoff}
     p.write_text(json.dumps(pruned))
     p.chmod(0o600)   # profile-equivalent sensitivity — restrict to owner only
+
+
+def load_role_queue() -> list[dict]:
+    """Load roles staged from prior capped runs. Returns [] if file missing or corrupt."""
+    if not QUEUE_FILE.exists():
+        return []
+    try:
+        data = json.loads(QUEUE_FILE.read_text())
+        return data if isinstance(data, list) else []
+    except (json.JSONDecodeError, OSError) as exc:
+        _log.warning("role_queue.json unreadable (%s) — starting with empty queue", exc)
+        return []
+
+
+def save_role_queue(roles: list[dict]) -> None:
+    """Persist excess roles for next run. Pass [] to clear the queue."""
+    QUEUE_FILE.write_text(json.dumps(roles, indent=2))
+    QUEUE_FILE.chmod(0o600)
