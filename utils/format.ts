@@ -13,6 +13,14 @@ export function capFriction(points: string[]): string[] {
   return points.slice(0, 1);
 }
 
+const SENTIMENT_ORDER: Record<string, number> = { green: 0, amber: 1, red: 2, neutral: 3 };
+
+export function sortTagsBySentiment(tags: Tag[]): Tag[] {
+  return [...tags].sort(
+    (a, b) => (SENTIMENT_ORDER[a.sentiment] ?? 9) - (SENTIMENT_ORDER[b.sentiment] ?? 9),
+  );
+}
+
 export function capTags(tags: Tag[]): Tag[] {
   return tags.slice(0, 4);
 }

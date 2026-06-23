@@ -112,6 +112,10 @@ def build_plist(config: dict, scorerole_bin: str, working_dir: str) -> str:
     log_path     = str(DATA_DIR / "logs" / "scheduled.log")
     bin_dir      = str(Path(scorerole_bin).parent)
     home         = str(Path.home())
+    # Probe nvm's active node so ts-node can find it when launchd's PATH is minimal.
+    nvm_node_bin = Path(home) / ".nvm" / "versions" / "node"
+    node_bin_dirs = sorted(nvm_node_bin.glob("*/bin")) if nvm_node_bin.exists() else []
+    node_path    = f"{node_bin_dirs[-1]}:" if node_bin_dirs else ""
 
     if freq == "daily":
         interval_xml = (
@@ -164,7 +168,7 @@ def build_plist(config: dict, scorerole_bin: str, working_dir: str) -> str:
     <key>EnvironmentVariables</key>
     <dict>
         <key>HOME</key><string>{home}</string>
-        <key>PATH</key><string>{bin_dir}:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>PATH</key><string>{node_path}{bin_dir}:/usr/bin:/bin:/usr/sbin:/sbin</string>
     </dict>
     <key>KeepAlive</key>
     <dict>

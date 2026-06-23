@@ -12,68 +12,12 @@ import json, logging, os, re, time
 from pathlib import Path
 import anthropic
 
+from .prompts import JD_EXTRACT_SYSTEM
+
 log = logging.getLogger(__name__)
 
 EXTRACT_MODEL      = os.getenv("EXTRACT_MODEL", "claude-haiku-4-5")
 _EXTRACT_CHUNK_SIZE = 10
-
-# ---------------------------------------------------------------------------
-# Extraction system prompt
-# ---------------------------------------------------------------------------
-
-_EXTRACTION_SYSTEM = """\
-You are a structured JD extractor. Given job listings, extract factual fields and return a JSON array — one object per job, same order as input. Be conservative: use null or [] when uncertain. Never guess salary numbers or fabricate details.
-
-For each job return exactly this schema:
-{
-  "jd_quality": "high" | "medium" | "low" | "blank",
-  "unknown_fields": [],
-
-  "role_function_match": true | false,
-  "inferred_structural_level": "entry" | "senior" | "staff" | "principal" | "director" | "vp" | null,
-  "management_type": "ic" | "people_manager" | "pm_manager" | "mixed" | null,
-  "manages_pm_team": true | false | null,
-  "reports_to_level": "ic_lead" | "senior_manager" | "director" | "vp" | "cpo" | "ceo" | null,
-
-  "work_model": "remote" | "hybrid" | "onsite" | "unspecified",
-  "hybrid_days_required": null,
-
-  "salary_min": null,
-  "salary_max": null,
-  "salary_disclosed": false,
-  "equity_type": "rsu" | "options" | "grants" | "unspecified" | null,
-
-  "company_stage": "seed" | "series_a" | "series_b" | "growth" | "late_stage" | "public" | "unknown",
-  "company_tier": "seed" | "early" | "growth" | "large_private" | "large_public" | null,
-
-  "customer_type": "b2b" | "b2c" | "b2b2c" | "marketplace" | "developer" | "internal" | "mixed" | null,
-  "customer_segment": "smb" | "mid_market" | "enterprise" | "consumer" | "mixed" | null,
-  "product_surface": [],
-  "technical_depth_required": "non_technical" | "collaborative" | "technical" | "deeply_technical" | null,
-
-  "org_maturity": "building" | "scaling" | "optimizing" | null,
-  "autonomy_level": "high" | "medium" | "structured" | null,
-
-  "degree_hard_requirement": false,
-  "degree_level": "none" | "bs" | "ms_phd" | "equivalent_ok" | null,
-  "visa_sponsorship": null,
-  "government_export_control": false,
-
-  "years_exp_min": null,
-  "primary_execution_stack": []
-}
-
-Extraction rules:
-- jd_quality: "blank" = no JD text; "low" = under 80 words or boilerplate only; "medium" = partial; "high" = full JD
-- salary_disclosed: ONLY true when explicit numbers appear (e.g. "$180,000–$220,000"). "Competitive" = false.
-- degree_hard_requirement: true ONLY when JD says "required" or "must have". "Preferred" or "a plus" = false.
-- government_export_control: true only when ITAR, EAR, export control, or security clearance explicitly mentioned.
-- visa_sponsorship: true = sponsor offered, false = "no sponsorship", null = not mentioned.
-- company_tier: infer from known companies (e.g. Google/Meta/Apple = large_public). Unknown = null.
-- product_surface values: use subset of ["web_app","mobile","api","platform","internal_tools","hardware","data","ml_ai"]
-- primary_execution_stack values: use subset of ["roadmap","user_research","data_analysis","technical_specs","gtm","growth","ml_ai","platform"]
-- unknown_fields: list field names where you lacked enough signal (NOT salary — use salary_disclosed=false for that)
-- Return ONLY a valid JSON array. No markdown fences, no commentary."""
 
 
 # ---------------------------------------------------------------------------
@@ -155,7 +99,7 @@ def _extract_chunk(client: anthropic.Anthropic, jobs: list[dict]) -> list[dict]:
                 model=EXTRACT_MODEL,
                 max_tokens=max(1024, len(jobs) * 350),
                 temperature=0,
-                system=_EXTRACTION_SYSTEM,
+                system=JD_EXTRACT_SYSTEM,
                 messages=[{
                     "role": "user",
                     "content": (

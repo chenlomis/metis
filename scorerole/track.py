@@ -334,12 +334,20 @@ def _extract_body(msg) -> str:
     return ""
 
 
-def fetch_candidate_emails(gmail_address: str, app_password: str, since_dt: datetime.datetime) -> list[dict]:
-    """Fetch emails from Gmail that might be confirmations or rejections.
+def fetch_candidate_emails(
+    gmail_address: str,
+    app_password: str,
+    since_dt: datetime.datetime,
+    applied_companies: "set[str] | None" = None,
+) -> list[dict]:
+    """Fetch emails from Gmail that might be confirmations, rejections, or recruiter screens.
 
-    Uses server-side IMAP SUBJECT search to avoid pulling headers for every inbox
-    email. Runs several searches and unions the results, then fetches full RFC822
-    only for matching message IDs.
+    Three-tier server-side fetch gate (all run inside one IMAP connection, results unioned):
+      1. Subject keyword search — fast path for ATS-generated emails with predictable subjects.
+      2. ATS sender domain search — catches ATS emails with non-standard subjects.
+      3. Company name FROM search — catches direct recruiter outreach from company domains,
+         which have no predictable subject pattern.
+    Full RFC822 bodies are only fetched for the union of matched message IDs.
     """
     from email.utils import parsedate_to_datetime
 
@@ -401,12 +409,29 @@ def fetch_candidate_emails(gmail_address: str, app_password: str, since_dt: date
                 imap.login(gmail_address, app_password)
                 imap.select("INBOX")
 
-                # Union of all subject searches — deduplicated
+                # Union of all searches — deduplicated across all three tiers
                 matching_ids: set[bytes] = set()
+
+                # Tier 1: subject keywords — fast path for ATS-generated emails
                 for term in _SUBJECT_SEARCHES:
                     _, data = imap.search(None, f'SINCE {since_str} SUBJECT "{term}"')
                     if data and data[0]:
                         matching_ids.update(data[0].split())
+
+                # Tier 2: ATS sender domains — catches ATS emails with non-standard subjects
+                for domain in _ATS_FROM_DOMAINS:
+                    _, data = imap.search(None, f'SINCE {since_str} FROM "@{domain}"')
+                    if data and data[0]:
+                        matching_ids.update(data[0].split())
+
+                # Tier 3: company names — catches direct recruiter outreach from company domains
+                if applied_companies:
+                    for company in applied_companies:
+                        term = _normalize_company_search(company)
+                        if len(term) >= 4:  # skip very short names to avoid noise
+                            _, data = imap.search(None, f'SINCE {since_str} FROM "{term}"')
+                            if data and data[0]:
+                                matching_ids.update(data[0].split())
 
                 if not matching_ids:
                     log.info("track: no candidate emails found since %s", since_str)
@@ -505,12 +530,15 @@ def _classify_with_llm(subject: str, body: str, client) -> str:
     Returns one of the four classification strings; falls back to 'unknown'
     on any API error or unexpected response.
     """
+    from .prompts import track_classify_system_prompt
+
     truncated_body = body[:_LLM_BODY_CHAR_LIMIT]
     prompt = _LLM_CLASSIFY_PROMPT.format(subject=subject, body=truncated_body)
     try:
         response = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=10,
+            system=track_classify_system_prompt(),
             messages=[{"role": "user", "content": prompt}],
         )
         result = response.content[0].text.strip().lower()
@@ -693,6 +721,35 @@ _GENERIC_SENDER_DOMAINS = {
     "notifications", "noreply", "no-reply", "mailer", "bounce", "mail",
 }
 
+# ATS platform domains to search by sender — catches ATS emails regardless of subject.
+# These are the @domain portions used in FROM IMAP searches.
+_ATS_FROM_DOMAINS = [
+    "greenhouse.io", "greenhouse-mail.io",
+    "lever.co",
+    "myworkdayjobs.com",
+    "smartrecruiters.com",
+    "ashbyhq.com",
+    "icims.com",
+    "jobvite.com",
+    "bamboohr.com",
+    "workday.com",
+    "applytojob.com",
+    "successfactors.com",
+    "taleo.net",
+]
+
+
+def _normalize_company_search(company: str) -> str:
+    """Normalize a company name for use in an IMAP FROM substring search.
+
+    Strips legal suffixes, punctuation, and excess whitespace so that
+    'Sigma Computing, Inc.' becomes 'sigma computing' and matches
+    any sender whose address or display name contains that string.
+    """
+    term = re.sub(r",?\s+(?:inc|llc|corp|ltd|co)\.?$", "", company, flags=re.IGNORECASE)
+    term = re.sub(r"[^\w\s-]", "", term).strip().lower()
+    return term
+
 def _company_from_sender(sender: str) -> str | None:
     """Extract company name from sender display name or email domain.
 
@@ -842,7 +899,7 @@ def _write_row_from_email(ws, parsed: dict, suggestion_status: str,
                           url: str = "") -> None:
     """Shared helper: append one row to ws from parsed email data."""
     from openpyxl.styles import Alignment
-    from .tracker import _set_hyperlink
+    from .xlsx import _set_hyperlink
 
     next_row = ws.max_row + 1
     values = [
@@ -1036,7 +1093,7 @@ def backfill_from_digests(
     normalized title+company). Returns the number of new rows added.
     """
     from email.utils import parsedate_to_datetime
-    from .tracker import write_to_tracker
+    from .xlsx import write_to_tracker
 
     since_str = since_dt.strftime("%d-%b-%Y")
     added_total = 0
@@ -1160,7 +1217,7 @@ def run_track(
     except ImportError:
         raise SystemExit("openpyxl is required: pip install openpyxl")
 
-    from .tracker import TRACKER_PATH
+    from .xlsx import TRACKER_PATH
     from .state   import lookup_skipped_role, promote_skipped_role
 
     # Build LLM client if the profile has llm_fallback enabled
@@ -1173,7 +1230,20 @@ def run_track(
     backfill_from_digests(gmail_address, app_password, since_dt)
 
     # Step 2: parse confirmation / rejection emails and update tracker rows
-    emails = fetch_candidate_emails(gmail_address, app_password, since_dt)
+    # Build applied-company set for Tier 3 (direct recruiter outreach) search.
+    applied_companies: set[str] = set()
+    if TRACKER_PATH.exists():
+        _wb = openpyxl.load_workbook(TRACKER_PATH, read_only=True, data_only=True)
+        _ws = _wb.active
+        for _r in range(2, _ws.max_row + 1):
+            if _ws.cell(_r, 6).value == "Applied":
+                co = _ws.cell(_r, 3).value
+                if co:
+                    applied_companies.add(str(co))
+        _wb.close()
+    log.info("track: %d applied companies loaded for direct-outreach search", len(applied_companies))
+
+    emails = fetch_candidate_emails(gmail_address, app_password, since_dt, applied_companies=applied_companies)
     if not emails:
         log.info("track: no candidate emails found in lookback window.")
         return
@@ -1205,7 +1275,7 @@ def run_track(
         wb = openpyxl.load_workbook(TRACKER_PATH)
         ws = wb.active
     else:
-        from .tracker import _write_header, _set_column_widths
+        from .xlsx import _write_header, _set_column_widths
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "Applications"
@@ -1261,7 +1331,7 @@ def run_track(
         elif kind == "recruiter_screen":
             log.info("track: skip recruiter screen (already %s) — %s", current_status, company)
 
-    from .tracker import _sort_rows_by_date
+    from .xlsx import _sort_rows_by_date
     _sort_rows_by_date(ws)   # always re-sort so date order is maintained
 
     if changed:

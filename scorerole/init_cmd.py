@@ -991,7 +991,7 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
     except ImportError as e:
         sys.exit(f"❌  Missing dependency: {e}\n    Run: pip install InquirerPy rich pyyaml")
 
-    cols = shutil.get_terminal_size().columns
+    cols = console.width
     if cols < 80:
         console.print(
             f"\n  Terminal too narrow (currently {cols} cols). "
@@ -1067,7 +1067,7 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
         from rich.style import Style as _RStyle
         from .theme import THEME as _T
         console.print()
-        _panel_width = min(88, shutil.get_terminal_size().columns)
+        _panel_width = min(88, console.width)
         console.print(Panel(
             "[bold]Let's build your scorerole profile![/bold]\n\n"
             "The more context you provide, the better scorerole can filter and score roles against your background.\n\n"

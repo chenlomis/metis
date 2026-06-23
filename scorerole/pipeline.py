@@ -21,7 +21,7 @@ from .state import (
     DATA_DIR, LOG_DIR, SEEN_FILE,
     load_seen_roles, save_seen_roles, save_skipped_roles, _role_hash,
 )
-from .feedback_cmd import save_last_run
+from .feedback import save_last_run
 from .sources import fetch_alerts
 from .sources.linkedin import extract_jobs, extract_jobs_html, _extract_text
 from .score import score_jobs_batch, rank_jobs, build_score_system
@@ -79,7 +79,7 @@ def _since_last_run(fallback: str = DEFAULT_LOOKBACK) -> tuple[datetime.datetime
     Label is shown to the user so they know which window is active.
     """
     try:
-        from .feedback_cmd import load_last_run
+        from .feedback import load_last_run
         run = load_last_run()
         if run and run.get("run_timestamp"):
             since_dt = datetime.datetime.fromisoformat(run["run_timestamp"])
@@ -94,11 +94,13 @@ def _since_last_run(fallback: str = DEFAULT_LOOKBACK) -> tuple[datetime.datetime
 _COST_GATE_USD = 0.50   # show prominent cost warning when upper-bound estimate exceeds this
 
 
-def _prompt_score_all(n_found: int, cap: int) -> bool:
-    """Interactively ask whether to score all roles. Returns True = score all.
+def _prompt_score_all(n_found: int, cap: int) -> int:
+    """Interactively ask how many roles to score. Returns the chosen count.
 
-    When the upper-bound cost estimate exceeds _COST_GATE_USD, a prominent warning
-    is shown before asking. Accepts y / Y / yes / YES / Yes in all cases.
+    Accepts:
+      Enter / n / N      → cap (default, no pre-screen)
+      y / yes / all      → n_found (Haiku pre-screen runs first)
+      a number (40, 60…) → that count, clamped to cap..n_found (no pre-screen)
     """
     from .score import estimate_cost, estimate_cost_hi
     cost_str  = estimate_cost(n_found)
@@ -114,11 +116,25 @@ def _prompt_score_all(n_found: int, cap: int) -> bool:
     print(f"     (Haiku pre-screen runs first — actual cost typically 40–60% lower.)")
     print(f"     Roles beyond the cap stay unseen until their 30-day TTL expires.\n")
     try:
-        ans = input(f"  Score all {n_found} roles? [y/N]: ").strip().lower()
-        return ans in ("y", "yes")
+        ans = input(
+            f"  Score how many? Enter a number ({cap}–{n_found}), 'all', or press Enter for cap ({cap}): "
+        ).strip().lower()
     except (EOFError, KeyboardInterrupt):
         print()
-        return False
+        return cap
+
+    if not ans or ans in ("n", "no"):
+        return cap
+    if ans in ("y", "yes", "all"):
+        return n_found
+    try:
+        n = int(ans)
+        n = max(cap, min(n, n_found))
+        print(f"     → {n} roles · estimated cost: ~{estimate_cost(n)}")
+        return n
+    except ValueError:
+        print(f"     → Unrecognized input, using cap ({cap})")
+        return cap
 
 
 # ---------------------------------------------------------------------------
@@ -219,13 +235,13 @@ def _stage_cap(
             log.info(f"{n_found} roles to evaluate (--no-limit flag; Haiku pre-screen will filter)")
             should_prescreen = True
         elif sys.stdin.isatty():
-            wants_all = _prompt_score_all(n_found, MAX_JOBS_PER_RUN)
-            if wants_all:
+            chosen = _prompt_score_all(n_found, MAX_JOBS_PER_RUN)
+            if chosen >= n_found:
                 log.info(f"Scoring all {n_found} roles (Haiku pre-screen will filter first)")
                 should_prescreen = True
             else:
-                all_jobs = all_jobs[:MAX_JOBS_PER_RUN]
-                log.info(f"Capped at {MAX_JOBS_PER_RUN} roles")
+                all_jobs = all_jobs[:chosen]
+                log.info(f"Scoring {chosen} roles")
         else:
             log.warning(
                 f"{n_found} roles found but capped at {MAX_JOBS_PER_RUN} "
@@ -238,7 +254,14 @@ def _stage_cap(
 
     if should_prescreen:
         from .score import prescreen_jobs_batch
+        from .trace import write_trace
+        before_prescreen = list(all_jobs)
         all_jobs = prescreen_jobs_batch(client, all_jobs)
+        passed_ids = {id(j) for j in all_jobs}
+        for job in before_prescreen:
+            if id(job) not in passed_ids:
+                job["eval"] = {"score": 0, "verdict": "prescreened", "reason": "haiku_prescreen_filtered"}
+                write_trace(job)
 
     return all_jobs, should_prescreen
 
@@ -303,7 +326,11 @@ def _stage_enrich_and_score(jobs: list[dict], client) -> list[dict]:
                 "   Run `scorerole init` to create one from your resume.\n"
             )
 
-    return rank_jobs(jobs)
+    ranked = rank_jobs(jobs)
+    from .trace import write_trace
+    for job in ranked:
+        write_trace(job)
+    return ranked
 
 
 def _stage_split_filtered(jobs: list[dict]) -> tuple[list[dict], int]:
@@ -364,7 +391,7 @@ def _stage_deliver(
     save_seen_roles(new_role_timestamps)
     save_last_run(scored_jobs, run_date, filtered_count=n_filtered)
 
-    from .tracker import write_to_tracker, TRACKER_PATH
+    from .xlsx import write_to_tracker, TRACKER_PATH
     write_to_tracker(scored_jobs, run_date=datetime.date.today().isoformat())
     print(f"  Tracker → {TRACKER_PATH}")
 
@@ -615,16 +642,19 @@ def main():
     sources_sub.add_parser("off",    help="Disable company sources.")
 
     # feedback subcommand
-    subparsers.add_parser(
+    feedback_p = subparsers.add_parser(
         "feedback",
         help="Add calibration notes that shape future scoring runs.",
         description=(
-            "Shows a summary of the last run, then prompts for free-form feedback.\n"
-            "Notes are appended to ~/.job_pipeline/feedback.md and injected into\n"
-            "the scoring prompt on every subsequent run.\n\n"
-            "  scorerole feedback    # interactive prompt"
+            "Collect free-form feedback on past scoring, parsed by Claude and\n"
+            "appended to ~/.job_pipeline/feedback.md. Injected into the scoring\n"
+            "prompt on every subsequent run.\n\n"
+            "  scorerole feedback        # interactive prompt\n"
+            "  scorerole feedback list   # show recent entries"
         ),
     )
+    feedback_sub = feedback_p.add_subparsers(dest="feedback_action")
+    feedback_sub.add_parser("list", help="Show recent feedback entries.")
 
     # debug subcommand
     subparsers.add_parser("debug", help="Dump the most recent LinkedIn alert email for inspection.")
@@ -709,6 +739,7 @@ def main():
                 app_password=GMAIL_APP_PASSWORD,
                 since_dt=since_dt,
                 dry_run=False,
+                api_key=ANTHROPIC_API_KEY,
             )
         else:
             show_schedule()
@@ -725,6 +756,7 @@ def main():
             app_password=GMAIL_APP_PASSWORD,
             since_dt=since_dt,
             dry_run=getattr(args, "dry_run", False),
+            api_key=ANTHROPIC_API_KEY,
         )
 
     elif args.command == "sources":
@@ -735,8 +767,14 @@ def main():
         run_sources(action, name)
 
     elif args.command == "feedback":
-        from .feedback_cmd import run_feedback
-        run_feedback()
+        _validate_env(require_gmail=False)
+        action = getattr(args, "feedback_action", None)
+        if action == "list":
+            from .feedback import run_feedback_list
+            run_feedback_list()
+        else:
+            from .feedback import run_feedback
+            run_feedback(api_key=ANTHROPIC_API_KEY)
 
     elif args.command == "debug":
         _validate_env()

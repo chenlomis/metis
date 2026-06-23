@@ -137,11 +137,17 @@ except ImportError:
     INQUIRER_STYLE = None
 
 # ---------------------------------------------------------------------------
-# Shared console instance — 80-col cap keeps all output predictable.
-# Panel and prose both wrap natively within this budget.
+# Shared console instance — dynamically bounded to [80, 100] cols.
+# Subclassing Console so the width property is re-evaluated on every render,
+# not locked at startup — handles terminal resize gracefully.
 # ---------------------------------------------------------------------------
 
-console = Console()
+class _BoundedConsole(Console):
+    @property
+    def width(self) -> int:
+        return max(80, min(super().width, 100))
+
+console = _BoundedConsole()
 
 
 # ---------------------------------------------------------------------------
@@ -188,12 +194,13 @@ def print_kb_hint() -> None:
 
 
 def print_section_intro(body: str, ctrl_hint: bool = False) -> None:
-    """Section intro paragraph — Rich word-wraps at console.width (80 cols)."""
-    console.print(body, style=Style(color=THEME["muted"]))
+    """Section intro paragraph — soft_wrap=True so terminal reflows on resize (no hard newlines)."""
+    console.print(body, style=Style(color=THEME["muted"]), soft_wrap=True)
     if ctrl_hint:
         console.print(
             "Press Enter to skip optional questions.  Ctrl+C exits safely.",
             style=Style(color=THEME["dim"], italic=True),
+            soft_wrap=True,
         )
 
 

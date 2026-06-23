@@ -1,4 +1,4 @@
-"""tracker.py — write scored roles to the Applications xlsx tracker.
+"""xlsx.py — write scored roles to the Applications xlsx tracker.
 
 Called implicitly at the end of each scorerole run (after digest delivery).
 Only Apply and Consider roles are written as new rows. Skipped roles are

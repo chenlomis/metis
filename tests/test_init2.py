@@ -161,12 +161,13 @@ class TestApplyClarificationAnswer:
         # base_salary_target_usd may be present (from _base_profile) but must be None
         assert profile.get("preferences", {}).get("base_salary_target_usd") is None
 
-    def test_salary_target_moves_to_preferences(self):
+    def test_salary_target_sets_discriminator_not_floor(self):
         from scorerole.init2_cmd import _apply_clarification_answer
         profile = _base_profile(salary_floor_usd=200000)
         _apply_clarification_answer("salary_floor_or_target", "target", "$200k", profile)
-        assert profile.get("salary_floor_usd") is None
-        assert profile["preferences"]["base_salary_target_usd"] == 200000
+        # salary_floor_usd stays in place — only the discriminator flag changes
+        assert profile.get("salary_floor_usd") == 200000
+        assert profile["salary_is_hard_floor"] is False
 
     def test_remote_only_sets_flag(self):
         from scorerole.init2_cmd import _apply_clarification_answer

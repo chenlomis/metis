@@ -33,7 +33,8 @@ scorerole track --lookback 30d     # accepts same DURATION format as main runner
 scorerole track --dry-run          # parse + classify, no xlsx write, no open; prints matches to stdout
 
 # feedback — calibration notes that shape future scoring
-scorerole feedback                 # show last run summary → prompt for notes → append to feedback.md
+scorerole feedback                 # collect → Claude parse → conflict detect → save to feedback.md
+scorerole feedback list            # show last 5 entries (full history: ~/.job_pipeline/feedback.md)
 
 # debug — dump most recent LinkedIn alert email
 scorerole debug                    # → ~/.job_pipeline/debug_email.txt
@@ -57,7 +58,7 @@ scorerole/
   state.py         — run state / seen-jobs tracking
   track.py         — job tracking
   tracker.py       — tracker helpers
-  feedback_cmd.py  — feedback collection
+  feedback_cmd.py  — feedback collection: collect → parse (Haiku) → save to feedback.md + feedback_log.jsonl
   sources/         — job source scrapers (proactive company career pages)
 
 emails/
@@ -80,33 +81,101 @@ types.ts            — DigestPayload, Job TypeScript interfaces
 
 **`SCOREROLE_PROFILE` env var** overrides the profile path without touching `profile.yaml`. Used by `run_persona_test.py` for persona testing. Never set this in `.env`. Safe to unset anytime: `unset SCOREROLE_PROFILE`.
 
-## Persona / e2e testing
+## Persona data directories
 
-`run_persona_test.py` (repo root) runs the full pipeline for each persona **without modifying `~/.job_pipeline/profile.yaml`**. Sets `SCOREROLE_PROFILE` per persona — safe to Ctrl-C at any time.
+Each persona gets its own fully isolated data directory. Your real pipeline is never touched.
+
+| Persona | Data dir | Profile |
+|---|---|---|
+| Lomis (PM) | `~/.job_pipeline/` | `~/.job_pipeline/profile.yaml` |
+| Designer | `~/.job_pipeline_designer/` | `~/.job_pipeline_designer/profile.yaml` |
+| MLE | `~/.job_pipeline_mle/` | `~/.job_pipeline_mle/profile.yaml` |
+
+**Two env vars control everything:**
+- `SCOREROLE_PROFILE` — which profile.yaml to use (which persona's preferences/identity)
+- `SCOREROLE_DATA_DIR` — where seen_roles, last_run, feedback, runs.jsonl live (state isolation)
+
+Neither is set → real PM pipeline runs as normal.
+
+### Running a persona
+
+```bash
+# Designer
+SCOREROLE_PROFILE=~/.job_pipeline_designer/profile.yaml \
+SCOREROLE_DATA_DIR=~/.job_pipeline_designer \
+scorerole --lookback 7d --dry-run
+
+# MLE
+SCOREROLE_PROFILE=~/.job_pipeline_mle/profile.yaml \
+SCOREROLE_DATA_DIR=~/.job_pipeline_mle \
+scorerole --lookback 7d --dry-run
+```
+
+### Setting up / refreshing a persona profile
+
+```bash
+# Reconfigure designer profile interactively (init2 wizard)
+SCOREROLE_PROFILE=~/.job_pipeline_designer/profile.yaml \
+SCOREROLE_DATA_DIR=~/.job_pipeline_designer \
+scorerole init2
+
+# Same for MLE
+SCOREROLE_PROFILE=~/.job_pipeline_mle/profile.yaml \
+SCOREROLE_DATA_DIR=~/.job_pipeline_mle \
+scorerole init2
+```
+
+### Resetting a persona's seen-role state
+
+```bash
+# Clear designer dedup (seen_roles.json) — does NOT touch your PM pipeline
+SCOREROLE_DATA_DIR=~/.job_pipeline_designer scorerole reset --force
+
+# Clear MLE
+SCOREROLE_DATA_DIR=~/.job_pipeline_mle scorerole reset --force
+```
+
+### Automated persona test runner
+
+`run_persona_test.py` (repo root) runs the full pipeline for each persona **without modifying `~/.job_pipeline/profile.yaml`**. Sets both env vars per persona — safe to Ctrl-C at any time.
 
 ```bash
 python run_persona_test.py              # 7-day lookback (default)
 python run_persona_test.py --lookback 3
 ```
 
-Persona profiles live at `~/.job_pipeline/` (outside repo — never commit):
-- `profile_ml_eng.yaml` — Alex Rivera, Senior ML Engineer
-- `profile_designer.yaml` — Jordan Lee, Senior Product Designer
-- `profile_pm.yaml` — if present, auto-detected as PM persona
-
 ## Test strategy
 
-```bash
-# Fast pass — run after any routine change (~60 tests, <3s, no API calls)
-python -m pytest tests/test_core.py tests/test_schedule.py -q
+**Tests must run inside the project venv** — `rich`, `InquirerPy`, `anthropic`, etc. are only installed there. Running bare `pytest` outside the venv will exit immediately with a clear error message (see `conftest.py`).
 
-# Full pass — before releases or after large refactors
-python -m pytest tests/ -q
+```bash
+# Preferred — always correct regardless of active python:
+make test            # full suite
+make test-fast       # fast pass only
+
+# Manual — only if venv is already active:
+source venv/bin/activate
+pytest tests/ -q                                        # full pass (~397 tests, ~3s)
+pytest tests/test_core.py tests/test_schedule.py -q    # fast pass (~60 tests, <3s)
 ```
 
 `test_extract.py` is the heavyweight suite (~70+ tests, mocked API). Only run when `extract.py` changes — skip during routine iteration.
 
 ## Critical constraints
+
+### 0. render.py email format is locked — do not change without explicit request
+`build_digest_html()` and `_job_card()` in `render.py` produce the canonical digest format.
+The following are **intentional and must not be changed** unless the user explicitly asks to change the format:
+
+- Stat tile first label: `"Evaluated"` (not "Roles evaluated", not "Total evaluated")
+- Legend second dot: `"Caution / domain gap"` (not "Proceed with awareness")
+- Legend third dot: `"Hard blocker"` (not "Real concern")
+- Score breakdown: `render_score_breakdown()` must NOT be called from `_job_card()` — the breakdown must not appear in email cards
+- Skipped section: flat 2-column table with `"Role · Company"` and `"Why Skipped"` column headers; role titles are hyperlinked
+
+These constraints are enforced by `tests/test_render_format.py`. Run that test after any render.py change — a failure means the format regressed. Fix the regression, not the test.
+
+**When fixing bugs in render.py:** touch only the broken behavior. Do not "clean up", "improve", or change any string content, labels, or layout while in the file.
 
 ### 1. Rich + InquirerPy output ordering
 - Use `console.print()` for labels/hints BEFORE each prompt. The `_ask*` helpers do this — don't bypass them.
@@ -127,6 +196,40 @@ python -m pytest tests/ -q
 The profile has these top-level sections (order matters for display):
 `candidate`, `target`, `aspirations`, `preferences`, `scoring`, `experience`, `education`,
 `strengths`, `green_flags`, `yellow_flags`, `red_flags`, `deal_breakers`, `salary_floor_usd`, `notes`, `inferred`, `proactive_sources`
+
+### 5. score.py ↔ render.py eval schema is a coupled contract
+The eval dict shape that `score.py` emits is consumed directly by `render.py`. These two files are **locked in lockstep** — changing one requires changing the other in the same edit:
+
+- `verdict`: exactly `"apply" | "consider" | "skipped" | "filtered"` — no other strings
+- `dimensions`: exactly 6, in this order: `seniority_scope`, `experience_relevance`, `compensation_fit`, `culture_values`, `domain_background`, `company_stage`
+- `leveragePoints`: always exactly 2 items (array of strings)
+- `frictionPoints`: always exactly 1 item (array of strings) — shown as the skip reason in the skipped section
+- `tags`: array of `{text, sentiment}` where sentiment is `"green" | "amber" | "red"`
+
+**Bullet style rule (enforced in score.py prompt, must stay):** No em-dash constructions. One clause only, 15–20 words, no pronouns, no "strong", "proven", "deep", "robust", "at scale", "directly". Violations in output are a prompt regression — fix the prompt, not the downstream rendering.
+
+OSS users who want to customize the schema must change score.py prompt + render.py together. Neither file is standalone.
+
+### 6. state.py `_role_hash()` is a persisted key — do not change
+`_role_hash(title, company)` in `state.py` produces the dedup keys stored in `~/.job_pipeline/seen_roles.json`. Changing the hash function (normalization regex, algorithm, slice length) invalidates all historical keys — every previously seen role re-processes on the next run, causing a flood email. The current implementation (`md5(normalize(title+company))[:12]`) is intentional and sufficient — do not "improve" it.
+
+### 7. tracker.py column order is a persisted xlsx schema — do not reorder or insert
+`_HEADERS` and `_COL_*` constants in `tracker.py` define the column layout of `applications.xlsx`. The file may contain months of history. **Column order must never change** without an explicit migration plan — inserting or reordering columns corrupts existing rows.
+
+Safe to change: column header *text* in `_HEADERS` (row 1 display names), tracker file path (via `TRACKER_PATH` env var).
+Not safe without migration: adding a column in the middle, removing a column, reordering.
+
+### 8. pipeline.py stage order is load-bearing — do not reorganize without explicit instruction
+`pipeline.py` is the orchestration layer. The stage sequence is:
+1. Dedup check (`load_seen_roles`) → before scoring so unseen roles don't waste API calls
+2. Score (`_stage_score`) → Haiku pre-screen, then Sonnet full score
+3. Deal-breaker split (`_stage_split_filtered`) → **after** `new_role_timestamps` is built, **before** `render_html`
+4. Skipped metadata saved → before SMTP so it survives delivery failure
+5. Render → `scored_jobs` only (filtered excluded), `deal_breaker_count` passed as footer note
+6. Send → SMTP
+7. Tracker write → after send
+
+Do not reorder, merge, or add stages without being asked. When fixing a bug in pipeline.py, touch only the broken call — do not restructure the surrounding flow.
 
 ## init_cmd.py prompt helpers
 
@@ -160,4 +263,9 @@ If running separate Claude Code sessions on design vs. build:
 - `theme.py` is design-owned — build session should not edit it
 - `init_cmd.py` is a shared boundary — coordinate before editing
 - `emails/` and `utils/colors.ts` are design-owned
-- `score.py`, `extract.py`, `pipeline.py`, `render.py` are build-owned
+- `extract.py` is build-owned
+- `score.py` is build-owned — eval schema is a locked contract shared with render.py (see constraint #5)
+- `render.py` is build-owned for bug fixes and new data wiring only — output format is locked (see constraint #0)
+- `pipeline.py` stage order is locked — bug fixes only, no restructuring (see constraint #8)
+- `state.py` `_role_hash()` is frozen — do not touch (see constraint #6)
+- `tracker.py` column order is frozen — header text and file path are safe to change, order is not (see constraint #7)

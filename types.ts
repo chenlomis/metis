@@ -6,6 +6,13 @@ export interface Tag {
   sentiment: TagSentiment;
 }
 
+export interface ScoreDimension {
+  name: string;
+  score: number;
+  weight: number;
+  rationale: string;
+}
+
 export interface Job {
   title: string;
   company: string;
@@ -15,6 +22,7 @@ export interface Job {
   leveragePoints: string[];
   frictionPoints: string[];
   tags: Tag[];
+  dimensions?: ScoreDimension[];
   alumniCount?: number;
   postingUrl: string;
 }
@@ -23,6 +31,7 @@ export interface DigestPayload {
   date: string;
   totalEvaluated: number;
   candidateName: string;
-  greeting: string;
+  greeting: string;       // salutation line: "Good morning, Lomis 👋"
+  greetingSub?: string;   // body line: "We evaluated N roles today…"
   jobs: Job[];
 }

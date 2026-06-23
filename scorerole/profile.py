@@ -154,6 +154,16 @@ def render_profile(data: dict) -> str:
         lines += ["", "CORE STRENGTHS:"]
         lines += [f"- {s}" for s in strengths]
 
+    skills = c.get("skills", [])
+    if skills:
+        lines += ["", "SKILLS & TOOLS:"]
+        lines += [f"- {s}" for s in skills]
+
+    certs = c.get("certifications", [])
+    if certs:
+        lines += ["", "CERTIFICATIONS:"]
+        lines += [f"- {s}" for s in certs]
+
     for key, label in [
         ("green_flags",  "GREEN FLAGS"),
         ("yellow_flags", "YELLOW FLAGS"),

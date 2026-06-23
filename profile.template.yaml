@@ -86,6 +86,12 @@ inferred:                           # set by scorerole init from resume; rarely 
     - "b2b"
   degree_level: "bs"                # none / bs / ms_phd
 
+track:
+  # LLM fallback: when phrase matching can't classify an email, Haiku is called
+  # as a last resort (~$0.001/email, ~2-3s added latency per unknown email).
+  # Requires ANTHROPIC_API_KEY. Safe to leave false for OSS / no-API-key setups.
+  llm_fallback: false
+
 notes: |
   Free-text calibration notes. Appended to the scoring system prompt verbatim.
   Use for: level rules, domain caveats, anything Claude should weigh specially.

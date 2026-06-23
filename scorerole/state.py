@@ -2,12 +2,14 @@ from __future__ import annotations
 import os, re, json, datetime, hashlib
 from pathlib import Path
 
-DATA_DIR      = Path.home() / ".job_pipeline"
+DATA_DIR      = Path(os.environ["SCOREROLE_DATA_DIR"]) if "SCOREROLE_DATA_DIR" in os.environ else Path.home() / ".job_pipeline"
 LOG_DIR       = DATA_DIR / "logs"
 SEEN_FILE     = DATA_DIR / "seen_roles.json"     # canonical dedup store
 SKIPPED_FILE  = DATA_DIR / "skipped_roles.json"  # metadata for skipped roles (backport store)
 LAST_RUN_FILE = DATA_DIR / "last_run.json"        # summary of most recent pipeline run
-FEEDBACK_FILE = DATA_DIR / "feedback.md"          # user calibration notes (appended via `scorerole feedback`)
+FEEDBACK_FILE     = DATA_DIR / "feedback.md"          # user calibration notes (appended via `scorerole feedback`)
+FEEDBACK_LOG_FILE = DATA_DIR / "feedback_log.jsonl"   # structured audit log of parsed feedback entries
+RUNS_PATH         = DATA_DIR / "runs.jsonl"            # per-job trace records written by trace.py
 SKIPPED_TTL_DAYS = 90
 
 

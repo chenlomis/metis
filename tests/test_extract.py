@@ -673,9 +673,9 @@ class TestFeedbackCmd:
         }
 
     def test_save_and_load_feedback_roundtrip(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("scorerole.feedback_cmd.FEEDBACK_FILE", tmp_path / "feedback.md")
-        monkeypatch.setattr("scorerole.feedback_cmd.DATA_DIR", tmp_path)
-        from scorerole.feedback_cmd import save_feedback_entry, load_feedback_text
+        monkeypatch.setattr("scorerole.feedback.FEEDBACK_FILE", tmp_path / "feedback.md")
+        monkeypatch.setattr("scorerole.feedback.DATA_DIR", tmp_path)
+        from scorerole.feedback import save_feedback_entry, load_feedback_text
         assert load_feedback_text() is None
         save_feedback_entry("Score AI/ML native roles higher even when title is Lead.")
         loaded = load_feedback_text()
@@ -683,9 +683,9 @@ class TestFeedbackCmd:
         assert "AI/ML native" in loaded
 
     def test_multiple_entries_accumulate(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("scorerole.feedback_cmd.FEEDBACK_FILE", tmp_path / "feedback.md")
-        monkeypatch.setattr("scorerole.feedback_cmd.DATA_DIR", tmp_path)
-        from scorerole.feedback_cmd import save_feedback_entry, load_feedback_text
+        monkeypatch.setattr("scorerole.feedback.FEEDBACK_FILE", tmp_path / "feedback.md")
+        monkeypatch.setattr("scorerole.feedback.DATA_DIR", tmp_path)
+        from scorerole.feedback import save_feedback_entry, load_feedback_text
         save_feedback_entry("First note.")
         save_feedback_entry("Second note.")
         loaded = load_feedback_text()
@@ -693,9 +693,9 @@ class TestFeedbackCmd:
         assert "Second note" in loaded
 
     def test_save_last_run_roundtrip(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("scorerole.feedback_cmd.LAST_RUN_FILE", tmp_path / "last_run.json")
-        monkeypatch.setattr("scorerole.feedback_cmd.DATA_DIR", tmp_path)
-        from scorerole.feedback_cmd import save_last_run, load_last_run
+        monkeypatch.setattr("scorerole.feedback.LAST_RUN_FILE", tmp_path / "last_run.json")
+        monkeypatch.setattr("scorerole.feedback.DATA_DIR", tmp_path)
+        from scorerole.feedback import save_last_run, load_last_run
         jobs = [
             self._make_job("apply",    78),
             self._make_job("consider", 65),
@@ -712,9 +712,9 @@ class TestFeedbackCmd:
         assert run["run_date"] == "June 16, 2026"
 
     def test_last_run_roles_sorted_by_score(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("scorerole.feedback_cmd.LAST_RUN_FILE", tmp_path / "last_run.json")
-        monkeypatch.setattr("scorerole.feedback_cmd.DATA_DIR", tmp_path)
-        from scorerole.feedback_cmd import save_last_run, load_last_run
+        monkeypatch.setattr("scorerole.feedback.LAST_RUN_FILE", tmp_path / "last_run.json")
+        monkeypatch.setattr("scorerole.feedback.DATA_DIR", tmp_path)
+        from scorerole.feedback import save_last_run, load_last_run
         jobs = [
             self._make_job("consider", 60),
             self._make_job("apply",    80),
@@ -726,8 +726,8 @@ class TestFeedbackCmd:
         assert scores == sorted(scores, reverse=True)
 
     def test_load_last_run_returns_none_when_missing(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("scorerole.feedback_cmd.LAST_RUN_FILE", tmp_path / "no_file.json")
-        from scorerole.feedback_cmd import load_last_run
+        monkeypatch.setattr("scorerole.feedback.LAST_RUN_FILE", tmp_path / "no_file.json")
+        from scorerole.feedback import load_last_run
         assert load_last_run() is None
 
     def test_feedback_injected_into_profile_text(self, tmp_path, monkeypatch):

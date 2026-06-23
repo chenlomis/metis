@@ -1090,7 +1090,7 @@ class TestWriteToTracker:
 
     def test_apply_and_consider_rows_written(self, tmp_path, monkeypatch):
         pytest.importorskip("openpyxl")
-        import scorerole.tracker as tracker
+        import scorerole.xlsx as tracker
         monkeypatch.setattr(tracker, "TRACKER_PATH", tmp_path / "applications.xlsx")
         jobs = [
             self._make_job("Senior PM", "Acme", "apply"),
@@ -1109,7 +1109,7 @@ class TestWriteToTracker:
 
     def test_duplicate_role_not_written_twice(self, tmp_path, monkeypatch):
         pytest.importorskip("openpyxl")
-        import scorerole.tracker as tracker
+        import scorerole.xlsx as tracker
         monkeypatch.setattr(tracker, "TRACKER_PATH", tmp_path / "applications.xlsx")
         job = self._make_job("Senior PM", "Acme", "apply")
         tracker.write_to_tracker([job], run_date="2026-06-16")
@@ -1121,14 +1121,14 @@ class TestWriteToTracker:
 
     def test_no_eligible_roles_writes_nothing(self, tmp_path, monkeypatch):
         pytest.importorskip("openpyxl")
-        import scorerole.tracker as tracker
+        import scorerole.xlsx as tracker
         monkeypatch.setattr(tracker, "TRACKER_PATH", tmp_path / "applications.xlsx")
         jobs = [self._make_job("PM", "X", "skipped", score=20)]
         tracker.write_to_tracker(jobs)
         assert not (tmp_path / "applications.xlsx").exists()
 
     def test_missing_openpyxl_logs_warning_and_returns(self, tmp_path, monkeypatch, caplog):
-        import scorerole.tracker as tracker
+        import scorerole.xlsx as tracker
         monkeypatch.setattr(tracker, "TRACKER_PATH", tmp_path / "applications.xlsx")
         import unittest.mock as mock
         with mock.patch.dict("sys.modules", {"openpyxl": None}):
@@ -1136,7 +1136,7 @@ class TestWriteToTracker:
             tracker_fresh = importlib.reload(tracker)
             monkeypatch.setattr(tracker_fresh, "TRACKER_PATH", tmp_path / "applications.xlsx")
             import logging
-            with caplog.at_level(logging.WARNING, logger="scorerole.tracker"):
+            with caplog.at_level(logging.WARNING, logger="scorerole.xlsx"):
                 tracker_fresh.write_to_tracker(
                     [self._make_job("PM", "Co", "apply")], run_date="2026-06-16"
                 )

@@ -225,16 +225,16 @@ def _build_bullet_style_guide(profile_data: dict) -> str:
     strengths  = profile_data.get("strengths", [])
     experience = profile_data.get("experience", [])
 
-    # Proof points from strengths (up to 5)
+    # All proof points — no positional cap; Claude selects JD-relevant ones
     proof_lines = (
-        "\n".join(f"  - {s}" for s in strengths[:5])
+        "\n".join(f"  - {s}" for s in strengths)
         if strengths else
         "  (no strengths listed in profile — infer from experience section above)"
     )
 
-    # Experience vocabulary from first 3 roles
+    # Experience vocabulary from all roles
     exp_lines = []
-    for e in experience[:3]:
+    for e in experience:
         title = e.get("title", "")
         co    = e.get("company", "")
         hls   = e.get("highlights", [])
@@ -277,7 +277,9 @@ def _build_bullet_style_guide(profile_data: dict) -> str:
    effectively, successfully, uniquely, seamlessly, exactly, robust, leverage (as verb),
    synergy, alignment (unless quoting a JD requirement), "at scale" (use the specific number).
 
-PROOF POINTS — draw on these for leverage bullets:
+PROOF POINTS — full list; select the 2 most relevant to THIS JD's stated requirements:
+Do not default to the most prominent-sounding entries. If a less-prominent entry is a
+closer match to what the JD specifically asks for, cite that one instead.
 {proof_lines}
 
 EXPERIENCE VOCABULARY — cite these when referencing {first}'s background:
@@ -419,19 +421,18 @@ def build_score_system(profile: dict) -> str:
 
     Accepts the profile dict directly so the caller (pipeline) can pass the
     same object already loaded for gate checks — avoids a redundant disk read.
+
+    Prompt ordering (via prompts.scoring_system_prompt):
+      1. Identity (headhunter framing + evaluation standards)
+      2. Candidate brief (synthesized orientation)
+      3. Full rendered profile (detailed grounding)
+      4. Calibration feedback (if any)
+      5. Bullet writing rules
+      6. Scoring rubric + output schema
     """
     from .profile import render_profile
-    from .feedback_cmd import load_feedback_text
-
-    profile_text = render_profile(profile)
-    feedback     = load_feedback_text()
-    if feedback:
-        profile_text += (
-            "\n\nCANDIDATE CALIBRATION FEEDBACK:\n"
-            "The candidate has provided these scoring notes from past runs.\n"
-            "Use them to adjust your judgment — they take precedence over generic defaults:\n\n"
-            + feedback
-        )
+    from .feedback import load_feedback_text
+    from .prompts import scoring_system_prompt
 
     apply_t, consider_t = 75, 55
     sc = profile.get("scoring", {})
@@ -441,18 +442,26 @@ def build_score_system(profile: dict) -> str:
     except (TypeError, ValueError):
         pass
 
-    name         = profile.get("candidate", {}).get("name") or _candidate_name()
-    bullet_guide = _build_bullet_style_guide(profile)
-    score_suffix = _build_score_suffix(name, apply_t, consider_t)
+    name          = profile.get("candidate", {}).get("name") or _candidate_name()
+    rendered      = render_profile(profile)
+    bullet_guide  = _build_bullet_style_guide(profile)
+    score_suffix  = _build_score_suffix(name, apply_t, consider_t)
+    feedback      = load_feedback_text()
 
-    return (
-        f"{profile_text}\n\n"
-        f"You are a job fit evaluator for {name}.\n\n"
+    # Inject extracted-context instruction into bullet_guide preamble so it
+    # stays co-located with the writing rules rather than floating loose.
+    extracted_ctx_note = (
         "Each job listing includes an [EXTRACTED CONTEXT] block with structured fields "
         "extracted from the JD. Use these as grounding when scoring — they prevent misreads "
-        "on salary, work model, seniority, and domain.\n\n"
-        f"{bullet_guide}\n\n"
-        f"{score_suffix}"
+        "on salary, work model, seniority, and domain."
+    )
+
+    return scoring_system_prompt(
+        profile=profile,
+        rendered_profile=rendered,
+        bullet_guide=extracted_ctx_note + "\n\n" + bullet_guide,
+        score_suffix=score_suffix,
+        feedback_text=feedback,
     )
 
 

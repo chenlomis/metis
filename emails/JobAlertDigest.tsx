@@ -19,6 +19,10 @@ export default function JobAlertDigest({ payload }: Props) {
     <Html lang="en">
       <Head />
       <Body style={{ margin: 0, padding: 0, backgroundColor: C_BG_SECONDARY, fontFamily: FONT }}>
+        {/* Preheader — hidden text shown as inbox preview snippet before email is opened */}
+        <div style={{ display: 'none', overflow: 'hidden', lineHeight: '1px', opacity: 0, maxHeight: 0, maxWidth: 0 }}>
+          {`ScoreRole — ${applyJobs.length} to apply · ${considerJobs.length} to consider — see your ${payload.date} breakdown`}
+        </div>
         <Container style={{ maxWidth: '600px', margin: '0 auto', padding: '16px 12px' }}>
           <DigestHeader
             date={payload.date}
@@ -27,6 +31,7 @@ export default function JobAlertDigest({ payload }: Props) {
             considerCount={considerJobs.length}
             candidateName={payload.candidateName}
             greeting={payload.greeting}
+            greetingSub={payload.greetingSub}
           />
 
           {applyJobs.length > 0 && <TierSection tier="apply" jobs={applyJobs} />}

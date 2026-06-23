@@ -18,120 +18,17 @@ Writes to the same ~/.job_pipeline/profile.yaml as `scorerole init`.
 import os, re, sys, shutil, logging
 from pathlib import Path
 
+from .theme import THEME, INQUIRER_STYLE, console, print_section, print_section_intro, print_eg, print_hint, print_confirmed
+
 log = logging.getLogger(__name__)
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("anthropic").setLevel(logging.WARNING)
 
-DATA_DIR     = Path.home() / ".job_pipeline"
-PROFILE_PATH = DATA_DIR / "profile.yaml"
+from .state import DATA_DIR
+PROFILE_PATH = Path(os.environ["SCOREROLE_PROFILE"]) if "SCOREROLE_PROFILE" in os.environ else DATA_DIR / "profile.yaml"
 
-
-# ---------------------------------------------------------------------------
-# Extraction system prompt (v2 — freeform input variant)
-# ---------------------------------------------------------------------------
-
-_EXTRACT_SYSTEM_V2 = """\
-You are a career profile extractor.
-
-You will receive:
-  RESUME: the candidate's full resume text
-  LINKEDIN: optional LinkedIn profile text (may be empty)
-  WHAT_I_WANT: a freeform paragraph describing the candidate's ideal next role
-  WHAT_I_DONT_WANT: a freeform paragraph describing roles/arrangements to avoid (may be empty)
-
-Extract the candidate's information and return a SINGLE YAML document with two
-top-level sections: the profile fields, and a `_followups` list.
-
-Return ONLY valid YAML — no markdown fences, no commentary, no extra keys.
-
-Profile schema (all keys required; use null or [] when absent):
-
-candidate:
-  name: string
-  email: string or null
-  location: "City, State"
-  location_preference: string    # "remote", "flexible", or "local"
-  open_to_relocation: []         # list of cities/regions, or []
-  experience:
-    - company: string
-      title: string
-      dates: string
-      highlights: []
-  education:
-    - institution: string or null
-      degree: string
-      year: int or null
-  strengths: []
-
-target:
-  roles: []
-  level: string
-
-aspirations:
-  track: string                  # "ic", "management", or "flexible"
-  direction: string
-  company_types: []
-  avoid_company_types: []
-
-preferences:
-  company_stage: []
-  company_size: null
-  company_environment: null      # e.g. "startup", "enterprise", "mission-driven"
-  industry_targets: []
-  industry_avoid: []
-  base_salary_target_usd: null
-
-deal_breakers: []
-salary_floor_usd: int or null
-
-inferred:
-  customer_types: []
-  degree_level: null
-
-notes: string
-
-_followups: []
-
----
-
-Rules for profile extraction:
-- WHAT_I_WANT overrides anything inferred from the resume for: target.roles,
-  target.level, aspirations.track, aspirations.direction, aspirations.company_types,
-  preferences.*, salary_floor_usd, candidate.location_preference.
-- WHAT_I_DONT_WANT populates deal_breakers and aspirations.avoid_company_types.
-  Convert described avoidances into crisp deal-breaker strings.
-- If salary mentioned: extract the number into salary_floor_usd. Whether it is
-  a hard floor vs aspiration is determined by the _followups logic below.
-- candidate.experience, candidate.education, and candidate.strengths come from
-  the resume and LinkedIn only — never from WHAT_I_WANT or WHAT_I_DONT_WANT.
-- Return ONLY the YAML block. No markdown fences.
-
----
-
-Rules for _followups:
-After filling the profile, append a `_followups` list. Each entry must have:
-  field: string          # the profile key this question clarifies
-  kind: string           # controlled vocabulary — see below
-  question: string       # one sentence, shown verbatim to the user
-  from_text: string      # the exact phrase from input that triggered this, e.g. "$280k+"
-
-Include an entry ONLY when ONE of these conditions is true:
-  - kind: salary_floor_or_target
-    Trigger: salary amount present in WHAT_I_WANT but no explicit "floor", "minimum",
-    "at least", or "no less than" signal.
-  - kind: remote_only_or_preferred
-    Trigger: "remote" present in WHAT_I_WANT but "only", "exclusively", or "no office"
-    are absent.
-  - kind: deal_breakers_absent
-    Trigger: WHAT_I_DONT_WANT was non-empty but all constraints parsed as soft
-    preferences rather than clear hard rejections.
-  - kind: track_ic_or_management
-    Trigger: target.roles contains a mix of IC-level and management-level titles
-    (e.g. "Staff PM" alongside "Head of Product").
-
-Maximum 3 entries in _followups. Omit the list entirely (or set to []) if none apply.
-"""
+from .prompts import init_extract_system_prompt
 
 
 # ---------------------------------------------------------------------------
@@ -193,22 +90,29 @@ MAX_CLARIFICATIONS_ABSOLUTE = 3
 def _print_welcome(console, THEME, rich_box):
     from rich.panel import Panel
     from rich.style import Style
-    width = min(88, shutil.get_terminal_size().columns)
+
+    # Width is always relative to current terminal — panel can never overflow the edge.
+    # expand=False + explicit width: content reflows inside the box; border never wraps.
+    width  = max(50, console.width - 2)
+    narrow = console.width < 70
+    pad    = (1, 1) if narrow else (1, 2)
+
     console.print(Panel(
         "[bold]Let's build your scorerole profile![/bold]\n\n"
-        "The more context you provide, the better scorerole can filter and\n"
-        "score roles against your background.\n\n"
+        "The more context you provide, the better scorerole\n"
+        "can filter and score roles against your background.\n\n"
         f"  [{THEME['accent']} bold]1.[/]  [bold]Resume + LinkedIn[/bold]  [{THEME['dim']}]— who you are[/]\n"
         f"  [{THEME['accent']} bold]2.[/]  [bold]What you're looking for[/bold]  [{THEME['dim']}]— what you want[/]\n"
         f"  [{THEME['accent']} bold]3.[/]  [bold]What you'd pass on[/bold]  [{THEME['dim']}]— what to exclude[/]\n"
         f"  [{THEME['accent']} bold]4.[/]  [bold]Review + save[/bold]  [{THEME['dim']}]— confirm and calibrate[/]\n\n"
-        f"[{THEME['dim']}]Takes about 5 mins. Press Enter to skip optional questions."
-        f"  Run `scorerole init2` anytime to update.[/]",
+        f"[{THEME['dim']}]~5 mins · Enter to skip · "
+        f"`scorerole init2` to update anytime[/]",
         style=Style(bgcolor=THEME["welcome_bg"]),
         border_style=Style(color=THEME["accent"]),
         box=rich_box.ROUNDED,
-        padding=(1, 3),
+        padding=pad,
         width=width,
+        expand=False,
     ))
 
 
@@ -258,7 +162,7 @@ def _step_resume(console, THEME, INQUIRER_STYLE, print_section, print_section_in
     print_section("Step 1 of 4", "Resume + LinkedIn", "— who you are")
     console.print()
     print_section_intro("Add your resume so scorerole can understand your experience, skills, and background.")
-    console.print("  [dim italic]Tip — drag the file into this window to paste its path[/dim italic]")
+    console.print("  [dim italic]Tip — drag the file into this window to paste its path[/dim italic]", soft_wrap=True)
     print_eg("~/resume_2026.pdf")
     console.print()
 
@@ -332,7 +236,8 @@ def _step_want(console, THEME, INQUIRER_STYLE, print_section, print_section_intr
     print_section_intro("Imagine your ideal recruiter calls tomorrow. What role would you hope they're calling about?")
     console.print(
         "  [dim italic]Tip — describe useful details such as: role title, company type, domain,"
-        " work style, location, and comp expectations.[/dim italic]"
+        " work style, location, and comp expectations.[/dim italic]",
+        soft_wrap=True,
     )
     print_eg('"Staff or Principal PM at an AI infrastructure or developer tools company. Prefer growth-stage, remote-first, small team, $280k+ base. Excited by agentic AI or LLM infra."')
     console.print()
@@ -359,7 +264,8 @@ def _step_dontwant(console, THEME, INQUIRER_STYLE, print_section, print_section_
     print_section_intro("What would make you decline a role, even if the title looks right?")
     console.print(
         "  [dim italic]Tip — think about: work location, company scale, scope,"
-        " management expectations, comp, and any other hard negatives.[/dim italic]"
+        " management expectations, comp, and any other hard negatives.[/dim italic]",
+        soft_wrap=True,
     )
     print_eg('"Pass on anything requiring relocation or regular onsite travel. Exclude heavy people management from day one."')
     console.print()
@@ -394,7 +300,7 @@ def _extract_with_claude_v2(api_key, resume_text, linkedin_text, want_text, dont
         response = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=4096,
-            system=_EXTRACT_SYSTEM_V2,
+            system=init_extract_system_prompt(),
             messages=[{"role": "user", "content": user_msg}],
         )
 
@@ -440,21 +346,33 @@ def _apply_guardrails(profile, followups, want_text, dontwant_skipped):
 
     want_lower = (want_text or "").lower()
 
-    # Salary: amount extracted but no explicit floor signal in the text
+    # Salary: amount extracted but no explicit floor signal in the ~80 chars around the mention.
+    # Scoped to context window to avoid "ground floor" / "ground-floor startup" false negatives.
     if profile.get("salary_floor_usd"):
-        floor_signals = ["floor", "minimum", "at least", "no less than", "hard floor"]
-        if not any(s in want_lower for s in floor_signals):
-            # Find what the user wrote for from_text
-            sal_match = re.search(r"\$[\d,k]+\+?", want_text or "", re.IGNORECASE)
-            from_text = sal_match.group(0) if sal_match else f"${profile['salary_floor_usd']:,}"
-            _add("salary_floor_or_target", from_text)
+        sal_match = re.search(r"\$[\d,k]+\+?", want_text or "", re.IGNORECASE)
+        if sal_match:
+            ctx_start = max(0, sal_match.start() - 40)
+            ctx_end   = min(len(want_text), sal_match.end() + 40)
+            ctx       = want_text[ctx_start:ctx_end].lower()
+            floor_signals = ["floor", "minimum", "at least", "no less than", "hard floor"]
+            if not any(s in ctx for s in floor_signals):
+                _add("salary_floor_or_target", sal_match.group(0))
+        # If no salary mention in text but profile has a value, Claude inferred it — ask anyway
+        elif not sal_match:
+            _add("salary_floor_or_target", f"${profile['salary_floor_usd']:,}")
 
-    # Remote ambiguity: "remote" present but "only" / "exclusively" absent
-    if "remote" in want_lower and not any(s in want_lower for s in ["only", "exclusively", "no office", "fully remote"]):
-        loc_pref = profile.get("candidate", {}).get("location_preference", "")
-        if loc_pref in ("remote", "flexible", ""):
-            rm_match = re.search(r"remote[\w\-]*", want_text or "", re.IGNORECASE)
-            _add("remote_only_or_preferred", rm_match.group(0) if rm_match else "remote")
+    # Remote ambiguity: word-boundary match to avoid "remote debugging", "remote access", etc.
+    # Only fires when "remote" is used in a location/work-style context, not an explicit floor signal.
+    if re.search(r'\bremote\b', want_lower):
+        is_location_remote = bool(re.search(
+            r'\bremote[\s\-]*(only|first|role|position|work|job|friendly)?\b', want_lower
+        ))
+        is_explicit = bool(re.search(
+            r'\bremote\s+only\b|\bfully\s+remote\b|\bexclusively\s+remote\b|\bno[\s\-]+office\b',
+            want_lower
+        ))
+        if is_location_remote and not is_explicit:
+            _add("remote_only_or_preferred", "remote")
 
     # Deal-breakers: Step 3 was not skipped but none extracted
     if not dontwant_skipped and not profile.get("deal_breakers"):
@@ -558,13 +476,9 @@ def _run_clarifications(followups, profile, console, THEME, INQUIRER_STYLE):
 
 def _apply_clarification_answer(kind, answer, from_text, profile):
     if kind == "salary_floor_or_target":
-        if answer == "floor":
-            pass  # salary_floor_usd already set; keep as-is
-        elif answer == "target":
-            # Move to aspirational — clear hard floor, set soft target
-            floor = profile.pop("salary_floor_usd", None)
-            if floor:
-                profile.setdefault("preferences", {})["base_salary_target_usd"] = floor
+        # salary_floor_usd stays in place regardless — only the discriminator changes.
+        # Downstream scoring reads salary_is_hard_floor to decide filter vs. rank signal.
+        profile["salary_is_hard_floor"] = (answer == "floor")
 
     elif kind == "remote_only_or_preferred":
         cand = profile.setdefault("candidate", {})
@@ -604,14 +518,13 @@ def _run_review(profile, console, THEME, INQUIRER_STYLE, api_key=None,
 
     can_rerun = bool(api_key and resume_text)
 
-    console.print()
-    console.print(
-        "[bold]Step 4 of 4[/bold]  [bold]Review and save[/bold]",
-        style=_RS(color=THEME["accent"], bold=True),
-    )
-    console.print()
-
     while True:
+        console.clear()
+        console.print()
+        console.print(
+            "[bold]Step 4 of 4[/bold]  [bold]Review and save[/bold]",
+            style=_RS(color=THEME["accent"], bold=True),
+        )
         console.print(
             f"  [{THEME['success']}]✓[/]  Profile extracted  "
             f"[{THEME['dim']}]·  edit anything before saving[/]"
@@ -713,9 +626,15 @@ def _run_review(profile, console, THEME, INQUIRER_STYLE, api_key=None,
 def run_init2(api_key):
     import yaml
     from rich import box as rich_box
+    from .theme import print_separator
 
-    from .theme import THEME, INQUIRER_STYLE, console
-    from .theme import print_section, print_section_intro, print_eg, print_confirmed, print_separator
+    # Fail fast in non-interactive environments (CI, pipes, scripts)
+    if not sys.stdin.isatty():
+        console.print(
+            "[bold]scorerole init2[/bold] requires an interactive terminal.\n"
+            f"  [dim]For non-interactive setup, edit [cyan]{PROFILE_PATH}[/cyan] directly.[/dim]"
+        )
+        sys.exit(1)
 
     try:
         from InquirerPy import inquirer
@@ -759,7 +678,8 @@ def run_init2(api_key):
         console, THEME, INQUIRER_STYLE,
         print_section, print_section_intro, print_eg,
     )
-    print_confirmed("What you're looking for", want_text[:60] + ("…" if len(want_text) > 60 else ""))
+    _w = len(want_text.split()) if want_text else 0
+    print_confirmed("What you're looking for", "captured" if want_text else "skipped", f"{_w} words")
     print_separator()
 
     # Step 3
@@ -771,7 +691,8 @@ def run_init2(api_key):
     if dontwant_skipped:
         console.print("  [dim]Skipped — you can add constraints during review.[/dim]")
     else:
-        print_confirmed("What you'd pass on", dontwant_text[:60] + ("…" if len(dontwant_text) > 60 else ""))
+        _dw = len(dontwant_text.split())
+        print_confirmed("What you'd pass on", "captured", f"{_dw} words")
     print_separator()
 
     # Extract

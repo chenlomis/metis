@@ -6,20 +6,26 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 
-def _make_greeting(name: str, apply_count: int) -> str:
-    """Generate a time-aware, count-sensitive greeting for the digest header."""
+def _make_greeting(name: str, apply_count: int, consider_count: int = 0, total_count: int = 0) -> tuple[str, str]:
+    """Return (salutation, body) as two separate lines for the digest header."""
     hour = datetime.datetime.now().hour
+    first = name.split()[0] if name else name
     if 5 <= hour < 12:
-        prefix = f"Good morning, {name}."
+        salutation = f"Good morning, {first} \U0001f44b"
     elif 12 <= hour < 17:
-        prefix = f"Good afternoon, {name}."
+        salutation = f"Good afternoon, {first} \U0001f44b"
     else:
-        prefix = f"Evening, {name}."
+        salutation = f"Good evening, {first} \U0001f44b"
 
+    total = total_count or (apply_count + consider_count)
     if apply_count >= 1:
         s = 's' if apply_count != 1 else ''
-        return f"{prefix} {apply_count} role{s} worth your time today."
-    return f"{prefix} Quiet batch today — nothing in the apply tier."
+        body = f"We evaluated {total} roles today and surfaced {apply_count} strong match{s} worth your time."
+    elif consider_count >= 1:
+        body = f"We evaluated {total} roles today — {consider_count} in the consider tier."
+    else:
+        body = "Quiet batch today — nothing reached the apply or consider tier."
+    return salutation, body
 
 
 # Credentials needed by send_digest — read from env directly
@@ -196,9 +202,7 @@ def _job_card(job: dict, bg: str, pill_bg: str, pill_color: str) -> str:
         f'{rationale}'
         # Row 4 — tags
         f'<div style="margin-bottom:6px">{tags_html}</div>'
-        # Row 5 — expandable score breakdown
-        f'{render_score_breakdown(job)}'
-        # Row 6 — footer: alumni count left, view link right
+        # Row 5 — footer: alumni count left, view link right
         f'<table width="100%" cellpadding="0" cellspacing="0" border="0"><tr>'
         f'<td style="font-size:11px;color:{_C_MUTED};font-family:{_FONT}">{alumni_html}</td>'
         f'<td style="text-align:right">'
@@ -211,24 +215,39 @@ def _job_card(job: dict, bg: str, pill_bg: str, pill_color: str) -> str:
     )
 
 
-def _skipped_cell(job: dict) -> str:
+def _skip_row(job: dict, row_idx: int) -> str:
     ev = job["eval"]
+    score = ev.get("score", 0)
     friction = _coerce_list(ev.get("frictionPoints", []))
-    first = friction[0] if friction else ""
-    skip_tags = [t for t in ev.get("tags", []) if t.get("sentiment") in ("red", "amber", "orange")]
-    tags = _render_tags(skip_tags, max_tags=3, size=10)
+    reason = friction[0] if friction else "Not a match for current criteria"
+    link_url = job.get("url", "#")
+    if score >= 75:
+        pill_bg, pill_fg = "#EAF3DE", "#3B6D11"
+    elif score >= 55:
+        pill_bg, pill_fg = "#FAEEDA", "#854F0B"
+    else:
+        pill_bg, pill_fg = "#FCEBEB", "#A32D2D"
+    row_bg = "#fafafa" if row_idx % 2 == 0 else "#ffffff"
     return (
-        f'<td valign="top" style="background:#f5f5f3;padding:10px 12px;border-radius:4px;width:50%">'
-        f'<div style="font-size:12px;font-weight:500;color:#333;margin-bottom:2px;font-family:{_FONT}">'
-        f'{job["title"]}</div>'
-        f'<div style="font-size:11px;color:{_C_MUTED};margin-bottom:6px;font-family:{_FONT}">'
+        f'<tr style="background:{row_bg};border-bottom:1px solid #f0eeea">'
+        f'<td style="padding:10px 12px 10px 0;vertical-align:top;width:55%">'
+        f'<div style="margin-bottom:3px">'
+        f'<a href="{link_url}" style="font-size:13px;font-weight:500;color:#185FA5;'
+        f'text-decoration:none;font-family:{_FONT}">{job["title"]}</a>'
+        f'<span style="background:{pill_bg};color:{pill_fg};font-size:10px;font-weight:500;'
+        f'padding:1px 6px;border-radius:20px;font-family:{_FONT};margin-left:6px;white-space:nowrap">'
+        f'{score}%</span>'
+        f'</div>'
+        f'<div style="font-size:11px;color:{_C_MUTED};font-family:{_FONT}">'
         f'{job["company"]}'
         f'{(" · " + job["location"]) if job.get("location") else ""}'
         f'</div>'
-        f'<div style="font-size:11px;color:{_C_MUTED};line-height:1.5;margin-bottom:6px;font-family:{_FONT}">'
-        f'{first}</div>'
-        f'<div>{tags}</div>'
         f'</td>'
+        f'<td style="padding:10px 0 10px 12px;vertical-align:top;width:45%;'
+        f'font-size:12px;color:{_C_MUTED};line-height:1.5;font-family:{_FONT}">'
+        f'{reason}'
+        f'</td>'
+        f'</tr>'
     )
 
 
@@ -247,6 +266,7 @@ def build_digest_payload(
     deal_breaker_count: int = 0,
     candidate_name: str = "",
     greeting: str = "",
+    greeting_sub: str = "",
 ) -> dict:
     result_jobs = []
     for job in jobs:
@@ -268,6 +288,7 @@ def build_digest_payload(
         "totalEvaluated":   len(jobs),
         "candidateName":    candidate_name,
         "greeting":         greeting,
+        "greetingSub":      greeting_sub,
         "dealBreakerCount": deal_breaker_count,
         "jobs":             result_jobs,
     }
@@ -278,14 +299,15 @@ def render_html(jobs: list[dict], run_date: str, deal_breaker_count: int = 0) ->
     profile        = load_profile_yaml() or {}
     candidate_name = profile.get("candidate", {}).get("name", "")
     apply_count    = sum(1 for j in jobs if j.get("eval", {}).get("verdict") == "apply")
-    greeting       = _make_greeting(candidate_name, apply_count) if candidate_name else ""
+    consider_count = sum(1 for j in jobs if j.get("eval", {}).get("verdict") == "consider")
+    greeting, greeting_sub = _make_greeting(candidate_name, apply_count, consider_count, len(jobs)) if candidate_name else ("", "")
 
     pipeline_dir  = Path(__file__).parent.parent  # scorerole/ → project root
     ts_node       = pipeline_dir / "node_modules" / ".bin" / "ts-node"
     render_script = pipeline_dir / "render.ts"
 
     if ts_node.exists() and render_script.exists():
-        payload = build_digest_payload(jobs, run_date, deal_breaker_count, candidate_name, greeting)
+        payload = build_digest_payload(jobs, run_date, deal_breaker_count, candidate_name, greeting, greeting_sub)
         # ts-node reads the payload file after Python closes the fd, so we use mkstemp
         # (delete=False equivalent) and restrict permissions before writing any data.
         fd, payload_path = tempfile.mkstemp(suffix=".json")
@@ -323,7 +345,7 @@ def build_digest_html(jobs: list[dict], run_date: str, deal_breaker_count: int =
     stat_row = (
         f'<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:14px">'
         f'<tr>'
-        f'{_stat_cell(len(jobs),    "Roles evaluated", "#5F5E5A")}'
+        f'{_stat_cell(len(jobs),    "Evaluated", "#5F5E5A")}'
         f'<td width="6">&nbsp;</td>'
         f'{_stat_cell(len(apply),   "Apply now",       "#3B6D11")}'
         f'<td width="6">&nbsp;</td>'
@@ -343,9 +365,9 @@ def build_digest_html(jobs: list[dict], run_date: str, deal_breaker_count: int =
         f'{_dot("#639922")}'
         f'<td style="font-size:12px;color:{_C_MUTED};padding:0 12px 0 5px;font-family:{_FONT}">Strength match</td>'
         f'{_dot("#BA7517")}'
-        f'<td style="font-size:12px;color:{_C_MUTED};padding:0 12px 0 5px;font-family:{_FONT}">Proceed with awareness</td>'
+        f'<td style="font-size:12px;color:{_C_MUTED};padding:0 12px 0 5px;font-family:{_FONT}">Caution / domain gap</td>'
         f'{_dot("#A32D2D")}'
-        f'<td style="font-size:12px;color:{_C_MUTED};padding:0 0 0 5px;font-family:{_FONT}">Real concern</td>'
+        f'<td style="font-size:12px;color:{_C_MUTED};padding:0 0 0 5px;font-family:{_FONT}">Hard blocker</td>'
         f'</tr></table>'
     )
 
@@ -383,27 +405,25 @@ def build_digest_html(jobs: list[dict], run_date: str, deal_breaker_count: int =
             f'</table>'
         )
 
-    # --- Skipped 2-column grid ---
+    # --- Skipped flat 2-column table ---
     skip_html = ""
     if skips:
-        pairs = [skips[i:i + 2] for i in range(0, len(skips), 2)]
-        grid_rows = ""
-        for pair in pairs:
-            grid_rows += '<tr>'
-            grid_rows += _skipped_cell(pair[0])
-            if len(pair) > 1:
-                grid_rows += '<td width="6">&nbsp;</td>'
-                grid_rows += _skipped_cell(pair[1])
-            else:
-                grid_rows += '<td width="6">&nbsp;</td><td style="width:50%">&nbsp;</td>'
-            grid_rows += '</tr>'
-            grid_rows += '<tr><td colspan="3" height="6" style="font-size:0;line-height:0">&nbsp;</td></tr>'
+        col_hdr = (
+            f'<tr style="border-bottom:1px solid #eeece5">'
+            f'<td style="font-size:10px;color:{_C_MUTED};text-transform:uppercase;'
+            f'letter-spacing:0.06em;padding:0 12px 8px 0;font-family:{_FONT}">Role · Company</td>'
+            f'<td style="font-size:10px;color:{_C_MUTED};text-transform:uppercase;'
+            f'letter-spacing:0.06em;padding:0 0 8px 12px;font-family:{_FONT}">Why Skipped</td>'
+            f'</tr>'
+        )
+        skip_rows = "".join(_skip_row(job, i) for i, job in enumerate(skips))
         skip_html = (
             f'<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:20px">'
-            f'<tr><td colspan="3" style="padding-bottom:10px">'
+            f'<tr><td colspan="2" style="padding-bottom:10px">'
             f'{_section_header("Skipped", f"{len(skips)} roles · domain or title mismatch", "#888780", _C_MUTED)}'
             f'</td></tr>'
-            f'{grid_rows}'
+            f'{col_hdr}'
+            f'{skip_rows}'
             f'</table>'
         )
 

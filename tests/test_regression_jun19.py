@@ -255,23 +255,23 @@ class TestInit2SchemaAlignment:
     """After the schema refactor, init2_cmd must still extract all required top-level keys."""
 
     def test_extract_system_v2_contains_required_fields(self):
-        from scorerole.init2_cmd import _EXTRACT_SYSTEM_V2
+        from scorerole.prompts import init_extract_system_prompt
+        prompt = init_extract_system_prompt()
         required = [
             "candidate:", "target:", "aspirations:", "preferences:",
             "experience:", "education:", "strengths:", "deal_breakers:",
             "salary_floor_usd:", "notes:", "_followups:",
         ]
         for field in required:
-            assert field in _EXTRACT_SYSTEM_V2, f"Missing schema field: {field}"
+            assert field in prompt, f"Missing schema field: {field}"
 
     def test_extract_system_v2_has_no_scoring_block(self):
         """scoring block was moved to inferred.* — must not appear as a top-level key."""
-        from scorerole.init2_cmd import _EXTRACT_SYSTEM_V2
-        # "scoring:" as a top-level YAML key (not inside a nested example)
+        from scorerole.prompts import init_extract_system_prompt
         import re
-        # Look for "^scoring:" at the start of a line
-        assert not re.search(r"^scoring:", _EXTRACT_SYSTEM_V2, re.MULTILINE), \
-            "scoring: block still present as top-level key in _EXTRACT_SYSTEM_V2"
+        prompt = init_extract_system_prompt()
+        assert not re.search(r"^scoring:", prompt, re.MULTILINE), \
+            "scoring: block still present as top-level key in init_extract_system_prompt()"
 
     def test_guardrails_still_work_after_refactor(self):
         """_apply_guardrails must be importable and handle the new schema shape."""

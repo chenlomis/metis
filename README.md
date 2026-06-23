@@ -18,7 +18,7 @@ LinkedIn job alert emails
   Ranked HTML digest         → delivered to your email
 ```
 
-Each role gets a **score (0–100)**, a **verdict** (apply / consider / skip), lever and friction points, and highlight tags. Roles are deduplicated across runs — you won't see the same listing twice within 14 days.
+Each role gets a **score (0–100)**, a **verdict** (apply / consider / skip), lever and friction points, and highlight tags. Roles are deduplicated across runs — you won't see the same listing twice within 30 days.
 
 ---
 
@@ -40,29 +40,28 @@ Each role gets a **score (0–100)**, a **verdict** (apply / consider / skip), l
 ## Quickstart
 
 ```bash
-# 1. Clone and install
-git clone https://github.com/YOUR_USERNAME/scorerole
-cd scorerole
-python3.11 -m venv venv && source venv/bin/activate   # macOS ships 3.9; use 3.11+
-pip install --upgrade pip
-pip install -e .
+# Clone and install
+git clone https://github.com/YOUR_USERNAME/scorerole && cd scorerole
+python3.11 -m venv venv && source venv/bin/activate
+pip install --upgrade pip && pip install -e .
 
-# 1b. (Optional) Install Node dependencies for the rich React Email digest template
-#     Skip this if you don't have Node — a Python fallback renders the digest instead.
+# (Optional) Rich React Email template — skip if you don't have Node installed
+# A Python fallback renders the digest automatically if Node isn't available.
 npm install
 
-# 2. Configure credentials
-cp .env.example .env
-# Edit .env with your keys (see .env.example for all fields)
+# Configure credentials
+cp .env.example .env        # then edit .env with your API key and Gmail credentials
 
-# 3. Create your scoring profile from your resume
+# Build your scoring profile from your resume
 scorerole init
 
-# 4. Run
+# Run
 scorerole
 ```
 
-After step 4, a digest email lands in your inbox within a minute — **as long as there are LinkedIn alert emails in your lookback window.** If this is your first run and you've just set up alerts, no digest is sent (nothing to score yet). Try `scorerole --lookback 14d` to cast a wider net, or wait for your first daily alert email.
+> **First run?** A digest is only sent when LinkedIn alert emails exist in your lookback window. If you just set up alerts, wait for the first daily email, then re-run — or try `scorerole --lookback 14d` to cast a wider net.
+
+**Python 3.11+ required.** macOS ships with 3.9, which is too old. Install via Homebrew: `brew install python@3.11`, then use `python3.11` above.
 
 ---
 
@@ -119,7 +118,7 @@ See [`profile.template.yaml`](./profile.template.yaml) for the full schema with 
 | Command | What it does |
 |---|---|
 | `scorerole` | Fetch alerts → score → send digest (default: last 3 days) |
-| `scorerole --lookback 7d` | Same, wider window. Accepts `7d`, `14d`, `2026-05-10`, `yesterday` |
+| `scorerole --lookback 7d` | Same, wider window. Accepts `7d`, `14d`, `yesterday`, or an ISO date like `2025-01-15` |
 | `scorerole --no-limit` | Score everything in the lookback window, bypassing the per-run cap. Shows a cost estimate; Haiku pre-screens first to keep costs down. |
 | `scorerole --no-limit --lookback 14d` | Catch-up run — useful after a gap or after `scorerole reset` |
 
@@ -138,6 +137,16 @@ See [`profile.template.yaml`](./profile.template.yaml) for the full schema with 
 | `scorerole schedule set` | Interactive wizard: choose frequency (daily / Mon+Thu / weekly) and time |
 | `scorerole schedule remove` | Remove the scheduled job and clear `schedule.json` |
 
+**Tracker and feedback:**
+
+| Command | What it does |
+|---|---|
+| `scorerole track` | Parse confirmation and rejection emails → update `applications.xlsx` with status |
+| `scorerole track --lookback 30d` | Extend the look-back window for email parsing |
+| `scorerole track --dry-run` | Parse and classify emails, print matches, no xlsx write |
+| `scorerole feedback` | Add calibration notes that shape future scoring (e.g. "deprioritize seed-stage roles") |
+| `scorerole feedback list` | Show recent calibration entries |
+
 **State and debugging:**
 
 | Command | What it does |
@@ -147,8 +156,6 @@ See [`profile.template.yaml`](./profile.template.yaml) for the full schema with 
 | `scorerole reset --profile` | Also delete your scoring profile — requires `scorerole init` before next run |
 | `scorerole reset --profile --force` | Same, no confirmation |
 | `scorerole debug` | Dump the most recent LinkedIn alert email to `~/.job_pipeline/debug_email.txt` |
-
-> **When more than 20 new roles are found**, scorerole pauses and shows the count and estimated API cost. You can score all of them (with Haiku pre-screening to reduce cost), or proceed with the default cap. Roles beyond the cap stay unseen and reappear next run — they are never silently discarded.
 
 ---
 
@@ -205,16 +212,18 @@ scorerole runs entirely on your machine. Here is exactly what leaves it:
 
 Data stored locally in `~/.job_pipeline/` (outside the repo, never committed):
 - `profile.yaml` — your extracted profile (permissions: 600, owner-readable only)
-- `seen_roles.json` — opaque MD5 hashes of scored roles + timestamps, 14-day TTL (permissions: 600)
+- `seen_roles.json` — opaque MD5 hashes of scored roles + timestamps, 30-day TTL (permissions: 600)
 - `logs/YYYY-MM-DD.log` — pipeline run logs (may contain job titles/companies from warning messages)
 
 ---
 
 ## Cost
 
-Scoring a typical 10-job batch uses roughly 8,000–15,000 tokens and costs approximately **$0.05–0.15** with `claude-sonnet-4-6`. Running `scorerole` daily on a typical alert volume (20–30 roles/week) costs roughly **$0.50–2.00/month** at current pricing.
+Scoring a typical 10-job batch costs approximately **$0.05–0.15** with `claude-sonnet-4-6`. Running `scorerole` daily on a typical alert volume (20–30 roles/week) costs roughly **$0.50–2.00/month** at current pricing.
 
-Set `MAX_JOBS_PER_RUN` in `.env` to cap spend on any single run.
+**When more than `MAX_JOBS_PER_RUN` new roles are found** (default: 20), scorerole pauses and shows the count and estimated API cost before proceeding. You can score everything (Haiku pre-screens first to cut cost ~40–60%), or let it cap. Roles beyond the cap stay unseen and reappear next run — they are never silently discarded.
+
+Set `MAX_JOBS_PER_RUN=0` in `.env` to remove the cap entirely, or lower it to bound spend on any single run. A catch-up run after a gap: `scorerole --no-limit --lookback 14d`.
 
 ---
 
@@ -228,7 +237,7 @@ scorerole/
   init_cmd.py      # scorerole init wizard
   render.py        # HTML digest renderer
   sources/         # Email ingestion (IMAP + LinkedIn parser)
-  state.py         # Dedup state (seen_roles.json, 14-day TTL)
+  state.py         # Dedup state (seen_roles.json, 30-day TTL)
 
 profile.template.yaml   # Starter profile template
 .env.example            # Credentials template
