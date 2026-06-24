@@ -443,10 +443,10 @@ def run_schedule_wizard() -> None:
     from .theme import THEME
     Q_STYLE = QStyle([
         ("qmark",       f"fg:{THEME['accent']} bold"),
-        ("question",    f"fg:{THEME['label']} bold"),
+        ("question",    f"fg:{THEME['muted']} bold"),
         ("answer",      f"fg:{THEME['accent']} bold"),
         ("pointer",     f"fg:{THEME['accent']} bold"),
-        ("highlighted", f"fg:{THEME['label']} bold"),
+        ("highlighted", f"fg:{THEME['muted']} bold"),
         ("selected",    f"fg:{THEME['success']}"),
         ("instruction", f"fg:{THEME['dim']}"),
         ("separator",   f"fg:{THEME['dim']}"),

@@ -194,8 +194,8 @@ def _print_sources(cfg: dict, profile: dict):
 
     console.print(table)
     console.print(
-        "  [dim]scorerole sources add <name>    add a company\n"
-        "  scorerole sources remove           remove a company[/dim]"
+        "  [dim]scorerole sources add \\<name>    add a company\n"
+        "  scorerole sources remove            remove a company[/dim]"
     )
     console.print()
 
@@ -294,13 +294,19 @@ def cmd_add(name: str):
         )
     else:
         _print(
-            f"  [{THEME['warning']}]Could not auto-resolve[/] [bold]{name}[/bold].\n"
-            f"  Find their ATS slug and add manually to ~/.job_pipeline/profile.yaml:\n\n"
-            f"    proactive_sources:\n"
-            f"      extra_companies:\n"
-            f"        - name: \"{name}\"\n"
-            f"          ats: greenhouse   # or lever / ashby\n"
-            f"          slug: their-slug\n"
+            f"\n  [{THEME['warning']}]Couldn't find [bold]{name}[/bold] automatically.[/]\n\n"
+            f"  [{THEME['muted']}]We search Greenhouse, Lever, and Ashby — the most common job platforms.\n"
+            f"  {name} may use a different or proprietary system.[/]\n\n"
+            f"  [{THEME['muted']}]If they do use one of those platforms, find their company ID in\n"
+            f"  the URL of their jobs page — it's usually the part right after the domain:[/]\n\n"
+            f"  [{THEME['dim']}]  greenhouse.io/[bold]apple[/bold]/jobs   →  slug is 'apple'\n"
+            f"  lever.co/[bold]apple[/bold]             →  slug is 'apple'[/]\n\n"
+            f"  [{THEME['muted']}]Then add them to [bold]~/.job_pipeline/profile.yaml[/bold]:[/]\n\n"
+            f"  [{THEME['dim']}]  proactive_sources:\n"
+            f"    extra_companies:\n"
+            f"      - name: \"{name}\"\n"
+            f"        ats: greenhouse   # or lever / ashby\n"
+            f"        slug: their-slug[/]\n"
         )
 
 
