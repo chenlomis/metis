@@ -126,8 +126,14 @@ See [`profile.template.yaml`](./profile.template.yaml) for the full schema with 
 
 | Command | What it does |
 |---|---|
-| `scorerole init` | Full wizard: resume → LinkedIn → preferences → review → save. Re-run any time to update. |
+| `scorerole init` | Conversational wizard: paste your resume + describe what you're looking for → Claude extracts and builds your profile. Re-run any time to update. |
 | `scorerole init --resume path/to/resume.pdf` | Skip the resume path prompt |
+
+**Reports:**
+
+| Command | What it does |
+|---|---|
+| `scorerole report` | Score distribution, verdict breakdown, and run history from `~/.job_pipeline/runs.jsonl` |
 
 **Automated scheduling:**
 
@@ -232,15 +238,29 @@ Set `MAX_JOBS_PER_RUN=0` in `.env` to remove the cap entirely, or lower it to bo
 ```
 scorerole/
   pipeline.py      # CLI entry point and orchestration
-  score.py         # Claude scoring logic
+  score.py         # Claude scoring logic (Layer 2 — Sonnet)
+  extract.py       # Structured extraction (Layer 1 — Haiku, 27 fields)
   profile.py       # Profile loader (YAML → scoring prompt)
-  init_cmd.py      # scorerole init wizard
-  render.py        # HTML digest renderer
-  sources/         # Email ingestion (IMAP + LinkedIn parser)
+  prompts.py       # Canonical prompt templates (OSS-safe, no hardcoded names)
+  init_cmd.py      # scorerole init — conversational profile setup wizard
+  init2_cmd.py     # scorerole init2 — legacy structured form (kept for reference)
+  render.py        # HTML digest renderer (React Email / Python fallback)
+  report_cmd.py    # scorerole report — score distribution + run history
+  feedback.py      # Feedback log: JSONL store + calibration parser
+  sources_cmd.py   # scorerole sources — manage proactive company list
+  track.py         # scorerole track — apply/rejection email parsing
+  tracker.py       # applications.xlsx read/write
+  trace.py         # runs.jsonl telemetry (every job at every pipeline stage)
+  schedule_cmd.py  # scorerole schedule — launchd/cron wizard
   state.py         # Dedup state (seen_roles.json, 30-day TTL)
+  theme.py         # Rich + InquirerPy theme (single source of truth)
+  sources/         # Email ingestion (IMAP + LinkedIn parser + proactive ATS)
 
+emails/            # React Email digest templates (TypeScript)
+tests/             # pytest suite (397 tests)
 profile.template.yaml   # Starter profile template
 .env.example            # Credentials template
+Makefile           # make test, make lint
 ```
 
 ---

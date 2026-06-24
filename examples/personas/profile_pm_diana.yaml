@@ -1,0 +1,135 @@
+# scorerole persona profile — Generalist Senior PM pivoting to AI (Enterprise / HealthTech)
+# Persona: Diana Walsh | 12+ years enterprise PM, targeting AI product director or AI-native leadership role
+# Setup: cp examples/personas/profile_pm_diana.yaml ~/.job_pipeline_pm_diana/profile.yaml
+
+candidate:
+  name: "Diana Walsh"
+  email: "diana.walsh@example.com"
+  location: "Chicago, IL"
+  location_preference: "flexible"
+  open_to_relocation:
+    - "San Francisco Bay Area"
+    - "Boston, MA"
+    - "New York / NYC"
+
+  experience:
+    - company: "Epic Systems"
+      title: "Principal Product Manager, AI & Clinical Decision Support"
+      dates: "Mar 2020 – Present"
+      highlights:
+        - "Led Epic's first AI-powered clinical decision support suite; deployed to 140 health systems across US and UK, reaching 3.2M clinical encounters/month"
+        - "Owned regulatory and compliance product strategy (FDA SaMD pathway); worked with legal and compliance to bring 2 AI features through FDA 510(k) clearance"
+        - "Built cross-functional AI governance council (12 members: clinical informatics, legal, ML engineering); established responsible AI review process adopted company-wide"
+        - "Managed a team of 4 PMs and drove roadmap alignment across 6 clinical specialties (Oncology, Cardiology, Primary Care, Emergency, Radiology, Surgery)"
+    - company: "Cerner (now Oracle Health)"
+      title: "Senior Product Manager, Population Health"
+      dates: "Jan 2016 – Feb 2020"
+      highlights:
+        - "Rebuilt population health risk stratification product; reduced false-positive alert rate 54%, adopted by 320 hospital networks"
+        - "Launched Cerner HealtheIntent on Microsoft Azure; first cloud migration for core clinical analytics suite, $30M+ implementation pipeline in year 1"
+        - "Ran enterprise discovery with 80+ CMOs and CNOs across health systems; synthesized findings into 3-year product vision adopted by SVP"
+    - company: "Allscripts"
+      title: "Product Manager, EHR Platform"
+      dates: "Aug 2012 – Dec 2015"
+      highlights:
+        - "Managed EHR workflow configuration product for 2,000+ physician practice customers"
+        - "Shipped HL7 FHIR integration layer that became the standard API contract for 3rd-party partners"
+        - "Led 18-month platform migration affecting 40k end users with zero critical-path incidents"
+
+  education:
+    - institution: "Northwestern University"
+      degree: "MBA, Healthcare Management & Strategy"
+      year: 2012
+    - institution: "University of Illinois Urbana-Champaign"
+      degree: "BS Bioengineering"
+      year: 2009
+
+  strengths:
+    - "AI product leadership in regulated environments — shipped FDA-cleared AI features at Epic; understands SaMD classification, post-market surveillance, and responsible AI governance in ways most PMs don't"
+    - "Healthcare domain depth — 12 years at Allscripts, Cerner, Epic; fluent in EHR workflows, clinical terminology, payer-provider dynamics, and value-based care incentives"
+    - "PM team management — managed 4 PMs at Epic across 6 specialties; built roadmap alignment rituals and handled performance calibrations at Principal level"
+    - "Enterprise executive influence — ran discovery and roadmap reviews with CMOs, CNOs, and health system boards; comfortable at C-suite table without an enterprise sales crutch"
+    - "Standards and interoperability — shipped HL7 FHIR integration and FDA 510(k)-cleared products; understands how standards-based architecture shapes product strategy in regulated tech"
+
+target:
+  roles:
+    - "Director of Product, AI"
+    - "VP of Product"
+    - "Head of Product"
+    - "Principal Product Manager, AI"
+    - "Chief Product Officer"
+  level: "director"
+
+aspirations:
+  track: "management"
+  direction: >
+    After 12 years building clinical AI products inside Epic and Cerner, I want to take
+    what I've learned about responsible AI, regulatory strategy, and clinical workflow
+    design into an AI-native health tech or enterprise AI company that is still figuring
+    out how to build trustworthy products in regulated markets. Looking for a Director
+    or VP role where I can shape AI product strategy and team culture — not just ship
+    features. Open to non-healthcare AI roles if the company is tackling a regulated
+    or trust-sensitive domain (legal, financial, safety).
+  company_types:
+    - "AI-native health tech company (Series B–D or public)"
+    - "Enterprise AI company operating in regulated markets (healthcare, legal, financial)"
+    - "Digital health startup with clinical or payer integration"
+  avoid_company_types:
+    - "pure consumer wellness with no clinical or payer component"
+    - "company without an AI product surface"
+
+preferences:
+  company_stage:
+    - "growth"
+    - "public"
+  industry_targets:
+    - "HealthTech / Digital Health"
+    - "AI/ML Platform"
+    - "Enterprise AI"
+    - "RegTech / LegalTech"
+  industry_avoid:
+    - "consumer wellness without clinical basis"
+    - "pure e-commerce"
+  base_salary_target_usd: 290000
+
+scoring:
+  apply_threshold: 65
+  consider_threshold: 48
+  level_mismatch_deduction: 18
+
+green_flags:
+  - "Director or VP role with PM team ownership"
+  - "AI product in a regulated or trust-sensitive domain"
+  - "company operates in healthcare, legal, finance, or safety-critical environment"
+  - "responsible AI, governance, or compliance is a product concern"
+  - "clinical decision support, workflow automation, or AI-augmented professional tools"
+
+yellow_flags:
+  - "limited pure B2B SaaS experience outside healthcare — vertical expertise may not transfer cleanly to horizontal software companies"
+  - "no consumer product background — primarily enterprise and regulated markets"
+
+red_flags:
+  - "IC-only PM role with no team leadership component"
+  - "company building consumer wellness apps without clinical or regulatory basis"
+
+deal_breakers:
+  - "no equity"
+  - "on-site 5 days/week in Chicago (open to relocation for right role)"
+  - "AI-washing — company claiming AI product without genuine ML core"
+  - "Senior PM or below — 12 years experience, will not step backward in level"
+
+salary_floor_usd: 220000
+
+inferred:
+  customer_types:
+    - "b2b"
+    - "enterprise"
+  degree_level: "ms_phd"
+
+notes: |
+  12+ years in clinical AI and enterprise health tech at Epic, Cerner, Allscripts.
+  Targeting Director, VP, or CPO only. Senior PM roles score <=20; Principal IC roles score <=45.
+  Weight AI product in regulated domain, PM team leadership, and executive scope very heavily.
+  Healthcare domain familiarity is a strong plus; other regulated domains (legal, finance) are acceptable.
+  Deduct 25 points for IC-only roles with no PM team. Deduct 20 points for consumer health/wellness without clinical basis.
+  Responsible AI governance, FDA regulatory experience, and enterprise C-suite relationships are major differentiators — highlight in scoring.

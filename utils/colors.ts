@@ -8,7 +8,7 @@ export const C_MUTED         = '#72716d';  // secondary — company, alumni coun
 export const C_SUBTLE        = '#aaaaaa';  // tertiary — column headers, hints
 export const C_SKIPPED_TITLE = '#1f2118';  // skipped role titles
 export const C_LINK          = '#185FA5';
-export const C_BTN           = '#5F5E5A';  // "View posting" button border + text
+export const C_BTN           = '#888780';  // "View posting" button bg (gray-400)
 
 // Backgrounds
 export const C_BG_PRIMARY   = '#ffffff';

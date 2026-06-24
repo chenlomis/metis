@@ -310,7 +310,7 @@ BAD (these are wrong — reject before submitting):
   ?  "There may be some leveling uncertainty worth exploring."  [vague, no concrete fact]
 
 GOOD (15–20 words, second-person, correct tense, no em-dash):
-  ✓  "You {good_leverage_verb} — fits {jd_requirement}."  [past act → present fit]
+  ✓  "You {{good_leverage_verb}} — fits {{jd_requirement}}."  [past act → present fit]
   ?  "The title sits below your Staff/Principal target — verify scope and comp before applying." """
 
 
@@ -455,8 +455,8 @@ def build_score_system(profile: dict) -> str:
     apply_t, consider_t = 75, 55
     sc = profile.get("scoring", {})
     try:
-        apply_t    = int(sc.get("apply_threshold",    apply_t))
-        consider_t = int(sc.get("consider_threshold", consider_t))
+        apply_t    = int(sc.get("solid_match_threshold",   sc.get("apply_threshold",    apply_t)))
+        consider_t = int(sc.get("moderate_match_threshold", sc.get("consider_threshold", consider_t)))
     except (TypeError, ValueError):
         pass
 
@@ -653,8 +653,8 @@ def rank_jobs(jobs: list[dict]) -> list[dict]:
     try:
         from .profile import load_profile_yaml
         sc = (load_profile_yaml() or {}).get("scoring", {})
-        apply_t    = int(sc.get("apply_threshold",    apply_t))
-        consider_t = int(sc.get("consider_threshold", consider_t))
+        apply_t    = int(sc.get("solid_match_threshold",   sc.get("apply_threshold",    apply_t)))
+        consider_t = int(sc.get("moderate_match_threshold", sc.get("consider_threshold", consider_t)))
     except Exception:
         pass
 

@@ -20,7 +20,8 @@ log = logging.getLogger(__name__)
 # Config
 # ---------------------------------------------------------------------------
 
-_DEFAULT_TRACKER = Path.home() / ".job_pipeline" / "applications.xlsx"
+_data_dir = Path(os.getenv("SCOREROLE_DATA_DIR", str(Path.home() / ".job_pipeline")))
+_DEFAULT_TRACKER = _data_dir / "applications.xlsx"
 TRACKER_PATH = Path(os.getenv("TRACKER_PATH", str(_DEFAULT_TRACKER)))
 
 # Column order — must match _COL_* indices and header row

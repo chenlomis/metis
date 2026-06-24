@@ -55,7 +55,7 @@ export default function JobCard({ job, tier }: Props) {
         {tags.map((tag, i) => <Tag key={i} text={shortenTag(tag.text)} sentiment={tag.sentiment} />)}
       </div>
 
-      <CardFooter postingUrl={job.postingUrl} alumniCount={job.alumniCount} />
+      <CardFooter postingUrl={job.postingUrl} alumniCount={job.alumniCount} tier={tier} />
     </Section>
   );
 }

@@ -1,0 +1,128 @@
+# scorerole persona profile — Growth / Monetization PM (FinTech / Consumer)
+# Persona: Jake Torres | Growth-specialist PM, targeting Head of Growth or Monetization Lead
+# Setup: cp examples/personas/profile_pm_jake.yaml ~/.job_pipeline_pm_jake/profile.yaml
+
+candidate:
+  name: "Jake Torres"
+  email: "jake.torres@example.com"
+  location: "Miami, FL"
+  location_preference: "remote"
+  open_to_relocation:
+    - "New York / NYC"
+    - "San Francisco Bay Area"
+
+  experience:
+    - company: "Chime"
+      title: "Senior Product Manager, Growth & Monetization"
+      dates: "Apr 2021 – Present"
+      highlights:
+        - "Led end-to-end growth funnel for Chime's instant account opening; improved activation rate from 41% to 68% through onboarding experimentation (14 A/B tests shipped)"
+        - "Designed and launched Chime's referral program 2.0; drove 1.2M new member sign-ups in 8 months at $9 CAC vs. $47 paid channel baseline"
+        - "Built paywall and upgrade flow for Chime Premium; $22M incremental ARR in year 1; presented revenue model to CFO and board"
+        - "Ran weekly growth reviews with data science team; built experimentation culture from ad-hoc tests to a full A/B testing roadmap with 40+ tests/year"
+    - company: "Robinhood"
+      title: "Product Manager, Monetization"
+      dates: "Jan 2019 – Mar 2021"
+      highlights:
+        - "Owned Robinhood Gold subscription product ($5/month tier); grew paid subscriber base 3.4x to 1.6M users through pricing, bundling, and win-back campaigns"
+        - "Shipped Robinhood's first upsell experiment framework with growth engineering; reduced time-to-ship monetization tests from 6 weeks to 8 days"
+        - "Defined margin and LTV models for new product features; collaborated with finance to align product KPIs with revenue forecasts"
+    - company: "Credit Karma"
+      title: "Associate Product Manager, Recommendations"
+      dates: "Jul 2017 – Dec 2018"
+      highlights:
+        - "Built personalized credit card recommendation engine; +21% click-to-apply rate, $14M gross revenue impact in first year"
+        - "Ran 20+ discovery interviews with members to understand credit anxiety triggers; shaped messaging and offer ranking strategy"
+
+  education:
+    - institution: "UC Berkeley, Haas School of Business"
+      degree: "BS Business Administration"
+      year: 2017
+
+  strengths:
+    - "Growth experimentation at scale — shipped 50+ A/B tests across activation, referral, and monetization surfaces at Chime; built experimentation culture from zero"
+    - "Monetization product depth — owned subscription, paywall, and upsell products at Robinhood and Chime; comfortable with pricing strategy, LTV modeling, and board-level revenue narratives"
+    - "Consumer fintech domain — 7 years building for mass-market financial consumers (Credit Karma, Robinhood, Chime); deep understanding of financial trust, regulatory constraints, and viral loops"
+    - "Referral and viral growth — designed Chime referral 2.0 ($9 CAC vs $47 paid); knows the mechanics of k-factor, referral economics, and fraud prevention"
+    - "Cross-functional data fluency — works directly with data scientists; can write SQL, read model outputs, and translate them into product decisions without a PM-DS translator"
+
+target:
+  roles:
+    - "Head of Growth"
+    - "Director of Growth Product"
+    - "Staff Product Manager, Growth"
+    - "Principal PM, Monetization"
+    - "Group Product Manager, Growth & Monetization"
+  level: "staff"
+
+aspirations:
+  track: "flexible"
+  direction: >
+    Targeting a Staff or Director-level growth or monetization PM role at a consumer
+    fintech, subscription SaaS, or AI-native product company. Seven years running
+    growth experiments and building monetization products have given me both the
+    technical fluency (experiment design, LTV models) and the strategic range (pricing,
+    bundling, revenue narrative) to own a growth function end-to-end. Ready to move
+    from owning a growth surface to owning the growth strategy across multiple surfaces.
+  company_types:
+    - "Consumer fintech with subscription or monetization product"
+    - "Subscription SaaS with self-serve growth motion"
+    - "AI-native consumer product with monetization challenge"
+  avoid_company_types:
+    - "pure B2B enterprise with no consumer growth surface"
+    - "company without experimentation culture or data infrastructure"
+
+preferences:
+  company_stage:
+    - "growth"
+    - "public"
+  industry_targets:
+    - "FinTech"
+    - "Consumer SaaS"
+    - "AI Consumer"
+    - "Marketplace"
+  industry_avoid:
+    - "pure B2B enterprise"
+    - "deep infrastructure / developer tools"
+  base_salary_target_usd: 260000
+
+scoring:
+  apply_threshold: 70
+  consider_threshold: 50
+  level_mismatch_deduction: 12
+
+green_flags:
+  - "role owns activation, referral, or monetization funnel as primary KPI"
+  - "company has experimentation infrastructure (A/B testing platform)"
+  - "subscription, paywall, or freemium-to-paid conversion is a core product challenge"
+  - "consumer fintech or AI product with real growth problem"
+  - "data science team embedded with product"
+
+yellow_flags:
+  - "limited B2B growth experience — primarily consumer and prosumer"
+  - "no hardware or physical product experience"
+
+red_flags:
+  - "no experimentation culture — decisions made without testing"
+  - "growth PM role that is actually a marketing ops role"
+
+deal_breakers:
+  - "no equity"
+  - "on-site 5 days/week"
+  - "pure B2B enterprise with no consumer growth surface"
+  - "company with fewer than 100k active users — no scale to run meaningful experiments"
+
+salary_floor_usd: 185000
+
+inferred:
+  customer_types:
+    - "b2c"
+    - "smb"
+  degree_level: "bs"
+
+notes: |
+  Consumer fintech and subscription growth specialist.
+  Targeting Staff PM / Director level in growth or monetization. Feature PM roles with no growth mandate score <=30.
+  Weight experimentation culture, monetization surface, and consumer scale heavily.
+  Referral programs, paywalls, pricing strategy, and LTV modeling are strong positive signals.
+  Deduct 20 points for roles where growth is owned by marketing, not product.

@@ -63,9 +63,8 @@ def render_profile(data: dict) -> str:
     roles      = ", ".join(t.get("roles", []))
     industries = ", ".join(t.get("industries", []))
 
-    apply_t    = sc.get("apply_threshold", 75)
-    consider_t = sc.get("consider_threshold", 55)
-    deduction  = sc.get("level_mismatch_deduction", 10)
+    apply_t    = sc.get("solid_match_threshold", sc.get("apply_threshold", 75))
+    consider_t = sc.get("moderate_match_threshold", sc.get("consider_threshold", 55))
 
     lines = [
         f"CANDIDATE: {name} — actively searching",
@@ -107,8 +106,6 @@ def render_profile(data: dict) -> str:
         "",
         "SCORE CALIBRATION:",
         f"Apply threshold: {apply_t}+.  Consider: {consider_t}+.",
-        f"If title lacks Staff / Lead / Principal / Director / Head / VP / GM, "
-        f"deduct {deduction} points — it's a lateral or downward move.",
     ]
 
     # Inferred background — used by Layer 1/2 for domain and gate grounding

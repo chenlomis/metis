@@ -7,10 +7,10 @@ import os
 import shutil
 import subprocess
 import sys
+import textwrap
 
 from rich.console import Console
 from rich.markup import escape as _escape
-from rich.padding import Padding
 from rich.style import Style
 from rich.text import Text
 
@@ -61,35 +61,31 @@ IS_DARK = _detect_dark()
 
 if IS_DARK:
     THEME = {
-        "background":   "#0f0f0f",
-        "bright":       "#f0f0ee",   # user typed input — highest priority (pure near-white)
-        "label":        "#c8c8c5",   # question labels — clear but not competing with input
-        "muted":        "#888885",   # secondary text, completed step summaries
-        "dim":          "#555552",   # hint/instruction text — genuinely secondary
-        "accent":       "#4a9edd",   # structural color (less saturated than before)
-        "welcome_bg":   "#13131a",   # welcome panel background — warm dark
-        "success":      "#6abf8e",   # ✓ confirmed steps only
-        "warning":      "#d4934a",   # → warnings, cost notices
-        "error":        "#c96060",   # ✗ errors, validation failures
-        "rule":         "#333330",   # horizontal rule lines
-        "eg":           "#4a8099",   # examples line — dim teal, distinct from instruction gray
-        "cursor":       "#4a9edd",
+        "accent":       "#5aadff",
+        "accent_bg":    "#172033",
+        "accent_txt":   "#bfdbfe",
+        "accent_muted": "#2a4060",
+        "bright":       "#e8e8e3",
+        "muted":        "#888888",
+        "dim":          "#444444",
+        "success":      "#7dd3a8",
+        "warning":      "#f0b060",
+        "error":        "#f07070",
+        "separator":    "#1f1f1f",
     }
 else:
     THEME = {
-        "background":   "#ffffff",
-        "bright":       "#0a0a0a",   # user typed input — near black on white bg
-        "label":        "#2d2d2d",   # question labels
-        "muted":        "#666663",   # secondary text
-        "dim":          "#aaaaaa",   # hint/instruction text
-        "accent":       "#1d5aad",   # structural color
-        "welcome_bg":   "#f0f0f5",   # welcome panel background — cool light
-        "success":      "#1a6b3a",
-        "warning":      "#8a4a00",
-        "error":        "#b02020",
-        "rule":         "#d8d8d5",   # horizontal rule lines
-        "eg":           "#4a7080",   # examples line — dim teal, distinct from instruction gray
-        "cursor":       "#1d5aad",
+        "accent":       "#2563eb",
+        "accent_bg":    "#eff6ff",
+        "accent_txt":   "#1e40af",
+        "accent_muted": "#93c5fd",
+        "bright":       "#171717",
+        "muted":        "#737373",
+        "dim":          "#c4c4c4",
+        "success":      "#15803d",
+        "warning":      "#b45309",
+        "error":        "#dc2626",
+        "separator":    "#f0f0f0",
     }
 
 # ---------------------------------------------------------------------------
@@ -101,10 +97,10 @@ try:
 
     QUESTIONARY_STYLE = QStyle([
         ("qmark",       f"fg:{THEME['accent']} bold"),
-        ("question",    f"fg:{THEME['label']} bold"),
+        ("question",    f"fg:{THEME['muted']} bold"),
         ("answer",      "bold"),        # no color = terminal default = brightest
         ("pointer",     f"fg:{THEME['accent']} bold"),
-        ("highlighted", f"fg:{THEME['label']} bold"),
+        ("highlighted", f"fg:{THEME['muted']} bold"),
         ("selected",    f"fg:{THEME['success']}"),
         ("separator",   f"fg:{THEME['dim']}"),
         ("instruction", f"fg:{THEME['dim']}"),
@@ -122,11 +118,11 @@ try:
 
     INQUIRER_STYLE = _iq_get_style({
         "questionmark":      f"fg:{THEME['accent']} bold",
-        "question":          f"fg:{THEME['label']} bold",
+        "question":          f"fg:{THEME['muted']} bold",
         "input":             f"fg:{THEME['bright']}",
         "answer":            f"fg:{THEME['bright']}",
         "pointer":           f"fg:{THEME['accent']} bold",
-        "highlighted":       f"fg:{THEME['label']} bold",
+        "highlighted":       f"fg:{THEME['muted']} bold",
         "selected":          f"fg:{THEME['success']}",
         "separator":         f"fg:{THEME['dim']}",
         "instruction":       f"fg:{THEME['dim']} italic",
@@ -155,15 +151,18 @@ console = _BoundedConsole()
 # ---------------------------------------------------------------------------
 
 def print_hint(text: str) -> None:
-    """Dim hint text — 2-space indent; markup string ensures dynamic word-wrap on resize."""
-    console.print(Padding(f"[{THEME['dim']} italic]{_escape(text)}[/]", (0, 0, 0, 2)))
+    """Dim hint text — 2-space indent, consistent across wrapped continuation lines."""
+    prefix = "  "
+    avail  = max(40, console.width - len(prefix))
+    for line in textwrap.wrap(text, width=avail) or [text]:
+        console.print(f"{prefix}[{THEME['dim']} italic]{_escape(line)}[/]")
 
 
 def print_section(step: str, label: str, description: str = "") -> None:
     """Section header — single line, clips gracefully on narrow terminals."""
     line = Text()
     line.append(step + "  ", style=Style(color=THEME["accent"], bold=True))
-    line.append(label, style=Style(color=THEME["label"], bold=True))
+    line.append(label, style=Style(color=THEME["muted"], bold=True))
     if description:
         line.append("  " + description, style=Style(color=THEME["dim"]))
     console.print(line, soft_wrap=True)
@@ -182,7 +181,7 @@ def print_confirmed(label: str, value: str, meta: str = "") -> None:
 
 def print_separator() -> None:
     """Thin horizontal rule between major wizard stages."""
-    console.rule(style=Style(color=THEME["rule"]))
+    console.rule(style=Style(color=THEME["separator"]))
 
 
 def print_kb_hint() -> None:
@@ -205,5 +204,8 @@ def print_section_intro(body: str, ctrl_hint: bool = False) -> None:
 
 
 def print_eg(text: str) -> None:
-    """Examples line — dim teal, 2-space indent; markup string ensures dynamic word-wrap on resize."""
-    console.print(Padding(f"[{THEME['eg']} italic]Examples: {_escape(text)}[/]", (0, 0, 0, 2)))
+    """Examples line — accent_muted italic; visually distinct from print_hint's dim gray."""
+    prefix = "  "
+    avail  = max(40, console.width - len(prefix))
+    for line in textwrap.wrap(f"Examples: {text}", width=avail) or [f"Examples: {text}"]:
+        console.print(f"{prefix}[{THEME['accent_muted']} italic]{_escape(line)}[/]")

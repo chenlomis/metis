@@ -20,6 +20,8 @@ from pathlib import Path
 import requests
 import yaml
 
+from .theme import THEME
+
 log = logging.getLogger(__name__)
 
 _COMPANIES_YML = Path(__file__).parent / "sources" / "companies.yml"
@@ -159,7 +161,7 @@ def _print_sources(cfg: dict, profile: dict):
     extras  = {e["name"].lower() for e in (ps.get("extra_companies") or [])}
     excludes = {n.lower() for n in (ps.get("exclude_companies") or [])}
 
-    status_str = "[green]enabled[/green]" if enabled else "[dim]disabled[/dim]"
+    status_str = f"[{THEME['success']}]enabled[/]" if enabled else "[dim]disabled[/dim]"
     console.print()
     console.print(f"  Company sources: {status_str}")
     if not enabled:
@@ -185,10 +187,10 @@ def _print_sources(cfg: dict, profile: dict):
         elif co.get("tier") in tiers:
             if not curated_shown:
                 curated_shown = True
-            table.add_row(co["name"], _ats_label(ats), "[green]active[/green]" if enabled else "[dim]inactive[/dim]")
+            table.add_row(co["name"], _ats_label(ats), f"[{THEME['success']}]active[/]" if enabled else "[dim]inactive[/dim]")
 
     for extra in (ps.get("extra_companies") or []):
-        table.add_row(extra["name"], _ats_label(extra.get("ats", "")), "[cyan]added[/cyan]" if enabled else "[dim]inactive[/dim]")
+        table.add_row(extra["name"], _ats_label(extra.get("ats", "")), f"[{THEME['accent']}]added[/]" if enabled else "[dim]inactive[/dim]")
 
     console.print(table)
     console.print(
@@ -253,7 +255,7 @@ def cmd_add(name: str):
 
     # Already in extra_companies?
     if any(e["name"].lower() == name.lower() for e in extras):
-        _print(f"  [yellow]{name}[/yellow] is already in your sources.")
+        _print(f"  [{THEME['warning']}]{name}[/] is already in your sources.")
         return
 
     # Remove from exclude list if previously excluded
@@ -273,11 +275,11 @@ def cmd_add(name: str):
         if co["name"].lower() == name.lower() or name.lower() in co["name"].lower():
             active_tiers = set(ps.get("tiers", ["S", "A"]))
             if co.get("tier") in active_tiers:
-                _print(f"  [green]✓[/green]  [bold]{co['name']}[/bold] is already in the curated list and active.")
+                _print(f"  [{THEME['success']}]✓[/]  [bold]{co['name']}[/bold] is already in the curated list and active.")
             else:
                 extras.append({"name": co["name"], "ats": ats, "slug": co["slug"]})
                 _save_profile(profile)
-                _print(f"  [green]✓[/green]  Added [bold]{co['name']}[/bold] ({_ats_label(ats)}) to your sources.")
+                _print(f"  [{THEME['success']}]✓[/]  Added [bold]{co['name']}[/bold] ({_ats_label(ats)}) to your sources.")
             return
 
     # Try ATS resolution
@@ -287,12 +289,12 @@ def cmd_add(name: str):
         extras.append(resolved)
         _save_profile(profile)
         _print(
-            f"  [green]✓[/green]  Added [bold]{resolved['name']}[/bold] "
+            f"  [{THEME['success']}]✓[/]  Added [bold]{resolved['name']}[/bold] "
             f"({_ats_label(resolved['ats'])}, slug: {resolved['slug']})."
         )
     else:
         _print(
-            f"  [yellow]Could not auto-resolve[/yellow] [bold]{name}[/bold].\n"
+            f"  [{THEME['warning']}]Could not auto-resolve[/] [bold]{name}[/bold].\n"
             f"  Find their ATS slug and add manually to ~/.job_pipeline/profile.yaml:\n\n"
             f"    proactive_sources:\n"
             f"      extra_companies:\n"
@@ -376,7 +378,7 @@ def cmd_remove():
     _save_profile(profile)
 
     removed = [name for _, name in selected]
-    _print(f"  [green]✓[/green]  Removed: {', '.join(removed)}")
+    _print(f"  [{THEME['success']}]✓[/]  Removed: {', '.join(removed)}")
 
 
 def cmd_on():
@@ -388,7 +390,7 @@ def cmd_on():
     _save_profile(profile)
     try:
         from rich.console import Console
-        Console().print("  [green]✓[/green]  Company sources enabled.")
+        Console().print(f"  [{THEME['success']}]✓[/]  Company sources enabled.")
     except ImportError:
         print("  Company sources enabled.")
 

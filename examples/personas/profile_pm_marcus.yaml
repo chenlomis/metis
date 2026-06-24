@@ -1,0 +1,131 @@
+# scorerole persona profile — Director-track PM (Consumer Marketplace)
+# Persona: Marcus Webb | Management-leaning, targeting Director of Product at scaled consumer or marketplace company
+# Setup: cp examples/personas/profile_pm_marcus.yaml ~/.job_pipeline_pm_marcus/profile.yaml
+
+candidate:
+  name: "Marcus Webb"
+  email: "marcus.webb@example.com"
+  location: "Los Angeles, CA"
+  location_preference: "flexible"
+  open_to_relocation:
+    - "San Francisco Bay Area"
+    - "Seattle, WA"
+    - "New York / NYC"
+
+  experience:
+    - company: "DoorDash"
+      title: "Senior Product Manager, Merchant Growth"
+      dates: "Jan 2021 – Present"
+      highlights:
+        - "Led Merchant Growth PM team (3 PMs, 2 designers, 8 engineers); grew restaurant partner NPS from 34 to 51 over 18 months"
+        - "Launched DoorDash Merchant Insights dashboard (weekly active cohort analytics for 600k+ restaurant owners); became #1 requested feature in partner advisory council"
+        - "Defined and shipped self-serve onboarding revamp; reduced merchant time-to-first-order from 9 days to 2 days, +$40M GMV in Y1"
+        - "Managed roadmap alignment across 4 partner squads; established quarterly business review cadence with VP of Merchant Success"
+    - company: "Lyft"
+      title: "Product Manager, Driver Experience"
+      dates: "Mar 2018 – Dec 2020"
+      highlights:
+        - "Owned Earnings & Transparency product for 2M+ active drivers; redesigned earnings breakdown UI, reducing driver support tickets 31%"
+        - "Shipped Driver Challenges 2.0 (gamified incentive system); +19% driver hour utilization in pilot markets"
+        - "Collaborated with ops and data science to build surge pricing explainer; reduced driver app churn 12% in 90 days"
+    - company: "Redfin"
+      title: "Associate Product Manager"
+      dates: "Aug 2016 – Feb 2018"
+      highlights:
+        - "Built Agent Scheduling product from 0-to-1; reduced no-show rate 44% through automated reminders and calendar sync"
+        - "Ran 30+ usability tests with homebuyers and agents; produced insights that reshaped the mobile search experience"
+
+  education:
+    - institution: "UCLA Anderson School of Management"
+      degree: "MBA, Marketing & Strategy"
+      year: 2016
+    - institution: "UCLA"
+      degree: "BA Economics"
+      year: 2013
+
+  strengths:
+    - "Marketplace two-sided growth — 8 years building products at DoorDash, Lyft, and Redfin across both supply (drivers, merchants, agents) and demand (riders, buyers); understands network effects and incentive design"
+    - "PM team leadership — managed 3 PMs at DoorDash; built team rituals, ran performance calibrations, and developed two PMs who were promoted"
+    - "Consumer product intuition — strong track record on onboarding and retention surfaces; designs for behavior change, not just feature delivery"
+    - "GMV and marketplace KPI fluency — comfortable owning take rate, liquidity, and cohort retention as primary success metrics"
+    - "Cross-functional leadership at scale — coordinated 4 squads and 3 stakeholder orgs simultaneously without a formal Director title"
+
+target:
+  roles:
+    - "Director of Product Management"
+    - "Director of Product"
+    - "Group Product Manager"
+    - "Head of Product"
+  level: "director"
+
+aspirations:
+  track: "management"
+  direction: >
+    Ready to make the formal move from Senior PM managing a single team to Director
+    owning a product area with multiple squads. Eight years in marketplace businesses
+    (DoorDash, Lyft, Redfin) have given me both deep two-sided product intuition and
+    informal team leadership experience. Looking for a Director role at a scaled consumer
+    or marketplace company — or an earlier-stage company where I'd be the first senior PM
+    hire and build out the function.
+  company_types:
+    - "Scaled consumer marketplace (Series D+ or public)"
+    - "Consumer platform with supply-side complexity (gig economy, real estate, local)"
+    - "Growth-stage company looking for first Director-level PM hire"
+  avoid_company_types:
+    - "pure B2B enterprise with no consumer surface"
+    - "deep tech or developer tools without consumer product layer"
+
+preferences:
+  company_stage:
+    - "growth"
+    - "public"
+  industry_targets:
+    - "Marketplace"
+    - "Consumer"
+    - "Real Estate / PropTech"
+    - "On-demand / Gig Economy"
+  industry_avoid:
+    - "B2B enterprise software"
+    - "developer tools"
+  base_salary_target_usd: 270000
+
+scoring:
+  apply_threshold: 68
+  consider_threshold: 48
+  level_mismatch_deduction: 15
+
+green_flags:
+  - "Director or Group PM role with 2+ PMs reporting in"
+  - "marketplace or two-sided platform product"
+  - "company has consumer mobile app with millions of active users"
+  - "role owns supply or demand growth as core KPI"
+  - "first senior PM hire with mandate to build out function"
+
+yellow_flags:
+  - "no formal Director title yet — have managed PMs but never held the title; may face leveling pushback at larger cos"
+  - "no deep B2B or enterprise background — primarily consumer and SMB"
+
+red_flags:
+  - "IC-only Senior PM role with no team ownership"
+  - "company without a consumer product surface"
+
+deal_breakers:
+  - "pure B2B enterprise with no marketplace or consumer component"
+  - "no equity"
+  - "on-site 5 days/week, Los Angeles only"
+  - "startup with fewer than 50 employees and no PM team to lead"
+
+salary_floor_usd: 200000
+
+inferred:
+  customer_types:
+    - "b2c"
+    - "marketplace"
+  degree_level: "ms_phd"
+
+notes: |
+  Consumer marketplace background; strong two-sided product instincts.
+  Targeting Director or Group PM — management track only. IC Senior PM roles score <=35.
+  Weight team leadership scope heavily: roles without PM direct reports score down 20 points.
+  Marketplace, consumer platform, and gig economy roles score highest.
+  Deduct 20 points for pure B2B roles with no consumer touchpoint.

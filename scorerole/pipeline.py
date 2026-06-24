@@ -608,10 +608,10 @@ def main():
 
     subparsers = parser.add_subparsers(dest="command")
 
-    # init subcommand
+    # init_bak subcommand (archived — use `scorerole init` for the conversational wizard)
     init_p = subparsers.add_parser(
-        "init",
-        help="Create your scoring profile from a resume (PDF, DOCX, or TXT).",
+        "init_bak",
+        help="[archived] Create your scoring profile from a resume (PDF, DOCX, or TXT).",
     )
     init_p.add_argument(
         "--resume", metavar="PATH",
@@ -622,10 +622,10 @@ def main():
         help="Optional: LinkedIn export PDF or data archive for profile enrichment.",
     )
 
-    # init2 subcommand — conversational onboarding wizard (beta)
+    # init subcommand — conversational onboarding wizard
     subparsers.add_parser(
-        "init2",
-        help="[beta] Conversational profile setup — freeform prompts instead of a form.",
+        "init",
+        help="Conversational profile setup — freeform prompts instead of a form.",
     )
 
     # reset subcommand
@@ -760,7 +760,7 @@ def main():
 
     args = parser.parse_args()
 
-    if args.command == "init":
+    if args.command == "init_bak":
         _validate_env(require_gmail=False)   # only needs API key to parse resume
         from .init_cmd import run_init
         run_init(
@@ -769,7 +769,7 @@ def main():
             supplement_path_arg=getattr(args, "linkedin", "") or "",
         )
 
-    elif args.command == "init2":
+    elif args.command == "init":
         _validate_env(require_gmail=False)
         from .init2_cmd import run_init2
         run_init2(api_key=ANTHROPIC_API_KEY)

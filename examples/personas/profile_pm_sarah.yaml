@@ -1,0 +1,128 @@
+# scorerole persona profile — Technical PM (ex-Engineer, Platform / API / PLG)
+# Persona: Sarah Okonkwo | Ex-SWE, targeting Technical PM or Platform PM at developer tools company
+# Setup: cp examples/personas/profile_pm_sarah.yaml ~/.job_pipeline_pm_sarah/profile.yaml
+
+candidate:
+  name: "Sarah Okonkwo"
+  email: "sarah.okonkwo@example.com"
+  location: "New York, NY"
+  location_preference: "flexible"
+  open_to_relocation:
+    - "San Francisco Bay Area"
+
+  experience:
+    - company: "Twilio"
+      title: "Senior Product Manager, Platform APIs"
+      dates: "Sep 2021 – Present"
+      highlights:
+        - "Owned Twilio Voice and Messaging API surface (300k+ developer accounts, $420M ARR segment); drove 3 major API versioning releases with zero breaking-change incidents"
+        - "Led developer experience initiative: simplified authentication flow and rewrote API reference docs; CSAT from developer portal jumped from 3.1 to 4.4 / 5.0"
+        - "Defined and shipped programmable SIP interconnect feature; unlocked 40+ enterprise telecom deals in EMEA pipeline"
+        - "Built PLG expansion motion with growth team: usage-based upgrade prompts drove $8M in self-serve expansion ARR in first 12 months"
+    - company: "Stripe"
+      title: "Software Engineer → Associate PM (internal transfer)"
+      dates: "Jul 2018 – Aug 2021"
+      highlights:
+        - "Joined as SWE on Stripe Connect (marketplace payouts) — wrote Go and Ruby services for fund routing and compliance checks"
+        - "Transferred to APM program after 18 months; owned Stripe Elements (UI component library for checkout) used by 500k+ developers"
+        - "Shipped Elements v2 migration with full backwards compatibility; reduced integration time for new merchants from 4h to 45 min"
+        - "Contributed to internal platform RFC process; authored 6 design documents adopted company-wide"
+    - company: "Bloomberg LP"
+      title: "Software Engineer, Data Infrastructure"
+      dates: "Jun 2016 – Jun 2018"
+      highlights:
+        - "Built data pipeline tooling for Bloomberg Terminal real-time feeds (C++, Python)"
+        - "Reduced tick-data ingestion latency 22% through connection pooling refactor"
+
+  education:
+    - institution: "Columbia University"
+      degree: "BS Computer Science"
+      year: 2016
+
+  strengths:
+    - "API product depth — 4 years owning Twilio's Voice/Messaging API surface; understands versioning contracts, backward compatibility, and developer trust at scale"
+    - "Engineering-to-PM background — wrote production Go, Ruby, C++ before moving to product; can review PRs, write specs at code level, and earn credibility with senior engineers fast"
+    - "PLG and self-serve growth — built Twilio's usage-based upgrade motion from scratch; $8M expansion ARR in year 1 from zero playbook"
+    - "Developer experience design — shipped API reference redesign that moved CSAT from 3.1 to 4.4; knows the difference between docs-as-afterthought and docs-as-product"
+    - "Enterprise API deals — collaborated with solutions engineering on EMEA telecom deals; comfortable in technical presales and customer discovery with CTOs"
+
+target:
+  roles:
+    - "Staff Technical Product Manager"
+    - "Senior Technical Product Manager"
+    - "Platform Product Manager"
+    - "Developer Experience PM"
+    - "API Product Manager"
+  level: "staff"
+
+aspirations:
+  track: "ic"
+  direction: >
+    Looking for a Staff or Senior Technical PM role at a developer-tools or API-first
+    company where engineering credibility matters day one. Five years shipping APIs and
+    platform products at Twilio and Stripe have given me deep intuition for developer
+    trust, SDK design, and PLG expansion loops. Want to own a platform surface where
+    I'm both setting the technical vision and driving commercial outcomes — not just
+    translating requirements between engineering and sales.
+  company_types:
+    - "API-first or developer-tools company (B2D motion)"
+    - "Infrastructure or platform company where PMs need engineering depth"
+    - "PLG-driven SaaS with a developer product surface"
+  avoid_company_types:
+    - "consumer product with no developer or technical surface"
+    - "company where PM is primarily a project manager"
+
+preferences:
+  company_stage:
+    - "growth"
+    - "public"
+  industry_targets:
+    - "Developer Tools"
+    - "API / Infrastructure"
+    - "Communication Platforms"
+    - "AI/ML Platform"
+  industry_avoid:
+    - "pure B2C consumer"
+    - "e-commerce"
+  base_salary_target_usd: 255000
+
+scoring:
+  apply_threshold: 73
+  consider_threshold: 53
+  level_mismatch_deduction: 10
+
+green_flags:
+  - "role owns API, SDK, or platform product surface"
+  - "developer audience — role requires technical credibility with engineers"
+  - "PLG or self-serve growth is part of the mandate"
+  - "company has a developer community or open source presence"
+  - "Staff IC track with technical scope across multiple squads"
+
+yellow_flags:
+  - "no mobile or native app product experience — primarily web/API"
+  - "limited go-to-market experience — more comfortable with PLG than sales-led enterprise"
+
+red_flags:
+  - "PM role scoped to internal tooling without external developer audience"
+  - "company where engineering and product are siloed — PM is a spec-writer"
+
+deal_breakers:
+  - "consumer product with no developer or technical surface"
+  - "mandatory full on-site"
+  - "no equity"
+  - "role primarily involves managing stakeholder requests with no technical ownership"
+
+salary_floor_usd: 195000
+
+inferred:
+  customer_types:
+    - "developer"
+    - "b2b"
+  degree_level: "bs"
+
+notes: |
+  Ex-engineer turned PM; strong API and platform product background at Twilio and Stripe.
+  Targeting Staff/Senior Technical PM or Platform PM only. Non-technical PM roles score <=30.
+  Weight developer audience and API/SDK product surface heavily.
+  PLG, self-serve expansion, and developer experience are major positive signals.
+  Deduct 20 points for roles where engineering background is not required or valued.

@@ -1,0 +1,125 @@
+# scorerole persona profile — Senior PM → Staff aspirant (B2B SaaS / Fintech)
+# Persona: Priya Mehta | Data-driven, targeting Staff PM at AI-native or dev tools company
+# Setup: cp examples/personas/profile_pm_priya.yaml ~/.job_pipeline_pm_priya/profile.yaml
+
+candidate:
+  name: "Priya Mehta"
+  email: "priya.mehta@example.com"
+  location: "Austin, TX"
+  location_preference: "remote"
+  open_to_relocation:
+    - "San Francisco Bay Area"
+    - "New York / NYC"
+
+  experience:
+    - company: "Brex"
+      title: "Senior Product Manager, Spend Intelligence"
+      dates: "Feb 2022 – Present"
+      highlights:
+        - "Owned Spend Intelligence product from 0-to-1: launched real-time spend anomaly detection for 4,000+ business customers, reducing manual finance reviews by 38%"
+        - "Defined OKR framework adopted org-wide; drove 22% improvement in quarterly goal attainment across 3 product squads"
+        - "Ran continuous discovery with 60+ CFO and finance-lead interviews; translated findings into 18-month roadmap approved by exec team"
+        - "Collaborated with data science to ship ML-powered budget forecasting; reduced forecast error 29% vs. rule-based baseline"
+    - company: "Intuit"
+      title: "Product Manager II, QuickBooks Payments"
+      dates: "Jul 2019 – Jan 2022"
+      highlights:
+        - "Led checkout flow redesign for QuickBooks Payments; +14% payment completion rate, $6M incremental ARR in first year"
+        - "Defined API contract with bank partners for ACH instant payout feature; shipped to 200k SMB customers in 6 months"
+        - "Partnered with growth team to A/B test onboarding; reduced time-to-first-transaction from 11 days to 4 days"
+    - company: "Capital One"
+      title: "Associate Product Manager"
+      dates: "Jul 2017 – Jun 2019"
+      highlights:
+        - "Completed rotational APM program across Consumer Lending, Small Business, and Internal Tooling"
+        - "Built internal credit risk dashboard used by 500+ underwriters; cut average decision time from 48h to 6h"
+
+  education:
+    - institution: "University of Michigan, Ross School of Business"
+      degree: "BBA Business Administration, concentration Finance & Strategy"
+      year: 2017
+
+  strengths:
+    - "Data-driven 0-to-1 — launched Spend Intelligence from concept to 4k customers; designed metrics framework before writing a single PRD"
+    - "Fintech domain depth — 7 years across payments, credit, and spend management at Capital One, Intuit, Brex; understands compliance and trust constraints that kill velocity"
+    - "Stakeholder alignment at scale — partnered with CFO-level buyers and engineering directors simultaneously; track record of roadmap buy-in without executive escalation"
+    - "ML product collaboration — shipped 2 production ML features; can speak to model tradeoffs without needing a translator"
+
+target:
+  roles:
+    - "Staff Product Manager"
+    - "Principal Product Manager"
+    - "Group Product Manager"
+  level: "staff"
+
+aspirations:
+  track: "ic"
+  direction: >
+    Ready to step from Senior PM to Staff — looking for a role where I can set product
+    direction across a domain, not just own a single surface. Seven years in fintech have
+    given me strong intuition for trust, compliance, and enterprise buyer psychology.
+    Want to bring that to an AI-native company building financial or operational tooling,
+    where the core product challenge is making powerful ML capabilities feel trustworthy
+    and obvious to non-technical buyers.
+  company_types:
+    - "AI-native B2B company with a finance, ops, or data product"
+    - "Developer tools or infrastructure company with an enterprise motion"
+    - "Growth-stage (Series B–D) fintech with an AI roadmap"
+  avoid_company_types:
+    - "pure consumer fintech (no B2B motion)"
+    - "consulting or services"
+
+preferences:
+  company_stage:
+    - "growth"
+    - "public"
+  industry_targets:
+    - "AI/ML Platform"
+    - "FinTech"
+    - "Developer Tools"
+    - "B2B SaaS"
+  industry_avoid:
+    - "pure consumer"
+    - "e-commerce"
+  base_salary_target_usd: 240000
+
+scoring:
+  apply_threshold: 72
+  consider_threshold: 52
+  level_mismatch_deduction: 12
+
+green_flags:
+  - "role owns a data, analytics, or financial intelligence product surface"
+  - "company sells to finance, ops, or revenue teams"
+  - "Staff IC track with clear scope beyond a single squad"
+  - "ML or AI is central to the product — not a bolt-on"
+  - "cross-functional scope: owns roadmap + data science + design partnership"
+
+yellow_flags:
+  - "management track expected at Staff level — open to it but not targeting it"
+  - "no prior AI-native company experience — have shipped ML features but always in traditional tech orgs"
+
+red_flags:
+  - "PM role scoped to a single feature or sub-surface with no strategic ownership"
+  - "no product analytics culture — decisions made without data"
+
+deal_breakers:
+  - "B2C consumer product with no enterprise component"
+  - "no equity"
+  - "on-site 5 days/week"
+  - "seed stage with no product-market fit signal"
+
+salary_floor_usd: 190000
+
+inferred:
+  customer_types:
+    - "b2b"
+    - "smb"
+  degree_level: "bs"
+
+notes: |
+  Fintech and B2B SaaS background; strong data and ML product instincts.
+  Targeting Staff IC, not management. Roles below Senior PM level score <=25.
+  Weight domain fit (finance, ops, data) and AI product surface heavily.
+  Discount roles where PM is primarily a project manager or backlog groomer.
+  Deduct 15 points if role is B2C-only with no enterprise buyer.

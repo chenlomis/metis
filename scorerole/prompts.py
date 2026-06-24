@@ -150,6 +150,10 @@ notes: string
 
 _followups: []
 
+scoring:
+  solid_match_threshold: 75
+  moderate_match_threshold: 55
+
 ---
 
 Rules for profile extraction:
@@ -384,7 +388,9 @@ def build_candidate_context(profile: dict) -> str:
         parts.append("Hard nos: " + "; ".join(str(d) for d in deal_breakers[:5]))
 
     # All strengths — no positional filtering; scoring selects contextually
-    strengths = c.get("strengths", [])
+    # Coerce any accidentally-parsed dicts (YAML colon in unquoted string) to str
+    strengths = [s if isinstance(s, str) else ": ".join(f"{k}: {v}" for k, v in s.items())
+                 for s in c.get("strengths", []) if s]
     if strengths:
         parts.append("Key strengths: " + "; ".join(strengths))
 

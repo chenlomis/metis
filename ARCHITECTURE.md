@@ -592,3 +592,21 @@ asleep at that time, the job is skipped — not queued. For a Monday+Thursday sc
 sleeping through Thursday means the next run is Monday (7-day gap instead of 4-day).
 Workaround: run `scorerole --lookback 7d` manually after a gap, or widen
 `DEFAULT_LOOKBACK` in `.env` for scheduled runs.
+
+---
+
+## Eval history (vibe code scorecard)
+
+Scored against a 22-dimension framework across four quadrants: Value, Usability, Design, Under the Hood.
+
+| Version | Date | Overall | Key movers |
+|---|---|---|---|
+| v1 | 2026-06-16 | 7.0 | Baseline — tracker + init wizard + prompt caching |
+| v2 | 2026-06-18 | 7.5 | +source diversity (proactive ATS), +feedback loop, +AI moat (extract.py 27-field schema) |
+| v3 | 2026-06-18 | 7.6 | +onboarding (init2 wizard), +polish (InquirerPy), +sources cmd |
+| v4 | 2026-06-19 | 7.8 | +observability (trace.py / runs.jsonl), +learnability, +feedback (structured JSONL) |
+| v5 | 2026-06-22 | 8.0 | +reliability (3-retry backoff, launchd fallback), +polish (v7 visual refresh), 397/397 tests |
+| v6 | 2026-06-23 | 8.2 | +polish 9.0 (✓/? symbols, you/your voice), +onboarding (init2 → primary init), +report_cmd |
+
+Top strengths (v6): AI proprietary moat 9.0, edge case grittiness 9.0, consistency & polish 9.0, documentation 9.0.
+Remaining gaps: bootstrap experience 5.5 (Gmail + venv setup still manual), performance 7.0 (no async fetch).

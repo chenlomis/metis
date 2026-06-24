@@ -26,8 +26,8 @@ They are search-criteria, not identity. Keeping them top-level (not under `prefe
 
 ## Onboarding (init / init2)
 
-**D-06 · Two wizards coexist: `scorerole init` (structured) and `scorerole init2` (conversational)**
-`init` = explicit form; good for precision and re-runs. `init2` = freeform NL → Claude extract → clarify; lower friction for first-time users. `init2` is beta — once validated, the intent is to fold the conversational flow back into `init` (possibly as a flag). They write to the same `profile.yaml` so they're interchangeable.
+**D-06 · `scorerole init` is now the conversational wizard (formerly init2); init2_cmd.py kept as reference**
+The conversational flow (freeform resume paste → Claude extract → clarification → review) proved lower-friction and higher completion rate than the structured 8-step form. As of June 2026, `scorerole init` routes to the conversational wizard. `init_cmd.py` (structured form) and `init2_cmd.py` are retained as reference implementations. They write to the same `profile.yaml` and are interchangeable.
 
 **D-07 · init2 edit menu mirrors wizard steps, not profile fields**
 The review menu offers "Step 2 — What you're looking for" and "Step 3 — What you'd pass on" rather than "Roles + level", "Salary floor", etc. Users entered data through steps, so editing should mirror that mental model. Field-level edits available via "Open profile in editor" for power users.
@@ -183,3 +183,19 @@ The eval dict shape that `score.py` emits (verdict enum, 6 named dimensions, exa
 
 **D-43 · `_role_hash()` implementation frozen; `_HEADERS` column order frozen**
 `_role_hash()` in `state.py` produces keys persisted in `seen_roles.json`. Changing the hash function (normalization, algorithm, slice length) invalidates all historical dedup state — every previously seen role re-processes, causing a flood email. Similarly, `_HEADERS` in `tracker.py` defines the xlsx column layout. Existing `applications.xlsx` files contain months of data; reordering or inserting columns corrupts existing rows. Column *header text* is safe to rename; column *order* is not. Both frozen in CLAUDE.md constraints #6 and #7.
+
+---
+
+## Interface & distribution (June 2026)
+
+**D-44 · Target persona is passive job seekers, not active ones**
+Passive seekers (biweekly/weekly cadence, selective, won't mass-apply) are the better fit for scoring-first design. Active seekers want volume tools; they churn from anything that adds friction before the application. Passive seekers value signal quality over throughput — scorerole's 2-layer AI pipeline is the right investment for that persona.
+
+**D-45 · Interface roadmap: CLI → MCP server → PyPI → Docker → web app (on demand only)**
+Stage 0 (done): local CLI. Stage 1 (next): MCP server — local subprocess, no hosting, Claude Code users can `claude mcp add scorerole`. Stage 2: PyPI package after stable public API. Stage 3: Docker for users who skip the venv setup. Stage 4: web app only if demonstrated demand from non-technical users. Prereq for Stage 1: config-as-parameters refactor (no `os.getenv()` at module import time).
+
+**D-46 · prompts.py as canonical, OSS-safe identity layer**
+All LLM prompt templates live in `prompts.py`. Candidate name and profile are injected dynamically — no personal details hardcoded. This makes the repo safe to publish as OSS without scrubbing. Call sites (`score.py`, `feedback.py`) import from here; no duplicate prompt strings anywhere in the codebase.
+
+**D-47 · Scoring voice: second-person ("You/Your"), past tense for candidate actions, present for JD requirements**
+Bullet guide rule added to `score.py`: "You led" (past, candidate action) vs. "The role requires" (present, JD requirement). Third-person "{first_name}" removed — second-person reads as direct coaching, not a report about the candidate. This is a prompt constraint, not a post-processing step, so Claude enforces it at generation time.

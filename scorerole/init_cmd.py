@@ -161,7 +161,7 @@ def _scrape_linkedin_url(url: str, console) -> str:
     li_at = os.getenv("LINKEDIN_COOKIE", "").strip()
     if not li_at:
         console.print(
-            "  [yellow]⚠[/yellow]  LINKEDIN_COOKIE not set in .env — skipping LinkedIn scrape.\n"
+            "  [{THEME['warning']}]⚠[/]  LINKEDIN_COOKIE not set in .env — skipping LinkedIn scrape.\n"
             "  [dim]Add li_at cookie value to .env to enable this.[/dim]\n"
         )
         return ""
@@ -171,7 +171,7 @@ def _scrape_linkedin_url(url: str, console) -> str:
         from bs4 import BeautifulSoup
     except ImportError as _e:
         console.print(
-            f"  [yellow]⚠[/yellow]  Missing dep ({_e}) — run: pip install requests beautifulsoup4\n"
+            f"  [{THEME['warning']}]⚠[/]  Missing dep ({_e}) — run: pip install requests beautifulsoup4\n"
         )
         return ""
 
@@ -195,18 +195,18 @@ def _scrape_linkedin_url(url: str, console) -> str:
         with console.status("  [dim]Fetching LinkedIn profile…[/dim]"):
             resp = requests.get(url, headers=headers, timeout=15)
     except Exception as exc:
-        console.print(f"  [yellow]⚠[/yellow]  LinkedIn fetch failed ({exc}) — skipping.\n")
+        console.print(f"  [{THEME['warning']}]⚠[/]  LinkedIn fetch failed ({exc}) — skipping.\n")
         return ""
 
     if resp.status_code == 401 or resp.status_code == 403:
         console.print(
-            f"  [yellow]⚠[/yellow]  LinkedIn returned {resp.status_code} — "
+            f"  [{THEME['warning']}]⚠[/]  LinkedIn returned {resp.status_code} — "
             "session cookie may be expired. Skipping.\n"
             "  [dim]Refresh LINKEDIN_COOKIE in .env (DevTools → Application → Cookies → li_at).[/dim]\n"
         )
         return ""
     if resp.status_code != 200:
-        console.print(f"  [yellow]⚠[/yellow]  LinkedIn returned {resp.status_code} — skipping.\n")
+        console.print(f"  [{THEME['warning']}]⚠[/]  LinkedIn returned {resp.status_code} — skipping.\n")
         return ""
 
     soup = BeautifulSoup(resp.text, "html.parser")
@@ -216,7 +216,7 @@ def _scrape_linkedin_url(url: str, console) -> str:
 
     if len(text) < 200:
         console.print(
-            "  [yellow]⚠[/yellow]  LinkedIn page returned very little text "
+            "  [{THEME['warning']}]⚠[/]  LinkedIn page returned very little text"
             "(may require browser login). Skipping.\n"
         )
         return ""
@@ -624,7 +624,7 @@ def _collect_hard_constraints(Q_STYLE=None) -> dict:
             salary_floor = str(int(cleaned))
             break
         except ValueError:
-            console.print(f"  [yellow]⚠[/yellow]  Couldn't parse '{raw_salary}' as a number. "
+            console.print(f"  [{THEME['warning']}]⚠[/]  Couldn't parse '{raw_salary}' as a number. "
                           "Try: 150000 or 150k  (leave blank to skip)")
 
     return {
@@ -905,7 +905,7 @@ def _run_proactive_sources_wizard(profile: dict, Q_STYLE=None):
             "exclude_companies": profile.get("proactive_sources", {}).get("exclude_companies", []),
         }
         console.print(
-            f"  [green]✓[/green]  Curated company sources enabled — {n_curated} companies.\n"
+            f"  [{THEME['success']}]✓[/]  Curated company sources enabled — {n_curated} companies.\n"
             f"  [dim]Manage sources anytime with: scorerole sources list / add / remove[/dim]"
         )
     else:
@@ -974,7 +974,7 @@ def _configure_custom_companies(profile: dict, existing: dict):
         "extra_companies": extra_companies,
         "exclude_companies": [],
     }
-    console.print(f"  [green]✓[/green]  Proactive sources enabled: {len(selected)} companies selected")
+    console.print(f"  [{THEME['success']}]✓[/]  Proactive sources enabled: {len(selected)} companies selected")
 
 
 # ---------------------------------------------------------------------------
@@ -1030,7 +1030,7 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
         console.print(Panel(
             _body,
             title="[dim]scorerole profile[/dim]",
-            border_style=Style(color=THEME["rule"]),
+            border_style=Style(color=THEME["separator"]),
             box=rich_box.ROUNDED,
             padding=(1, 3),
         ))
@@ -1076,7 +1076,7 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
             f"  [{THEME['accent']} bold]3.[/]  [bold]Constraints + deal-breakers[/bold]  [{THEME['dim']}]— what to exclude[/]\n"
             f"  [{THEME['accent']} bold]4.[/]  [bold]Scoring preferences[/bold]  [{THEME['dim']}]— how to rank tradeoffs[/]\n\n"
             f"[{THEME['dim']}]Takes about 5 mins.  Run `scorerole init` anytime to update.[/]",
-            style=_RStyle(bgcolor=_T["welcome_bg"]),
+            style=_RStyle(bgcolor=_T["accent_bg"]),
             border_style=_RStyle(color=_T["accent"]),
             box=rich_box.ROUNDED,
             padding=(1, 3),
@@ -1098,9 +1098,9 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
         if resume_path_arg:
             p = Path(resume_path_arg).expanduser().resolve()
             if not p.exists():
-                console.print(f"  [red]File not found:[/red] {resume_path_arg}\n")
+                console.print(f"  [{THEME['error']}]File not found:[/] {resume_path_arg}\n")
             elif p.is_dir():
-                console.print(f"  [red]That's a folder, not a file:[/red] {resume_path_arg}\n")
+                console.print(f"  [{THEME['error']}]That's a folder, not a file:[/] {resume_path_arg}\n")
             else:
                 resume_path = p
 
@@ -1152,7 +1152,7 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
 
         resume_text = _parse_file(resume_path)
         console.print(
-            f"\n  [green]✓[/green]  {resume_path.name} "
+            f"\n  [{THEME['success']}]✓[/]  {resume_path.name} "
             f"[dim]({len(resume_text):,} characters)[/dim]"
         )
 
@@ -1164,7 +1164,7 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
             p = Path(supplement_path_arg).expanduser().resolve()
             if p.exists() and not p.is_dir():
                 supp_text = _parse_file(p)
-                console.print(f"  [green]✓[/green]  Supplement: {p.name} [dim]({len(supp_text):,} chars)[/dim]")
+                console.print(f"  [{THEME['success']}]✓[/]  Supplement: {p.name} [dim]({len(supp_text):,} chars)[/dim]")
         else:
             linkedin_raw = _ask(
                 "LinkedIn URL",
@@ -1198,7 +1198,7 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
             except Exception as e:
                 sys.exit(f"\n❌  Extraction failed: {e}")
 
-        console.print("  [green]✓[/green]  Extraction complete\n")
+        console.print(f"  [{THEME['success']}]✓[/]  Extraction complete\n")
         _show_profile(profile)
         console.print()
 
@@ -1361,7 +1361,7 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
                 try:
                     scoring["apply_threshold"] = int(new_apply)
                 except ValueError:
-                    console.print("  [yellow]⚠[/yellow]  Not a valid integer — keeping current value.")
+                    console.print("  [{THEME['warning']}]⚠[/]  Not a valid integer — keeping current value.")
             new_consider = _ask(
                 "Consider threshold",
                 "Minimum score for the consider tier  (default 55)",
@@ -1371,7 +1371,7 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
                 try:
                     scoring["consider_threshold"] = int(new_consider)
                 except ValueError:
-                    console.print("  [yellow]⚠[/yellow]  Not a valid integer — keeping current value.")
+                    console.print("  [{THEME['warning']}]⚠[/]  Not a valid integer — keeping current value.")
 
         elif action == "constraints":
             cand = profile.setdefault("candidate", {})
@@ -1398,7 +1398,7 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
                 try:
                     profile["salary_floor_usd"] = int(new_sal.replace(",", "").replace("$", ""))
                 except ValueError:
-                    console.print("  [red]Could not parse — keeping current value.[/red]")
+                    console.print(f"  [{THEME['error']}]Could not parse — keeping current value.[/]")
             new_dbs = _ask(
                 "Deal-breakers",
                 "Comma-separated  ·  e.g. no equity, on-site 5d/wk, no AI/ML surface",
@@ -1421,7 +1421,7 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
                 try:
                     profile = _extract_with_claude(api_key, full_text, user_context)
                 except Exception as e:
-                    console.print(f"  [red]Extraction failed: {e}[/red]")
+                    console.print(f"  [{THEME['error']}]Extraction failed: {e}[/]")
                     continue
 
         console.print()
@@ -1435,7 +1435,7 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
     DATA_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)  # restrict to owner
     PROFILE_PATH.write_text(yaml.dump(profile, allow_unicode=True, sort_keys=False))
     PROFILE_PATH.chmod(0o600)   # profile contains salary, deal-breakers — owner-only
-    console.print(f"\n  [green]✓[/green]  Saved to [dim]{PROFILE_PATH}[/dim]\n")
+    console.print(f"\n  [{THEME['success']}]✓[/]  Saved to [dim]{PROFILE_PATH}[/dim]\n")
 
     # ── Scheduling ────────────────────────────────────────────────────────────
     from .schedule_cmd import load_schedule, run_schedule_wizard

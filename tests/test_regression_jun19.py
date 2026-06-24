@@ -265,13 +265,15 @@ class TestInit2SchemaAlignment:
         for field in required:
             assert field in prompt, f"Missing schema field: {field}"
 
-    def test_extract_system_v2_has_no_scoring_block(self):
-        """scoring block was moved to inferred.* — must not appear as a top-level key."""
+    def test_extract_system_v2_has_scoring_block(self):
+        """scoring block with solid_match_threshold/moderate_match_threshold must be present."""
         from scorerole.prompts import init_extract_system_prompt
         import re
         prompt = init_extract_system_prompt()
-        assert not re.search(r"^scoring:", prompt, re.MULTILINE), \
-            "scoring: block still present as top-level key in init_extract_system_prompt()"
+        assert re.search(r"^scoring:", prompt, re.MULTILINE), \
+            "scoring: block missing from init_extract_system_prompt()"
+        assert "solid_match_threshold" in prompt
+        assert "moderate_match_threshold" in prompt
 
     def test_guardrails_still_work_after_refactor(self):
         """_apply_guardrails must be importable and handle the new schema shape."""

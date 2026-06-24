@@ -18,7 +18,47 @@ Writes to the same ~/.job_pipeline/profile.yaml as `scorerole init`.
 import os, re, sys, shutil, logging
 from pathlib import Path
 
-from .theme import THEME, INQUIRER_STYLE, console, print_section, print_section_intro, print_eg, print_hint, print_confirmed
+from .theme import THEME, INQUIRER_STYLE, console, print_section, print_section_intro, print_eg, print_hint, print_confirmed, print_separator
+
+
+# ---------------------------------------------------------------------------
+# Terminal-safe line reader
+#
+# InquirerPy (via prompt_toolkit) puts the terminal in raw/cbreak mode for
+# select/confirm prompts and may not fully restore cooked mode afterward.
+# Calling input() in raw mode means Enter sends \r (echoed as ^M) instead of
+# terminating the line. This helper temporarily re-enables ICANON + ICRNL so
+# the user sees normal cooked-mode line input.
+# ---------------------------------------------------------------------------
+
+def _read_line() -> str:
+    """Read one line of text from stdin in cooked (canonical) mode.
+
+    Saves current termios settings, enables ICANON + ECHO + ICRNL, reads a
+    line, then restores the original settings so InquirerPy's next prompt
+    finds the terminal in the state it left it.
+    """
+    try:
+        import termios
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)   # returns a 7-element list
+        new = list(old)               # shallow copy — integer elements are immutable
+        # iflag: translate CR → NL so Enter terminates readline
+        new[0] = new[0] | termios.ICRNL
+        # lflag: canonical mode + echo
+        new[3] = new[3] | termios.ICANON | termios.ECHO | termios.ECHOE | termios.ECHOK
+        termios.tcsetattr(fd, termios.TCSADRAIN, new)
+        try:
+            line = sys.stdin.readline()
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        return line.rstrip('\r\n')
+    except Exception:
+        # Fallback for non-POSIX or environments without termios
+        try:
+            return input()
+        except (EOFError, KeyboardInterrupt):
+            return ""
 
 log = logging.getLogger(__name__)
 
@@ -107,7 +147,7 @@ def _print_welcome(console, THEME, rich_box):
         f"  [{THEME['accent']} bold]4.[/]  [bold]Review + save[/bold]  [{THEME['dim']}]— confirm and calibrate[/]\n\n"
         f"[{THEME['dim']}]~5 mins · Enter to skip · "
         f"`scorerole init2` to update anytime[/]",
-        style=Style(bgcolor=THEME["welcome_bg"]),
+        style=Style(bgcolor=THEME["accent_bg"]),
         border_style=Style(color=THEME["accent"]),
         box=rich_box.ROUNDED,
         padding=pad,
@@ -137,9 +177,9 @@ def _handle_existing_profile(console, INQUIRER_STYLE):
         message="",
         qmark="",
         choices=[
-            Choice("quick",  "Quick edits    [Jump straight to the profile review menu]"),
-            Choice("editor", "Open in editor [Modify profile.yaml directly in your terminal]"),
-            Choice("fresh",  "Start fresh    [Upload a new resume and trigger a full re-extraction]"),
+            Choice("quick",  "Quick edit      [Edit specific sections of your profile]"),
+            Choice("editor", "Open in editor  [Edit profile.yaml directly in your editor]"),
+            Choice("fresh",  "Start fresh     [Delete profile and restart from scratch]"),
             Choice("exit",   "Exit"),
         ],
         style=INQUIRER_STYLE,
@@ -227,27 +267,22 @@ def _step_resume(console, THEME, INQUIRER_STYLE, print_section, print_section_in
 # ---------------------------------------------------------------------------
 
 def _step_want(console, THEME, INQUIRER_STYLE, print_section, print_section_intro, print_eg):
-    from InquirerPy import inquirer
-    from rich.style import Style
-
     console.print()
     print_section("Step 2 of 4", "What you're looking for", "— what you want")
     console.print()
     print_section_intro("Imagine your ideal recruiter calls tomorrow. What role would you hope they're calling about?")
-    console.print(
-        "  [dim italic]Tip — describe useful details such as: role title, company type, domain,"
-        " work style, location, and comp expectations.[/dim italic]",
-        soft_wrap=True,
+    print_hint(
+        "Tip — describe useful details such as: role title, company type, domain,"
+        " work style, location, and comp expectations."
     )
     print_eg('"Staff or Principal PM at an AI infrastructure or developer tools company. Prefer growth-stage, remote-first, small team, $280k+ base. Excited by agentic AI or LLM infra."')
     console.print()
     console.print("  [dim italic][Enter] submit  ·  empty [Enter] to skip[/dim italic]")
     console.print()
 
-    result = inquirer.text(
-        message="  › ",
-        style=INQUIRER_STYLE,
-    ).execute() or ""
+    console.print(f"  [{THEME['accent']} bold]›[/] ", end="")
+    console.file.flush()
+    result = _read_line()
     return result.strip()
 
 
@@ -256,26 +291,22 @@ def _step_want(console, THEME, INQUIRER_STYLE, print_section, print_section_intr
 # ---------------------------------------------------------------------------
 
 def _step_dontwant(console, THEME, INQUIRER_STYLE, print_section, print_section_intro, print_eg):
-    from InquirerPy import inquirer
-
     console.print()
     print_section("Step 3 of 4", "What you'd pass on", "— what to exclude")
     console.print()
     print_section_intro("What would make you decline a role, even if the title looks right?")
-    console.print(
-        "  [dim italic]Tip — think about: work location, company scale, scope,"
-        " management expectations, comp, and any other hard negatives.[/dim italic]",
-        soft_wrap=True,
+    print_hint(
+        "Tip — think about: work location, company scale, scope,"
+        " management expectations, comp, and any other hard negatives."
     )
     print_eg('"Pass on anything requiring relocation or regular onsite travel. Exclude heavy people management from day one."')
     console.print()
     console.print("  [dim italic][Enter] submit  ·  empty [Enter] to skip[/dim italic]")
     console.print()
 
-    result = inquirer.text(
-        message="  › ",
-        style=INQUIRER_STYLE,
-    ).execute() or ""
+    console.print(f"  [{THEME['accent']} bold]›[/] ", end="")
+    console.file.flush()
+    result = _read_line()
     return result.strip()
 
 
@@ -429,12 +460,12 @@ def _run_clarifications(followups, profile, console, THEME, INQUIRER_STYLE):
             continue
 
         console.print()
-        console.rule(style=_S(color=THEME["rule"]))
+        console.rule(style=_S(color=THEME["separator"]))
         console.print()
 
         counter = f"[dim][{i+1} of {total}][/dim]"
         label   = f"[bold]{spec['label']}[/bold]"
-        src     = f"[dim][from: \"{from_text}\"][/dim]" if from_text else ""
+        src     = f"[dim]— you wrote \"{from_text}\" in Step 2[/dim]" if from_text else ""
         console.print(f"{counter}  {label}  {src}")
         console.print(
             f"  {spec['question_template']}",
@@ -527,7 +558,7 @@ def _run_review(profile, console, THEME, INQUIRER_STYLE, api_key=None,
         )
         console.print(
             f"  [{THEME['success']}]✓[/]  Profile extracted  "
-            f"[{THEME['dim']}]·  edit anything before saving[/]"
+            f"[{THEME['dim']}]·  edit anything before saving, then choose Save and continue[/]"
         )
         console.print()
         _show_profile(profile)
@@ -540,12 +571,13 @@ def _run_review(profile, console, THEME, INQUIRER_STYLE, api_key=None,
         ]
         if can_rerun:
             choices.append(Choice("rerun", "Re-run extraction  [re-enter Steps 2 + 3]"))
-        choices.append(Choice("save", "Save and continue"))
+        choices.append(Choice("save", "Save profile  ✓"))
 
         action = inquirer.select(
-            message="What would you like to update?",
+            message="Anything to adjust before saving?",
             qmark="",
             choices=choices,
+            default="save",
             style=INQUIRER_STYLE,
         ).execute()
 
@@ -588,7 +620,7 @@ def _run_review(profile, console, THEME, INQUIRER_STYLE, api_key=None,
                     profile.clear()
                     profile.update(updated)
             except Exception as e:
-                console.print(f"  [yellow]⚠[/yellow]  Could not re-read profile after edit: {e}")
+                console.print(f"  [{THEME['warning']}]⚠[/]  Could not re-read profile after edit: {e}")
 
         elif action == "rerun":
             if not api_key:
@@ -626,13 +658,12 @@ def _run_review(profile, console, THEME, INQUIRER_STYLE, api_key=None,
 def run_init2(api_key):
     import yaml
     from rich import box as rich_box
-    from .theme import print_separator
 
     # Fail fast in non-interactive environments (CI, pipes, scripts)
     if not sys.stdin.isatty():
         console.print(
             "[bold]scorerole init2[/bold] requires an interactive terminal.\n"
-            f"  [dim]For non-interactive setup, edit [cyan]{PROFILE_PATH}[/cyan] directly.[/dim]"
+            f"  [dim]For non-interactive setup, edit [{THEME['accent']}]{PROFILE_PATH}[/] directly.[/dim]"
         )
         sys.exit(1)
 
@@ -659,7 +690,7 @@ def run_init2(api_key):
         DATA_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
         PROFILE_PATH.write_text(yaml.dump(profile, allow_unicode=True, sort_keys=False))
         PROFILE_PATH.chmod(0o600)
-        console.print(f"\n  [green]✓[/green]  Saved to [dim]{PROFILE_PATH}[/dim]\n")
+        console.print(f"\n  [{THEME['success']}]✓[/]  Saved to [dim]{PROFILE_PATH}[/dim]\n")
         return
 
     # ── Full fresh wizard ─────────────────────────────────────────────────────
@@ -700,7 +731,7 @@ def run_init2(api_key):
     profile, followups = _extract_with_claude_v2(
         api_key, resume_text, linkedin_text, want_text, dontwant_text, console,
     )
-    console.print(f"  [green]✓[/green]  Extraction complete")
+    console.print(f"  [{THEME['success']}]✓[/]  Extraction complete")
 
     # Guardrails — add any deterministic follow-ups Claude missed
     followups = _apply_guardrails(profile, followups, want_text, dontwant_skipped)
@@ -718,7 +749,7 @@ def run_init2(api_key):
     DATA_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
     PROFILE_PATH.write_text(yaml.dump(profile, allow_unicode=True, sort_keys=False))
     PROFILE_PATH.chmod(0o600)
-    console.print(f"\n  [green]✓[/green]  Saved to [dim]{PROFILE_PATH}[/dim]\n")
+    console.print(f"\n  [{THEME['success']}]✓[/]  Saved to [dim]{PROFILE_PATH}[/dim]\n")
 
     # ── Proactive sources ─────────────────────────────────────────────────────
     from .init_cmd import _run_proactive_sources_wizard
