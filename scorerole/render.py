@@ -78,7 +78,7 @@ def _leverage_friction(leverage_pts, friction_pts) -> str:
         html += (
             f'<p style="margin:0 0 4px 0;font-size:13px;line-height:1.6;font-family:{_FONT}">'
             f'<span style="color:#3B6D11">&#10003; </span>'
-            f'<span style="color:{_C_BODY}">{pt}</span></p>'
+            f'<span style="color:#3B6D11">{pt}</span></p>'
         )
     for pt in friction_pts:
         html += (
@@ -93,7 +93,8 @@ def _leverage_friction(leverage_pts, friction_pts) -> str:
 
 def _stat_cell(number: int, label: str, color: str) -> str:
     return (
-        f'<td valign="top" style="background:#f5f5f3;padding:10px 12px;border-radius:4px">'
+        f'<td valign="top" width="32%" style="background:#f5f5f3;padding:10px 12px;'
+        f'border-radius:4px;border-bottom:2px solid {color}">'
         f'<div style="font-size:24px;font-weight:500;color:{color};line-height:1;font-family:{_FONT}">'
         f'{number}</div>'
         f'<div style="font-size:11px;color:{_C_MUTED};text-transform:uppercase;'
@@ -206,8 +207,9 @@ def _job_card(job: dict, bg: str, pill_bg: str, pill_color: str) -> str:
         f'<table width="100%" cellpadding="0" cellspacing="0" border="0"><tr>'
         f'<td style="font-size:11px;color:{_C_MUTED};font-family:{_FONT}">{alumni_html}</td>'
         f'<td style="text-align:right">'
-        f'<a href="{link_url}" style="font-size:12px;color:{_C_MUTED};'
-        f'text-decoration:none;font-family:{_FONT}">'
+        f'<a href="{link_url}" style="font-size:12px;font-weight:500;color:{pill_color};'
+        f'text-decoration:none;background:{pill_bg};padding:5px 12px;'
+        f'border-radius:4px;font-family:{_FONT};display:inline-block">'
         f'View posting &#8594;</a>'
         f'</td></tr></table>'
         f'</td></tr></table>'
@@ -436,7 +438,7 @@ def build_digest_html(jobs: list[dict], run_date: str, deal_breaker_count: int =
         f'<table width="100%" cellpadding="0" cellspacing="0" border="0">'
         f'<tr><td height="1" style="background:{_C_BORDER};font-size:0;line-height:0">&nbsp;</td></tr>'
         f'<tr><td style="padding-top:12px;font-size:11px;color:#aaa;text-align:center;'
-        f'font-family:{_FONT}">ScoreRole &middot; powered by Claude '
+        f'font-family:{_FONT}">Metis &middot; powered by Claude '
         f'&middot; {len(jobs)} roles evaluated{filtered_note}</td></tr>'
         f'</table>'
     )
@@ -455,7 +457,7 @@ def build_digest_html(jobs: list[dict], run_date: str, deal_breaker_count: int =
         f'<td style="padding:12px 0">'
         f'<table cellpadding="0" cellspacing="0" border="0"><tr>'
         f'<td width="8" height="8" style="background:#1f2118;border-radius:2px;font-size:0;line-height:0">&nbsp;</td>'
-        f'<td style="padding-left:7px;font-size:12px;font-weight:500;color:#1f2118;font-family:{_FONT}">ScoreRole</td>'
+        f'<td style="padding-left:7px;font-size:12px;font-weight:500;color:#1f2118;font-family:{_FONT}">Metis</td>'
         f'</tr></table>'
         f'</td>'
         f'<td style="padding:12px 0;text-align:right;font-size:11px;color:{_C_MUTED};font-family:{_FONT}">{run_date}</td>'
