@@ -7,7 +7,7 @@ failure rather than a silent regression that only surfaces in the next email.
 
 Rules being enforced:
   1. Stat tile label = "EVALUATED" (not "ROLES EVALUATED")
-  2. Legend = "Strength match / Caution / domain gap / Hard blocker"
+  2. Legend = "Strengths / Caution / Blocker"
   3. Score breakdown table is NOT rendered inside job cards
   4. Skipped section = flat 2-col table with "Role · Company" / "Why Skipped" headers
   5. Cards contain "View posting" button
@@ -79,18 +79,18 @@ class TestStatTileLabel:
 # ---------------------------------------------------------------------------
 
 class TestLegend:
-    def test_strength_match(self, html):
-        assert "Strength match" in html
+    def test_strengths(self, html):
+        assert "Strengths" in html
 
-    def test_caution_domain_gap(self, html):
-        assert "Caution / domain gap" in html, (
-            "Legend second dot must read 'Caution / domain gap' — "
+    def test_caution(self, html):
+        assert "Caution" in html, (
+            "Legend second dot must read 'Caution' — "
             "was changed to 'Proceed with awareness' in regression"
         )
 
-    def test_hard_blocker(self, html):
-        assert "Hard blocker" in html, (
-            "Legend third dot must read 'Hard blocker' — "
+    def test_blocker(self, html):
+        assert "Blocker" in html, (
+            "Legend third dot must read 'Blocker' — "
             "was changed to 'Real concern' in regression"
         )
 

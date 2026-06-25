@@ -957,9 +957,9 @@ class TestRenderEdgeCases:
             self._job("skipped",  30),
         ]
         html = build_digest_html(jobs, "June 14, 2026")
-        assert "Apply" in html
-        assert "Consider" in html
-        assert "Skipped" in html
+        assert "Solid Match" in html
+        assert "Moderate Match" in html
+        assert "Limited Match" in html
 
     def test_no_friction_points_omits_friction_line(self):
         """A job with empty frictionPoints must not render a bare '↓ Friction:' row."""

@@ -77,13 +77,13 @@ def _leverage_friction(leverage_pts, friction_pts) -> str:
     for pt in leverage_pts:
         html += (
             f'<p style="margin:0 0 4px 0;font-size:13px;line-height:1.6;font-family:{_FONT}">'
-            f'<span style="color:{_C_MUTED}">&#8593; </span>'
+            f'<span style="color:#3B6D11">&#10003; </span>'
             f'<span style="color:{_C_BODY}">{pt}</span></p>'
         )
     for pt in friction_pts:
         html += (
             f'<p style="margin:0 0 10px 0;font-size:13px;line-height:1.6;font-family:{_FONT}">'
-            f'<span style="color:{_C_MUTED}">&#8595; </span>'
+            f'<span style="color:#854F0B">? </span>'
             f'<span style="color:#854F0B">{pt}</span></p>'
         )
     if html and not friction_pts:
@@ -206,9 +206,8 @@ def _job_card(job: dict, bg: str, pill_bg: str, pill_color: str) -> str:
         f'<table width="100%" cellpadding="0" cellspacing="0" border="0"><tr>'
         f'<td style="font-size:11px;color:{_C_MUTED};font-family:{_FONT}">{alumni_html}</td>'
         f'<td style="text-align:right">'
-        f'<a href="{link_url}" style="font-size:12px;font-weight:500;color:#185FA5;'
-        f'text-decoration:none;border:1px solid #ddd;padding:5px 12px;'
-        f'border-radius:4px;font-family:{_FONT};display:inline-block">'
+        f'<a href="{link_url}" style="font-size:12px;color:{_C_MUTED};'
+        f'text-decoration:none;font-family:{_FONT}">'
         f'View posting &#8594;</a>'
         f'</td></tr></table>'
         f'</td></tr></table>'
@@ -330,10 +329,10 @@ def render_html(jobs: list[dict], run_date: str, deal_breaker_count: int = 0) ->
             Path(payload_path).unlink(missing_ok=True)
 
     log.info("HTML rendered via Python fallback")
-    return build_digest_html(jobs, run_date, deal_breaker_count, candidate_name, greeting)
+    return build_digest_html(jobs, run_date, deal_breaker_count, candidate_name, greeting, greeting_sub)
 
 
-def build_digest_html(jobs: list[dict], run_date: str, deal_breaker_count: int = 0, candidate_name: str = "", greeting: str = "") -> str:
+def build_digest_html(jobs: list[dict], run_date: str, deal_breaker_count: int = 0, candidate_name: str = "", greeting: str = "", greeting_sub: str = "") -> str:
     # `jobs` contains only scored roles (apply / consider / skipped).
     # Deal-breaker filtered roles are removed upstream in pipeline.py before render;
     # their count is passed in as deal_breaker_count and shown only in the footer.
@@ -347,9 +346,9 @@ def build_digest_html(jobs: list[dict], run_date: str, deal_breaker_count: int =
         f'<tr>'
         f'{_stat_cell(len(jobs),    "Evaluated", "#5F5E5A")}'
         f'<td width="6">&nbsp;</td>'
-        f'{_stat_cell(len(apply),   "Apply now",       "#3B6D11")}'
+        f'{_stat_cell(len(apply),   "Solid match",    "#3B6D11")}'
         f'<td width="6">&nbsp;</td>'
-        f'{_stat_cell(len(consider),"Consider",        "#854F0B")}'
+        f'{_stat_cell(len(consider),"Moderate match", "#854F0B")}'
         f'</tr></table>'
     )
 
@@ -363,11 +362,11 @@ def build_digest_html(jobs: list[dict], run_date: str, deal_breaker_count: int =
         f'<table cellpadding="0" cellspacing="0" border="0" style="margin-bottom:20px">'
         f'<tr>'
         f'{_dot("#639922")}'
-        f'<td style="font-size:12px;color:{_C_MUTED};padding:0 12px 0 5px;font-family:{_FONT}">Strength match</td>'
+        f'<td style="font-size:12px;color:{_C_MUTED};padding:0 12px 0 5px;font-family:{_FONT}">Strengths</td>'
         f'{_dot("#BA7517")}'
-        f'<td style="font-size:12px;color:{_C_MUTED};padding:0 12px 0 5px;font-family:{_FONT}">Caution / domain gap</td>'
+        f'<td style="font-size:12px;color:{_C_MUTED};padding:0 12px 0 5px;font-family:{_FONT}">Caution</td>'
         f'{_dot("#A32D2D")}'
-        f'<td style="font-size:12px;color:{_C_MUTED};padding:0 0 0 5px;font-family:{_FONT}">Hard blocker</td>'
+        f'<td style="font-size:12px;color:{_C_MUTED};padding:0 0 0 5px;font-family:{_FONT}">Blocker</td>'
         f'</tr></table>'
     )
 
@@ -382,7 +381,7 @@ def build_digest_html(jobs: list[dict], run_date: str, deal_breaker_count: int =
         apply_html = (
             f'<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:20px">'
             f'<tr><td colspan="1" style="padding-bottom:10px">'
-            f'{_section_header("Apply", _score_range(apply), "#639922", "#3B6D11")}'
+            f'{_section_header("Solid Match", _score_range(apply), "#639922", "#3B6D11")}'
             f'</td></tr>'
             f'{cards}'
             f'</table>'
@@ -399,7 +398,7 @@ def build_digest_html(jobs: list[dict], run_date: str, deal_breaker_count: int =
         consider_html = (
             f'<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:20px">'
             f'<tr><td style="padding-bottom:10px">'
-            f'{_section_header("Consider", _score_range(consider), "#BA7517", "#854F0B")}'
+            f'{_section_header("Moderate Match", _score_range(consider), "#BA7517", "#854F0B")}'
             f'</td></tr>'
             f'{cards}'
             f'</table>'
@@ -420,7 +419,7 @@ def build_digest_html(jobs: list[dict], run_date: str, deal_breaker_count: int =
         skip_html = (
             f'<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:20px">'
             f'<tr><td colspan="2" style="padding-bottom:10px">'
-            f'{_section_header("Skipped", f"{len(skips)} roles · domain or title mismatch", "#888780", _C_MUTED)}'
+            f'{_section_header("Limited Match", f"{len(skips)} roles · domain or title mismatch", "#888780", _C_MUTED)}'
             f'</td></tr>'
             f'{col_hdr}'
             f'{skip_rows}'
@@ -443,8 +442,10 @@ def build_digest_html(jobs: list[dict], run_date: str, deal_breaker_count: int =
     )
 
     greeting_html = (
-        f'<p style="font-size:14px;color:{_C_MUTED};margin:0 0 6px 0;'
-        f'font-family:{_FONT};line-height:1.5">{greeting}</p>'
+        f'<h1 style="font-size:22px;font-weight:600;color:#1f2118;margin:0 0 6px 0;'
+        f'font-family:{_FONT}">{greeting}</h1>'
+        f'<p style="font-size:14px;color:{_C_MUTED};margin:0 0 14px 0;'
+        f'font-family:{_FONT};line-height:1.5">{greeting_sub}</p>'
         if greeting else ""
     )
     wordmark_row = (
@@ -496,8 +497,6 @@ def build_digest_html(jobs: list[dict], run_date: str, deal_breaker_count: int =
         f'<tr><td>{wordmark_row}</td></tr>'
         f'<tr><td style="padding:16px 0 0">'
         f'{greeting_html}'
-        f'<h1 style="font-size:18px;font-weight:500;color:#1f2118;margin:0 0 14px 0;'
-        f'font-family:{_FONT}">Personalized job alert digest</h1>'
         f'{stat_row}'
         f'</td></tr>'
         f'</table>'
