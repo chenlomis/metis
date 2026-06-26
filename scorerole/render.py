@@ -1,7 +1,5 @@
 from __future__ import annotations
-import os, stat, json, logging, smtplib, subprocess, tempfile, datetime
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import os, stat, json, logging, subprocess, tempfile, datetime
 from pathlib import Path
 from typing import List, Optional
 
@@ -30,12 +28,6 @@ def _make_greeting(name: str, apply_count: int, consider_count: int = 0, total_c
     else:
         body = "Quiet batch today — nothing reached the apply or consider tier."
     return salutation, body
-
-
-# Credentials needed by send_digest — read from env directly
-GMAIL_ADDRESS      = os.getenv("GMAIL_ADDRESS", "")
-GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
-RECIPIENT_EMAIL    = os.getenv("RECIPIENT_EMAIL", GMAIL_ADDRESS)
 
 _FONT     = "-apple-system, 'Helvetica Neue', Arial, sans-serif"
 _C_MUTED  = "#888780"
@@ -520,21 +512,3 @@ def build_digest_html(jobs: List[JobDict], run_date: str, deal_breaker_count: in
     )
 
 
-def send_digest(html: str, run_date: str, label: str = ""):
-    msg = MIMEMultipart("alternative")
-    prefix = f"[{label}] " if label else ""
-    msg["Subject"] = f"{prefix}Personalized Job Alert Digest — {run_date}"
-    msg["From"]    = GMAIL_ADDRESS
-    msg["To"]      = RECIPIENT_EMAIL
-    msg.attach(MIMEText(html, "html"))
-    try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
-            smtp.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
-            smtp.send_message(msg)
-    except smtplib.SMTPAuthenticationError as e:
-        log.error("DIGEST NOT DELIVERED — Gmail authentication failed. Check GMAIL_APP_PASSWORD in .env: %s", e)
-        raise
-    except smtplib.SMTPException as e:
-        log.error("DIGEST NOT DELIVERED — SMTP error: %s", e)
-        raise
-    log.info(f"Digest sent to {RECIPIENT_EMAIL}")

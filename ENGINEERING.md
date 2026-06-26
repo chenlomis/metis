@@ -194,7 +194,7 @@ Work through these in order. Run `make test` after each. Do not combine steps.
 | Step | Change | Risk | Status |
 |---|---|---|---|
 | 1 | Add `EvalResult` TypedDict in `types.py`; annotate `score.py`, `render.py`, `trace.py` | Zero — additive only | ✅ Done 2026-06-26 · 397/397 |
-| 2 | Split `render.py` → `render.py` (HTML only) + `deliver.py` (SMTP) | Low — mechanical split, tests cover render format | Not started |
+| 2 | Split `render.py` → `render.py` (HTML only) + `deliver.py` (SMTP) | Low — mechanical split, tests cover render format | ✅ Done 2026-06-26 · 397/397 |
 | 3 | Split `track.py` → `track_ingest.py`, `track_parse.py`, `track_write.py` | Medium — many functions, keep signatures identical | Not started |
 | 4 | Config-as-parameters: define `Config` dataclass, thread through all call sites | High — touches 9 modules; do last; requires full test pass | Not started |
 

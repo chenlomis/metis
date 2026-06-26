@@ -26,7 +26,8 @@ from .feedback import save_last_run
 from .sources import fetch_alerts
 from .sources.linkedin import extract_jobs, extract_jobs_html, _extract_text
 from .score import score_jobs_batch, rank_jobs, build_score_system
-from .render import render_html, send_digest
+from .render import render_html
+from .deliver import send_digest
 
 # ---------------------------------------------------------------------------
 # Startup validation — fail fast with a clear message if config is missing
