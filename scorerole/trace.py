@@ -5,10 +5,11 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 from .state import RUNS_PATH
+from .types import JobDict
 _PROMPT_VERSION = "2026-06-19"
 
 
-def write_trace(job: dict) -> None:
+def write_trace(job: JobDict) -> None:
     """Append one trace record for a job to ~/.job_pipeline/runs.jsonl.
 
     Called at three points in the pipeline:

@@ -1,7 +1,10 @@
 from __future__ import annotations
 import re, json, logging, time
 from pathlib import Path
+from typing import List
 import anthropic
+
+from .types import EvalResult, JobDict
 
 log = logging.getLogger(__name__)
 
@@ -614,9 +617,9 @@ def _inject_weights(evals: list[dict]) -> None:
 
 def score_jobs_batch(
     client: anthropic.Anthropic,
-    jobs: list[dict],
+    jobs: List[JobDict],
     profile: dict | None = None,
-) -> list[dict]:
+) -> List[JobDict]:
     """Score all jobs, chunking into batches of _SCORE_CHUNK_SIZE to avoid output truncation.
 
     Pass `profile` (already loaded dict) to avoid a redundant disk read. Falls back to
@@ -643,7 +646,7 @@ def score_jobs_batch(
     return jobs
 
 
-def rank_jobs(jobs: list[dict]) -> list[dict]:
+def rank_jobs(jobs: List[JobDict]) -> List[JobDict]:
     """Sort jobs by verdict + score, re-deriving verdicts from thresholds first.
 
     Claude is instructed on thresholds but doesn't guarantee compliance —

@@ -1,7 +1,11 @@
+from __future__ import annotations
 import os, stat, json, logging, smtplib, subprocess, tempfile, datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from pathlib import Path
+from typing import List, Optional
+
+from .types import EvalResult, JobDict
 
 log = logging.getLogger(__name__)
 
@@ -110,7 +114,7 @@ def _section_header(label: str, count_text: str, bar_color: str, label_color: st
         f'<tr>'
         f'<td width="3" style="background:{bar_color};border-radius:2px;font-size:0;line-height:0">&nbsp;</td>'
         f'<td width="8">&nbsp;</td>'
-        f'<td style="font-size:13px;font-weight:500;color:{label_color};'
+        f'<td style="font-size:14px;font-weight:500;color:{label_color};'
         f'font-family:{_FONT};padding:8px 0">{label}</td>'
         f'<td style="font-size:12px;color:{_C_MUTED};text-align:right;'
         f'font-family:{_FONT};padding:8px 0">{count_text}</td>'
@@ -118,7 +122,7 @@ def _section_header(label: str, count_text: str, bar_color: str, label_color: st
     )
 
 
-def render_score_breakdown(job: dict) -> str:
+def render_score_breakdown(job: JobDict) -> str:
     """Return a self-contained <details> block showing the 6-dimension score table.
 
     Returns "" when no dimensions are present (old runs, parse errors, filtered roles)
@@ -207,9 +211,8 @@ def _job_card(job: dict, bg: str, pill_bg: str, pill_color: str) -> str:
         f'<table width="100%" cellpadding="0" cellspacing="0" border="0"><tr>'
         f'<td style="font-size:11px;color:{_C_MUTED};font-family:{_FONT}">{alumni_html}</td>'
         f'<td style="text-align:right">'
-        f'<a href="{link_url}" style="font-size:12px;font-weight:500;color:{pill_color};'
-        f'text-decoration:none;background:{pill_bg};padding:5px 12px;'
-        f'border-radius:4px;font-family:{_FONT};display:inline-block">'
+        f'<a href="{link_url}" style="font-size:12px;color:{_C_MUTED};'
+        f'text-decoration:none;font-family:{_FONT}">'
         f'View posting &#8594;</a>'
         f'</td></tr></table>'
         f'</td></tr></table>'
@@ -222,18 +225,13 @@ def _skip_row(job: dict, row_idx: int) -> str:
     friction = _coerce_list(ev.get("frictionPoints", []))
     reason = friction[0] if friction else "Not a match for current criteria"
     link_url = job.get("url", "#")
-    if score >= 75:
-        pill_bg, pill_fg = "#EAF3DE", "#3B6D11"
-    elif score >= 55:
-        pill_bg, pill_fg = "#FAEEDA", "#854F0B"
-    else:
-        pill_bg, pill_fg = "#FCEBEB", "#A32D2D"
+    pill_bg, pill_fg = "#f5f5f3", _C_MUTED
     row_bg = "#fafafa" if row_idx % 2 == 0 else "#ffffff"
     return (
         f'<tr style="background:{row_bg};border-bottom:1px solid #f0eeea">'
         f'<td style="padding:10px 12px 10px 0;vertical-align:top;width:55%">'
         f'<div style="margin-bottom:3px">'
-        f'<a href="{link_url}" style="font-size:13px;font-weight:500;color:#185FA5;'
+        f'<a href="{link_url}" style="font-size:13px;font-weight:400;color:#185FA5;'
         f'text-decoration:none;font-family:{_FONT}">{job["title"]}</a>'
         f'<span style="background:{pill_bg};color:{pill_fg};font-size:10px;font-weight:500;'
         f'padding:1px 6px;border-radius:20px;font-family:{_FONT};margin-left:6px;white-space:nowrap">'
@@ -295,7 +293,7 @@ def build_digest_payload(
     }
 
 
-def render_html(jobs: list[dict], run_date: str, deal_breaker_count: int = 0) -> str:
+def render_html(jobs: List[JobDict], run_date: str, deal_breaker_count: int = 0) -> str:
     from .profile import load_profile_yaml
     profile        = load_profile_yaml() or {}
     candidate_name = profile.get("candidate", {}).get("name", "")
@@ -334,7 +332,7 @@ def render_html(jobs: list[dict], run_date: str, deal_breaker_count: int = 0) ->
     return build_digest_html(jobs, run_date, deal_breaker_count, candidate_name, greeting, greeting_sub)
 
 
-def build_digest_html(jobs: list[dict], run_date: str, deal_breaker_count: int = 0, candidate_name: str = "", greeting: str = "", greeting_sub: str = "") -> str:
+def build_digest_html(jobs: List[JobDict], run_date: str, deal_breaker_count: int = 0, candidate_name: str = "", greeting: str = "", greeting_sub: str = "") -> str:
     # `jobs` contains only scored roles (apply / consider / skipped).
     # Deal-breaker filtered roles are removed upstream in pipeline.py before render;
     # their count is passed in as deal_breaker_count and shown only in the footer.
@@ -348,7 +346,7 @@ def build_digest_html(jobs: list[dict], run_date: str, deal_breaker_count: int =
         f'<tr>'
         f'{_stat_cell(len(jobs),    "Evaluated", "#5F5E5A")}'
         f'<td width="6">&nbsp;</td>'
-        f'{_stat_cell(len(apply),   "Solid match",    "#3B6D11")}'
+        f'{_stat_cell(len(apply),   "Solid match",    "#854F0B")}'
         f'<td width="6">&nbsp;</td>'
         f'{_stat_cell(len(consider),"Moderate match", "#854F0B")}'
         f'</tr></table>'
@@ -357,8 +355,10 @@ def build_digest_html(jobs: list[dict], run_date: str, deal_breaker_count: int =
     # --- Legend ---
     def _dot(bg: str) -> str:
         return (
-            f'<td width="8" height="8" style="background:{bg};border-radius:4px;'
-            f'font-size:0;line-height:0">&nbsp;</td>'
+            f'<td style="padding:0 5px 0 0;vertical-align:middle">'
+            f'<span style="display:inline-block;width:8px;height:8px;background:{bg};'
+            f'border-radius:4px;font-size:0;line-height:0"></span>'
+            f'</td>'
         )
     legend = (
         f'<table cellpadding="0" cellspacing="0" border="0" style="margin-bottom:20px">'
