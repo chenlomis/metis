@@ -9,19 +9,16 @@ credentials, and deliver.py is the only module that touches smtplib.
 from __future__ import annotations
 
 import logging
-import os
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
+from .config import Config
+
 log = logging.getLogger(__name__)
 
-GMAIL_ADDRESS      = os.getenv("GMAIL_ADDRESS", "")
-GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
-RECIPIENT_EMAIL    = os.getenv("RECIPIENT_EMAIL", GMAIL_ADDRESS)
 
-
-def send_digest(html: str, run_date: str, label: str = "") -> None:
+def send_digest(html: str, run_date: str, label: str = "", *, config: Config) -> None:
     """Send the HTML digest via Gmail SMTP.
 
     Raises smtplib.SMTPException on delivery failure — caller (pipeline.py)
@@ -31,12 +28,12 @@ def send_digest(html: str, run_date: str, label: str = "") -> None:
     msg = MIMEMultipart("alternative")
     prefix = f"[{label}] " if label else ""
     msg["Subject"] = f"{prefix}Personalized Job Alert Digest — {run_date}"
-    msg["From"]    = GMAIL_ADDRESS
-    msg["To"]      = RECIPIENT_EMAIL
+    msg["From"]    = config.gmail_address
+    msg["To"]      = config.recipient_email
     msg.attach(MIMEText(html, "html"))
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
-            smtp.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
+            smtp.login(config.gmail_address, config.gmail_app_password)
             smtp.send_message(msg)
     except smtplib.SMTPAuthenticationError as e:
         log.error("DIGEST NOT DELIVERED — Gmail authentication failed. Check GMAIL_APP_PASSWORD in .env: %s", e)
@@ -44,4 +41,4 @@ def send_digest(html: str, run_date: str, label: str = "") -> None:
     except smtplib.SMTPException as e:
         log.error("DIGEST NOT DELIVERED — SMTP error: %s", e)
         raise
-    log.info("Digest sent to %s", RECIPIENT_EMAIL)
+    log.info("Digest sent to %s", config.recipient_email)

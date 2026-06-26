@@ -1,12 +1,21 @@
 import datetime
 import logging
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
+
 from .linkedin import fetch_linkedin_alerts_since
+
+if TYPE_CHECKING:
+    from ..config import Config
 
 log = logging.getLogger(__name__)
 
 
-def fetch_alerts(since_dt: datetime.datetime, profile: Optional[dict] = None) -> list[dict]:
+def fetch_alerts(
+    since_dt: datetime.datetime,
+    profile: Optional[dict] = None,
+    *,
+    config: "Config | None" = None,
+) -> list[dict]:
     """Unified source entry point — returns all job alert emails since since_dt.
 
     Merges two source types:
@@ -16,7 +25,14 @@ def fetch_alerts(since_dt: datetime.datetime, profile: Optional[dict] = None) ->
     Both sources return job dicts; proactive jobs have source='proactive' and
     a pre-populated `jd` field so they skip the enrich_jobs() HTTP fetch step.
     """
-    results = fetch_linkedin_alerts_since(since_dt)
+    gmail_address      = config.gmail_address      if config else ""
+    gmail_app_password = config.gmail_app_password if config else ""
+
+    results = fetch_linkedin_alerts_since(
+        since_dt,
+        gmail_address=gmail_address,
+        gmail_app_password=gmail_app_password,
+    )
 
     if profile and profile.get("proactive_sources", {}).get("enabled", False):
         try:

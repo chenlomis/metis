@@ -75,7 +75,7 @@ New job sources belong in `sources/`. Each source module must:
 Do not add source-specific logic to `pipeline.py`.
 
 ### Eval schema
-The dict that `score.py` emits and `render.py` consumes is a coupled contract. Changes to one require changes to the other. Use the `EvalResult` TypedDict (target state — not yet implemented) so mismatches are type errors, not silent render failures.
+The dict that `score.py` emits and `render.py` consumes is a coupled contract. Changes to one require changes to the other. Use the `EvalResult` TypedDict in `types.py` so mismatches are type errors, not silent render failures.
 
 ```python
 # target: scorerole/types.py
@@ -91,9 +91,9 @@ class EvalResult(TypedDict):
 ```
 
 ### Render vs deliver
-`render.py` currently owns both HTML generation and SMTP delivery. These should be separate:
-- `render.py` — pure function: `build_digest_html(jobs, profile) -> str`. No I/O, no credentials.
-- `deliver.py` — side-effectful: `send_digest(html, config)`. Testable by mocking SMTP.
+`render.py` owns pure HTML generation. `deliver.py` owns SMTP delivery and receives credentials via `Config`:
+- `render.py` — pure function: `render_html(jobs, run_date, ...) -> str`. No I/O, no credentials.
+- `deliver.py` — side-effectful: `send_digest(html, run_date, *, config: Config)`. Testable by mocking SMTP.
 
 ---
 
@@ -196,6 +196,6 @@ Work through these in order. Run `make test` after each. Do not combine steps.
 | 1 | Add `EvalResult` TypedDict in `types.py`; annotate `score.py`, `render.py`, `trace.py` | Zero — additive only | ✅ Done 2026-06-26 · 397/397 |
 | 2 | Split `render.py` → `render.py` (HTML only) + `deliver.py` (SMTP) | Low — mechanical split, tests cover render format | ✅ Done 2026-06-26 · 397/397 |
 | 3 | Split `track.py` → `track_imap.py`, `track_parse.py`, `track_write.py` | Medium — many functions, keep signatures identical | ✅ Done 2026-06-26 · 397/397 |
-| 4 | Config-as-parameters: define `Config` dataclass, thread through all call sites | High — touches 9 modules; do last; requires full test pass | Not started |
+| 4 | Config-as-parameters: define `Config` dataclass, thread through all call sites | High — touches 9 modules; do last; requires full test pass | ✅ Done 2026-06-26 · 397/397 |
 
 Step 4 is the prerequisite for the MCP server. Do not attempt it until steps 1–3 are complete and green.

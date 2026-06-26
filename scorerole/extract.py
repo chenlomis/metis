@@ -16,7 +16,7 @@ from .prompts import JD_EXTRACT_SYSTEM
 
 log = logging.getLogger(__name__)
 
-EXTRACT_MODEL      = os.getenv("EXTRACT_MODEL", "claude-haiku-4-5")
+_DEFAULT_EXTRACT_MODEL = "claude-haiku-4-5"
 _EXTRACT_CHUNK_SIZE = 10
 
 
@@ -76,7 +76,8 @@ def _is_valid_struct(obj: object) -> bool:
     return _REQUIRED_KEYS.issubset(obj.keys())
 
 
-def _extract_chunk(client: anthropic.Anthropic, jobs: list[dict]) -> list[dict]:
+def _extract_chunk(client: anthropic.Anthropic, jobs: list[dict],
+                   *, model: str = _DEFAULT_EXTRACT_MODEL) -> list[dict]:
     """Extract structured fields for one chunk of jobs. Returns list of structs."""
     job_blocks = "\n\n---\n\n".join(
         "JOB {n}: {title} at {company}\n{jd_line}".format(
@@ -96,7 +97,7 @@ def _extract_chunk(client: anthropic.Anthropic, jobs: list[dict]) -> list[dict]:
     for attempt in range(_MAX_ATTEMPTS):
         try:
             response = client.messages.create(
-                model=EXTRACT_MODEL,
+                model=model,
                 max_tokens=max(1024, len(jobs) * 350),
                 temperature=0,
                 system=JD_EXTRACT_SYSTEM,
@@ -125,7 +126,7 @@ def _extract_chunk(client: anthropic.Anthropic, jobs: list[dict]) -> list[dict]:
     usage = response.usage
     log.info(
         "Extraction (%s) — input: %d tok, output: %d tok",
-        EXTRACT_MODEL, usage.input_tokens, usage.output_tokens,
+        model, usage.input_tokens, usage.output_tokens,
     )
 
     raw = re.sub(
@@ -144,7 +145,8 @@ def _extract_chunk(client: anthropic.Anthropic, jobs: list[dict]) -> list[dict]:
         return [dict(_BLANK_STRUCT) for _ in jobs]
 
 
-def extract_jd_structs(client: anthropic.Anthropic, jobs: list[dict]) -> list[dict]:
+def extract_jd_structs(client: anthropic.Anthropic, jobs: list[dict],
+                       *, model: str = _DEFAULT_EXTRACT_MODEL) -> list[dict]:
     """Extract Layer 1 structured fields for all jobs. Returns one dict per job, same order.
 
     Jobs without JD text (job.get('jd') is falsy) still run through extraction so
@@ -161,7 +163,7 @@ def extract_jd_structs(client: anthropic.Anthropic, jobs: list[dict]) -> list[di
     all_structs: list[dict] = []
     for chunk in chunks:
         try:
-            structs = _extract_chunk(client, chunk)
+            structs = _extract_chunk(client, chunk, model=model)
         except Exception as exc:
             log.warning("Extraction chunk failed (%s) — blank structs for %d jobs", exc, len(chunk))
             structs = [dict(_BLANK_STRUCT) for _ in chunk]

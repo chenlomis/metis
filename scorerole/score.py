@@ -8,11 +8,8 @@ from .types import EvalResult, JobDict
 
 log = logging.getLogger(__name__)
 
-# MODEL is read from pipeline.py at call time — passed in via the client object.
-# Keep a local reference for the score_jobs_batch call.
-import os
-MODEL           = os.getenv("MODEL",           "claude-sonnet-4-6")
-PRESCREEN_MODEL = os.getenv("PRESCREEN_MODEL", "claude-haiku-4-5")
+_DEFAULT_MODEL           = "claude-sonnet-4-6"
+_DEFAULT_PRESCREEN_MODEL = "claude-haiku-4-5"
 
 WEIGHTS: dict[str, float] = {
     "seniority_scope":      0.25,
@@ -146,7 +143,8 @@ def _recover_partial_json(raw: str) -> list[dict]:
     return objects
 
 
-def prescreen_jobs_batch(client: anthropic.Anthropic, jobs: list[dict]) -> list[dict]:
+def prescreen_jobs_batch(client: anthropic.Anthropic, jobs: list[dict],
+                         *, model: str = _DEFAULT_PRESCREEN_MODEL) -> list[dict]:
     """Fast Haiku pre-screen on title+company only — filters obvious mismatches before
     JD enrichment and full Sonnet scoring.
 
@@ -168,7 +166,7 @@ def prescreen_jobs_batch(client: anthropic.Anthropic, jobs: list[dict]) -> list[
 
     try:
         response = client.messages.create(
-            model=PRESCREEN_MODEL,
+            model=model,
             max_tokens=max(256, len(jobs) * 12),  # ~12 tok/job: "1. Y\n" with headroom
             system=(
                 f"{context}\n\n"
@@ -194,7 +192,7 @@ def prescreen_jobs_batch(client: anthropic.Anthropic, jobs: list[dict]) -> list[
     raw   = response.content[0].text.strip()
     usage = response.usage
     log.info(
-        f"Pre-screen ({PRESCREEN_MODEL}) — "
+        f"Pre-screen ({model}) — "
         f"input: {usage.input_tokens} tok, output: {usage.output_tokens} tok"
     )
 
@@ -502,7 +500,8 @@ _SCORE_CHUNK_SIZE = 15   # max jobs per Sonnet call (~15 × 300 tok ≈ 4,500 ou
 _MAX_OUTPUT_TOKENS = 8192
 
 
-def _score_chunk(client: anthropic.Anthropic, jobs: list[dict], system_prompt: str) -> list[dict]:
+def _score_chunk(client: anthropic.Anthropic, jobs: list[dict], system_prompt: str,
+                 *, model: str = _DEFAULT_MODEL) -> list[dict]:
     """Score one chunk of jobs. Returns evals list (may be shorter than jobs on truncation)."""
     from .extract import format_extraction_for_scoring
 
@@ -534,7 +533,7 @@ def _score_chunk(client: anthropic.Anthropic, jobs: list[dict], system_prompt: s
     for attempt in range(_MAX_ATTEMPTS):
         try:
             response = client.messages.create(
-                model=MODEL,
+                model=model,
                 max_tokens=_MAX_OUTPUT_TOKENS,
                 system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
                 messages=[{
@@ -619,6 +618,8 @@ def score_jobs_batch(
     client: anthropic.Anthropic,
     jobs: List[JobDict],
     profile: dict | None = None,
+    *,
+    model: str = _DEFAULT_MODEL,
 ) -> List[JobDict]:
     """Score all jobs, chunking into batches of _SCORE_CHUNK_SIZE to avoid output truncation.
 
@@ -637,7 +638,7 @@ def score_jobs_batch(
 
     all_evals: list[dict] = []
     for chunk in chunks:
-        evals = _score_chunk(client, chunk, system_prompt)
+        evals = _score_chunk(client, chunk, system_prompt, model=model)
         for i in range(len(chunk)):
             all_evals.append(evals[i] if i < len(evals) else _error_eval)
 

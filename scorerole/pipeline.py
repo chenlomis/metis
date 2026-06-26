@@ -1,21 +1,10 @@
 from __future__ import annotations
-import os, re, sys, datetime, logging
+import re, sys, datetime, logging
 from pathlib import Path
 from dotenv import load_dotenv
 import anthropic
 
-load_dotenv(override=True)
-
-# ---------------------------------------------------------------------------
-# Config
-# ---------------------------------------------------------------------------
-ANTHROPIC_API_KEY  = os.getenv("ANTHROPIC_API_KEY")
-GMAIL_ADDRESS      = os.getenv("GMAIL_ADDRESS", "")
-GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
-RECIPIENT_EMAIL    = os.getenv("RECIPIENT_EMAIL", GMAIL_ADDRESS)
-MODEL              = os.getenv("MODEL", "claude-sonnet-4-6")
-MAX_JOBS_PER_RUN   = int(os.getenv("MAX_JOBS_PER_RUN", "20"))
-DEFAULT_LOOKBACK   = os.getenv("DEFAULT_LOOKBACK", "3d")  # fallback only; main() uses last-run timestamp when available
+from .config import Config
 
 from .state import (
     DATA_DIR, LOG_DIR, SEEN_FILE,
@@ -32,20 +21,20 @@ from .deliver import send_digest
 # ---------------------------------------------------------------------------
 # Startup validation — fail fast with a clear message if config is missing
 # ---------------------------------------------------------------------------
-def _validate_env(require_gmail: bool = True):
+def _validate_env(config: Config, require_gmail: bool = True):
     errors = []
-    if not ANTHROPIC_API_KEY:
+    if not config.anthropic_api_key:
         errors.append(
             "  ANTHROPIC_API_KEY is not set.\n"
             "  Get one at https://console.anthropic.com (separate from Claude.ai subscription)."
         )
     if require_gmail:
-        if not GMAIL_ADDRESS:
+        if not config.gmail_address:
             errors.append(
                 "  GMAIL_ADDRESS is not set.\n"
                 "  Add your Gmail address to .env."
             )
-        if not GMAIL_APP_PASSWORD:
+        if not config.gmail_app_password:
             errors.append(
                 "  GMAIL_APP_PASSWORD is not set.\n"
                 "  Generate one at https://myaccount.google.com/apppasswords (requires 2FA)."
@@ -75,7 +64,7 @@ def _parse_lookback(value: str) -> datetime.datetime | None:
     return dateparser.parse(value, settings={"RETURN_AS_TIMEZONE_AWARE": False})
 
 
-def _since_last_run(fallback: str = DEFAULT_LOOKBACK) -> tuple[datetime.datetime, str]:
+def _since_last_run(fallback: str = "3d") -> tuple[datetime.datetime, str]:
     """Return (since_dt, label) using last_run.json timestamp, or fallback duration.
 
     Label is shown to the user so they know which window is active.
@@ -172,7 +161,8 @@ def _is_pm_email(subject: str) -> bool:
     return not bool(words & _NON_PM_SUBJECT_SIGNALS)
 
 
-def _stage_ingest(since_dt: datetime.datetime, seen_roles: set, profile=None) -> "list[dict] | None":
+def _stage_ingest(since_dt: datetime.datetime, seen_roles: set, profile=None,
+                  config: Config | None = None) -> "list[dict] | None":
     """Fetch job alerts (LinkedIn + proactive sources) and return deduplicated new jobs.
 
     Applies three dedup layers:
@@ -185,7 +175,7 @@ def _stage_ingest(since_dt: datetime.datetime, seen_roles: set, profile=None) ->
       []  (empty)    — sources returned jobs but all already seen within 30 days
       [...]           — new, unseen roles ready for cap + scoring
     """
-    threads = fetch_alerts(since_dt, profile=profile)
+    threads = fetch_alerts(since_dt, profile=profile, config=config)
 
     all_jobs: list[dict] = []
     seen_job_ids:   set[str]   = set()
@@ -266,6 +256,7 @@ def _stage_cap(
     all_jobs: list[dict],
     score_all: bool,
     client,                  # anthropic.Anthropic — passed through to prescreen if needed
+    config: Config | None = None,
 ) -> tuple[list[dict], bool]:
     """Apply the per-run cap and optionally run the Haiku pre-screen.
 
@@ -279,6 +270,7 @@ def _stage_cap(
     IMPORTANT: This function must be called BEFORE building new_role_timestamps so that
     only the final survivors get persisted to seen_roles.json (role-burial fix).
     """
+    max_jobs = config.max_jobs_per_run if config else 20
     n_found = len(all_jobs)
     should_prescreen = False
 
@@ -293,12 +285,12 @@ def _stage_cap(
 
     # Determine effective cap for this run (cap_to=None means score everything).
     cap_to: int | None = None
-    if MAX_JOBS_PER_RUN > 0 and n_found > MAX_JOBS_PER_RUN:
+    if max_jobs > 0 and n_found > max_jobs:
         if score_all:
             log.info(f"{n_found} roles to evaluate (--no-limit flag; Haiku pre-screen will filter)")
             should_prescreen = True
         elif sys.stdin.isatty():
-            chosen = _prompt_score_all(n_found, MAX_JOBS_PER_RUN)
+            chosen = _prompt_score_all(n_found, max_jobs)
             if chosen >= n_found:
                 log.info(f"Scoring all {n_found} roles (Haiku pre-screen will filter first)")
                 should_prescreen = True
@@ -307,10 +299,10 @@ def _stage_cap(
                 should_prescreen = True  # always prescreen before a custom cap too
                 log.info(f"Scoring up to {chosen} role(s) (Haiku pre-screen runs first)")
         else:
-            # Non-interactive (cron): prescreen full batch, then cap to MAX_JOBS_PER_RUN.
-            cap_to = MAX_JOBS_PER_RUN
+            # Non-interactive (cron): prescreen full batch, then cap to max_jobs.
+            cap_to = max_jobs
             should_prescreen = True
-            log.info(f"{n_found} roles found — Haiku pre-screen before capping to {MAX_JOBS_PER_RUN}")
+            log.info(f"{n_found} roles found — Haiku pre-screen before capping to {max_jobs}")
     else:
         log.info(f"{n_found} unique role(s) to evaluate")
 
@@ -318,12 +310,13 @@ def _stage_cap(
         from .score import prescreen_jobs_batch
         from .trace import write_trace
         before_prescreen = list(all_jobs)
-        all_jobs = prescreen_jobs_batch(client, all_jobs)
+        prescreen_model = config.prescreen_model if config else "claude-haiku-4-5"
+        all_jobs = prescreen_jobs_batch(client, all_jobs, model=prescreen_model)
         passed_ids = {id(j) for j in all_jobs}
         for job in before_prescreen:
             if id(job) not in passed_ids:
                 job["eval"] = {"score": 0, "verdict": "prescreened", "reason": "haiku_prescreen_filtered"}
-                write_trace(job)
+                write_trace(job, model=prescreen_model)
 
     # Apply effective cap after pre-screen. Excess roles are queued for the next run.
     if cap_to is not None and len(all_jobs) > cap_to:
@@ -338,7 +331,8 @@ def _stage_cap(
     return all_jobs, should_prescreen
 
 
-def _stage_enrich_and_score(jobs: list[dict], client) -> list[dict]:
+def _stage_enrich_and_score(jobs: list[dict], client,
+                            config: Config | None = None) -> list[dict]:
     """Fetch JDs (enrich), run Layer 1 extraction + gate checks, then score + rank with Sonnet.
 
     Layer 1 (Haiku, temperature=0):
@@ -367,7 +361,8 @@ def _stage_enrich_and_score(jobs: list[dict], client) -> list[dict]:
 
     # Layer 1: structured extraction
     try:
-        extractions = extract_jd_structs(client, jobs)
+        extract_model = config.extract_model if config else "claude-haiku-4-5"
+        extractions = extract_jd_structs(client, jobs, model=extract_model)
     except Exception as exc:
         log.warning("Layer 1 extraction failed (%s) — scoring without extraction context", exc)
         extractions = [{} for _ in jobs]
@@ -391,7 +386,8 @@ def _stage_enrich_and_score(jobs: list[dict], client) -> list[dict]:
 
     if to_score:
         try:
-            score_jobs_batch(client, to_score, profile_data)   # mutates job["eval"] in-place
+            score_model = config.model if config else "claude-sonnet-4-6"
+            score_jobs_batch(client, to_score, profile_data, model=score_model)   # mutates in-place
         except FileNotFoundError:
             raise SystemExit(
                 "\n❌  No scoring profile found.\n"
@@ -400,8 +396,9 @@ def _stage_enrich_and_score(jobs: list[dict], client) -> list[dict]:
 
     ranked = rank_jobs(jobs)
     from .trace import write_trace
+    score_model = config.model if config else "claude-sonnet-4-6"
     for job in ranked:
-        write_trace(job)
+        write_trace(job, model=score_model)
     return ranked
 
 
@@ -426,6 +423,7 @@ def _stage_deliver(
     n_filtered: int,
     new_role_timestamps: dict,
     dry_run: bool = False,
+    config: Config | None = None,
 ) -> None:
     """Render the HTML digest and deliver it via SMTP.
 
@@ -455,7 +453,7 @@ def _stage_deliver(
         return
 
     try:
-        send_digest(html, run_date)
+        send_digest(html, run_date, config=config or Config())
     except Exception:
         log.error("Pipeline finished scoring but failed to deliver digest — check SMTP settings in .env")
         raise SystemExit(1)
@@ -479,7 +477,8 @@ def _stage_deliver(
 # Orchestration
 # ---------------------------------------------------------------------------
 
-def run_pipeline(since_dt: datetime.datetime, score_all: bool = False, dry_run: bool = False):
+def run_pipeline(since_dt: datetime.datetime, score_all: bool = False, dry_run: bool = False,
+                 *, config: Config | None = None):
     """Fetch LinkedIn alert emails since since_dt, score unseen roles, deliver digest.
 
     seen_roles.json (30-day TTL) is the dedup gate — roles already scored
@@ -491,7 +490,8 @@ def run_pipeline(since_dt: datetime.datetime, score_all: bool = False, dry_run: 
     dry_run=True skips all writes: no email send, no seen_roles save, no tracker write.
     """
     log.info(f"=== Pipeline run starting — lookback since {since_dt.strftime('%Y-%m-%d')} ===")
-    client     = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    cfg    = config or Config()
+    client = anthropic.Anthropic(api_key=cfg.anthropic_api_key or None)
     seen_roles = load_seen_roles()
 
     # Load profile early — needed for proactive source config and gate checks
@@ -499,7 +499,7 @@ def run_pipeline(since_dt: datetime.datetime, score_all: bool = False, dry_run: 
     profile_data = load_profile_yaml() or {}
 
     # Stage 1: Ingest + deduplicate
-    all_jobs = _stage_ingest(since_dt, seen_roles, profile=profile_data)
+    all_jobs = _stage_ingest(since_dt, seen_roles, profile=profile_data, config=cfg)
     if all_jobs is None:
         return   # "No emails in lookback window" already logged inside _stage_ingest
     if not all_jobs:
@@ -510,7 +510,7 @@ def run_pipeline(since_dt: datetime.datetime, score_all: bool = False, dry_run: 
     # new_role_timestamps is built AFTER this so only surviving roles get persisted.
     # (Pre-fix: capped roles were written to seen_roles.json and locked out for 14 days
     #  without ever being evaluated — the role-burial bug.)
-    all_jobs, _prescreened = _stage_cap(all_jobs, score_all, client)
+    all_jobs, _prescreened = _stage_cap(all_jobs, score_all, client, config=cfg)
     if not all_jobs:
         log.info("Pre-screen filtered all roles — nothing left to score.")
         return
@@ -522,7 +522,7 @@ def run_pipeline(since_dt: datetime.datetime, score_all: bool = False, dry_run: 
     }
 
     # Stage 3: Enrich (fetch JDs) + score + rank
-    all_jobs = _stage_enrich_and_score(all_jobs, client)
+    all_jobs = _stage_enrich_and_score(all_jobs, client, config=cfg)
 
     # Stage 4: Split deal-breaker filtered roles
     scored_jobs, n_filtered = _stage_split_filtered(all_jobs)
@@ -541,15 +541,16 @@ def run_pipeline(since_dt: datetime.datetime, score_all: bool = False, dry_run: 
         return
 
     # Stage 5: Render + deliver digest (persists seen_roles on success)
-    _stage_deliver(scored_jobs, n_filtered, new_role_timestamps, dry_run=dry_run)
+    _stage_deliver(scored_jobs, n_filtered, new_role_timestamps, dry_run=dry_run, config=cfg)
 
 
-def debug_emails():
+def debug_emails(config: Config | None = None):
     """Dump the most recent LinkedIn email body to ~/.job_pipeline/debug_email.txt."""
     import imaplib, email as email_lib
     from .sources.linkedin import _LINKEDIN_SENDER_SEARCH
+    cfg = config or Config.from_env()
     with imaplib.IMAP4_SSL("imap.gmail.com") as imap:
-        imap.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
+        imap.login(cfg.gmail_address, cfg.gmail_app_password)
         imap.select("INBOX")
         _, data = imap.search(None, _LINKEDIN_SENDER_SEARCH)
         all_ids = data[0].split()
@@ -572,6 +573,9 @@ def debug_emails():
 
 def main():
     import argparse
+
+    load_dotenv(override=True)
+    config = Config.from_env()
 
     # Set up logging here (not at module level) so importing pipeline
     # doesn't create directories or hijack the root logger.
@@ -762,18 +766,18 @@ def main():
     args = parser.parse_args()
 
     if args.command == "init_bak":
-        _validate_env(require_gmail=False)   # only needs API key to parse resume
+        _validate_env(config, require_gmail=False)
         from .init_cmd import run_init
         run_init(
-            api_key=ANTHROPIC_API_KEY,
+            api_key=config.anthropic_api_key,
             resume_path_arg=getattr(args, "resume", "") or "",
             supplement_path_arg=getattr(args, "linkedin", "") or "",
         )
 
     elif args.command == "init":
-        _validate_env(require_gmail=False)
+        _validate_env(config, require_gmail=False)
         from .init2_cmd import run_init2
-        run_init2(api_key=ANTHROPIC_API_KEY)
+        run_init2(api_key=config.anthropic_api_key)
 
     elif args.command == "reset":
         targets = [SEEN_FILE]
@@ -823,38 +827,38 @@ def main():
             removed = remove_schedule()
             print("  Schedule removed." if removed else "  No schedule was configured.")
         elif action == "run":
-            _validate_env()
+            _validate_env(config)
             lookback_str = getattr(args, "run_lookback", "1d") or "1d"
             since_dt = _parse_lookback(lookback_str)
             if not since_dt:
                 print(f"Could not parse --lookback '{lookback_str}'. Try: '1d', '4d', '7d'")
                 raise SystemExit(1)
             log.info("=== Scheduled run: digest + track (lookback %s) ===", lookback_str)
-            run_pipeline(since_dt=since_dt)
+            run_pipeline(since_dt=since_dt, config=config)
             from .track import run_track
             run_track(
-                gmail_address=GMAIL_ADDRESS,
-                app_password=GMAIL_APP_PASSWORD,
+                gmail_address=config.gmail_address,
+                app_password=config.gmail_app_password,
                 since_dt=since_dt,
                 dry_run=False,
-                api_key=ANTHROPIC_API_KEY,
+                api_key=config.anthropic_api_key,
             )
         else:
             show_schedule()
 
     elif args.command == "track":
-        _validate_env()
+        _validate_env(config)
         since_dt = _parse_lookback(getattr(args, "lookback", "7d"))
         if not since_dt:
             print(f"Could not parse --lookback '{args.lookback}'. Try: '7d', '30d', '2026-06-01'")
             raise SystemExit(1)
         from .track import run_track
         run_track(
-            gmail_address=GMAIL_ADDRESS,
-            app_password=GMAIL_APP_PASSWORD,
+            gmail_address=config.gmail_address,
+            app_password=config.gmail_app_password,
             since_dt=since_dt,
             dry_run=getattr(args, "dry_run", False),
-            api_key=ANTHROPIC_API_KEY,
+            api_key=config.anthropic_api_key,
         )
 
     elif args.command == "sources":
@@ -865,34 +869,34 @@ def main():
         run_sources(action, name)
 
     elif args.command == "feedback":
-        _validate_env(require_gmail=False)
+        _validate_env(config, require_gmail=False)
         action = getattr(args, "feedback_action", None)
         if action == "list":
             from .feedback import run_feedback_list
             run_feedback_list()
         else:
             from .feedback import run_feedback
-            run_feedback(api_key=ANTHROPIC_API_KEY)
+            run_feedback(api_key=config.anthropic_api_key)
 
     elif args.command == "debug":
-        _validate_env()
-        debug_emails()
+        _validate_env(config)
+        debug_emails(config=config)
 
     elif args.command == "report":
-        _validate_env()
+        _validate_env(config)
         from .report_cmd import run_report
         from .xlsx import TRACKER_PATH
         run_report(
             tracker_path=TRACKER_PATH,
-            gmail_address=GMAIL_ADDRESS,
-            app_password=GMAIL_APP_PASSWORD,
+            gmail_address=config.gmail_address,
+            app_password=config.gmail_app_password,
             output=getattr(args, "output", None),
             preview=not getattr(args, "send", False),
         )
 
     else:
         # Default: run the digest pipeline
-        _validate_env()
+        _validate_env(config)
         if args.lookback:
             since_dt = _parse_lookback(args.lookback)
             if not since_dt:
@@ -900,9 +904,10 @@ def main():
                       f"Try: '3d', '7d', '2026-05-10'")
                 raise SystemExit(1)
         else:
-            since_dt, label = _since_last_run()
+            since_dt, label = _since_last_run(config.default_lookback)
             log.info("Lookback window: %s", label)
-        run_pipeline(since_dt=since_dt, score_all=args.score_all, dry_run=args.dry_run)
+        run_pipeline(since_dt=since_dt, score_all=args.score_all, dry_run=args.dry_run,
+                     config=config)
 
 
 if __name__ == "__main__":

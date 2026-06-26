@@ -469,7 +469,6 @@ class TestPipelineScheduleRegression:
         from scorerole import pipeline
         monkeypatch.setattr(pipeline, "fetch_alerts", lambda since_dt, **kwargs: [])
         monkeypatch.setattr(pipeline, "load_seen_roles", lambda: set())
-        monkeypatch.setattr(pipeline, "ANTHROPIC_API_KEY", "sk-fake")
 
         import datetime
         import anthropic
