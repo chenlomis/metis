@@ -163,15 +163,51 @@ pytest tests/test_core.py tests/test_schedule.py -q    # fast pass (~60 tests, <
 
 ## Critical constraints
 
+### -1. Proactive source scrapes always use render.py format and role+location filtering
+
+**Any time a proactive career-page scrape runs** (scheduled, one-off, or test), two invariants must hold:
+
+1. **Filtering:** Use `_build_title_patterns(profile.target.roles)` for title matching and `_detect_country(profile.candidate.location)` for location matching. Only roles that pass both filters are passed to scoring. Do NOT bypass these even in one-off scripts — they prevent irrelevant roles from wasting API calls and polluting the digest.
+
+2. **Output format:** The output email MUST be rendered via `render_html()` from `render.py`. Never use a custom rendering path (paragraph summaries, "X/100" scores, 3+2 bullet format, or any ad-hoc HTML). `render_html()` calls `build_digest_html()` internally and produces the canonical format enforced by `tests/test_render_format.py`. The only acceptable caller is `render_html(scored_jobs, run_date, deal_breaker_count=n)`.
+
+These rules apply to one-off scripts (`proactive_sample.py`, etc.) as well as the main pipeline. A one-off that sends a differently formatted email is non-conformant.
+
 ### 0. render.py email format is locked — do not change without explicit request
 `build_digest_html()` and `_job_card()` in `render.py` produce the canonical digest format.
 The following are **intentional and must not be changed** unless the user explicitly asks to change the format:
 
+**Label text:**
 - Stat tile first label: `"Evaluated"` (not "Roles evaluated", not "Total evaluated")
-- Legend second dot: `"Caution / domain gap"` (not "Proceed with awareness")
-- Legend third dot: `"Hard blocker"` (not "Real concern")
+- Legend labels: `"Strengths"`, `"Caution"`, `"Blocker"` — exactly these words, no suffix
 - Score breakdown: `render_score_breakdown()` must NOT be called from `_job_card()` — the breakdown must not appear in email cards
-- Skipped section: flat 2-column table with `"Role · Company"` and `"Why Skipped"` column headers; role titles are hyperlinked
+- Skipped section: flat 2-column table; role titles are hyperlinked
+
+**Stat tile colors (updated June 27 — Solid match tile changed to green):**
+- Evaluated tile border: `#5F5E5A` (dark gray)
+- Solid match tile border: `#3B6D11` (green — matches Solid Match section header label color)
+- Moderate match tile border: `#854F0B` (amber)
+- Green (`#3B6D11`) is also used for section header bars and lever-point text
+
+**Legend dots — MUST use `<span>` wrapper, NOT bare `<td>` background:**
+- Gmail strips `border-radius` from `<td>` elements — dots render as squares without the span wrapper
+- Correct: `<td><span style="display:inline-block;width:8px;height:8px;background:X;border-radius:4px;font-size:0;line-height:0"></span></td>`
+- Wrong: `<td width="8" height="8" style="background:X;border-radius:4px">` — this causes square dots in Gmail
+
+**Section headers:** `font-size:14px` (not 13px) for SOLID MATCH / MODERATE MATCH headings
+
+**Skip rows (Limited Match section):**
+- Score pill: always gray (`#f5f5f3` background, `_C_MUTED` text) — never color-coded by score value
+- Role title link: `font-weight:400` (not 500 — not bold)
+
+**"View posting →" link in apply/consider job cards:**
+- Plain muted text link: `color:{_C_MUTED}`, no background, no border, no padding, no border-radius
+- Wrong: styled button with `background:{pill_bg};padding:5px 12px;border-radius:4px`
+
+**Greeting / header:**
+- Greeting is rendered as `<h1>` (22px, font-weight:600, color:#1f2118) + `<p>` subtitle (14px, muted)
+- There is NO separate `<h1>Personalized job alert digest</h1>` in the template body — that element was removed
+- `render_html()` must pass `greeting_sub` to `build_digest_html()`
 
 These constraints are enforced by `tests/test_render_format.py`. Run that test after any render.py change — a failure means the format regressed. Fix the regression, not the test.
 
@@ -182,8 +218,10 @@ These constraints are enforced by `tests/test_render_format.py`. Run that test a
 - Do NOT call `console.print()` from within an active InquirerPy prompt callback — it will corrupt the terminal cursor.
 - `Q_STYLE = QUESTIONARY_STYLE` is retained in `run_init()` only to pass to `schedule_cmd.py` via `_run_proactive_sources_wizard()`. It is not used for any prompts in `init_cmd.py` itself.
 
-### 2. Theme is the only place for colors
+### 2. Theme is the only place for colors and the shared console
 - All colors, styles, and questionary/InquirerPy style objects live in `scorerole/theme.py`.
+- `theme.py` exports `console = _BoundedConsole()` — a module-level singleton that clamps terminal width to [80, 100] columns. All modules import it as `from .theme import console`. Do NOT instantiate a local `Console()` anywhere else.
+- **Exception:** `schedule_cmd.py` uses `questionary` prompts directly and does not use `console`. This is intentional — leave as-is.
 - `init_cmd.py` imports `QUESTIONARY_STYLE`, `INQUIRER_STYLE`, `console`, and print helpers from theme. No hardcoded hex values anywhere else.
 - Light/dark detection: `SCOREROLE_THEME=light|dark` env var → `COLORFGBG` fallback → default dark.
 
@@ -210,8 +248,14 @@ The eval dict shape that `score.py` emits is consumed directly by `render.py`. T
 
 OSS users who want to customize the schema must change score.py prompt + render.py together. Neither file is standalone.
 
-### 6. state.py `_role_hash()` is a persisted key — do not change
-`_role_hash(title, company)` in `state.py` produces the dedup keys stored in `~/.job_pipeline/seen_roles.json`. Changing the hash function (normalization regex, algorithm, slice length) invalidates all historical keys — every previously seen role re-processes on the next run, causing a flood email. The current implementation (`md5(normalize(title+company))[:12]`) is intentional and sufficient — do not "improve" it.
+### 6. state.py `_role_hash()` — treat as stable; document intentional changes here
+`_role_hash(title, company)` in `state.py` produces the dedup keys stored in `~/.job_pipeline/seen_roles.json`. Changing the hash function invalidates historical keys — previously seen roles re-process on next run (flood risk). Only change with explicit user instruction and note the change here.
+
+**Current implementation (updated June 27):** `md5(normalize(title + _normalize_company(company)))[:12]`
+
+`_normalize_company()` strips trailing legal/branding suffixes before hashing: ` AI`, ` Inc`, ` Corp`, ` Ltd`, ` LLC`, ` Group`, ` Holdings`, ` Corporation`, ` Technologies`, ` Technology`, ` Co.` — so "NVIDIA AI" and "NVIDIA" produce the same hash.
+
+**One-time impact:** Existing seen_roles entries for companies whose names match a stripped suffix (e.g., "Scale AI") use the old un-normalized hash. Those entries become orphaned on the next run — affected roles may re-surface once, get re-scored and re-stored under the new normalized hash, then correctly deduplicated going forward. Bounded by the 30-day TTL.
 
 ### 7. tracker.py column order is a persisted xlsx schema — do not reorder or insert
 `_HEADERS` and `_COL_*` constants in `tracker.py` define the column layout of `applications.xlsx`. The file may contain months of history. **Column order must never change** without an explicit migration plan — inserting or reordering columns corrupts existing rows.

@@ -14,9 +14,17 @@ RUNS_PATH         = DATA_DIR / "runs.jsonl"            # per-job trace records w
 SKIPPED_TTL_DAYS = 90
 
 
+def _normalize_company(name: str) -> str:
+    """Strip trailing legal/branding suffixes so 'NVIDIA AI' and 'NVIDIA' hash identically."""
+    return re.sub(
+        r"\s+(ai|inc\.?|corp\.?|ltd\.?|llc|group|holdings|corporation|technologies?|co\.)$",
+        "", name.strip(), flags=re.IGNORECASE,
+    )
+
+
 def _role_hash(title: str, company: str) -> str:
     """Stable 12-char hash from normalized title + company."""
-    key = re.sub(r"[^a-z0-9]", "", (title + company).lower())
+    key = re.sub(r"[^a-z0-9]", "", (title + _normalize_company(company)).lower())
     return hashlib.md5(key.encode()).hexdigest()[:12]
 
 

@@ -1,175 +1,128 @@
 # Proactive source company list for scorerole.
 # ATS type and slug are used to call the public jobs API.
-# Tier drives which companies are included by default (S+A) vs. opt-in (B, C).
 # Title and location filtering is derived from the user's profile — not configured here.
 
 # ── Greenhouse companies ───────────────────────────────────────────────────────
 
 greenhouse_companies:
 
-  # S Tier
   - slug: anthropic
     name: Anthropic
-    tier: S
   - slug: airbnb
     name: Airbnb
-    tier: S
   - slug: airtable
     name: Airtable
-    tier: S
   - slug: wehrtyou
     name: Hudson River Trading
-    tier: S
-
-  # A Tier
   - slug: figma
     name: Figma
-    tier: A
   - slug: dropbox
     name: Dropbox
-    tier: A
-  - slug: pinterestjobadvertisements
+  - slug: pinterest
     name: Pinterest
-    tier: A
   - slug: roblox
     name: Roblox
-    tier: A
   - slug: robinhood
     name: Robinhood
-    tier: A
   - slug: instacart
     name: Instacart
-    tier: A
   - slug: brex
     name: Brex
-    tier: A
   - slug: coupang
     name: Coupang
-    tier: A
   - slug: databricks
     name: Databricks
-    tier: A
-
-  # B Tier
   - slug: datadog
     name: Datadog
-    tier: B
   - slug: cruise
     name: Cruise
-    tier: B
   - slug: waymo
     name: Waymo
-    tier: B
   - slug: discord
     name: Discord
-    tier: B
   - slug: optiverprivate
     name: Optiver
-    tier: B
   - slug: doordashusa
     name: DoorDash
-    tier: B
   - slug: imc
     name: IMC
-    tier: B
   - slug: nuro
     name: Nuro
-    tier: B
   - slug: scaleai
     name: Scale AI
-    tier: B
   - slug: block
     name: Block
-    tier: B
   - slug: asana
     name: Asana
-    tier: B
   - slug: samsara
     name: Samsara
-    tier: B
-
-  # C Tier
   - slug: twilio
     name: Twilio
-    tier: C
   - slug: andurilindustries
     name: Anduril
-    tier: C
   - slug: coinbase
     name: Coinbase
-    tier: C
   - slug: mongodb
     name: MongoDB
-    tier: C
   - slug: stripe
     name: Stripe
-    tier: C
   - slug: affirm
     name: Affirm
-    tier: C
   - slug: docusign
     name: DocuSign
-    tier: C
   - slug: boxinc
     name: Box
-    tier: C
   - slug: twitch
     name: Twitch
-    tier: C
   - slug: okta
     name: Okta
-    tier: C
   - slug: stubhubinc
     name: StubHub
-    tier: C
-  - slug: github
-    name: GitHub
-    tier: C
   - slug: gusto
     name: Gusto
-    tier: C
   - slug: lyft
     name: Lyft
-    tier: C
   - slug: hightouch
     name: Hightouch
-    tier: C
   - slug: rubrik
     name: Rubrik
-    tier: C
   - slug: coreweave
     name: CoreWeave
-    tier: C
   - slug: vercel
     name: Vercel
-    tier: C
 
 # ── Lever companies ────────────────────────────────────────────────────────────
 
-lever_companies:
-  - slug: atlassian
-    name: Atlassian
-    tier: C
+lever_companies: []
 
 # ── Ashby companies (require Playwright — Stage 2) ────────────────────────────
-# Included here for completeness; only scraped when playwright is available.
 
 ashby_companies:
   - slug: openai
     name: OpenAI
-    tier: S
   - slug: plaid
     name: Plaid
-    tier: A
   - slug: notion
     name: Notion
-    tier: B
   - slug: ramp
     name: Ramp
-    tier: B
   - slug: quora
     name: Quora
-    tier: C
   - slug: harvey
     name: Harvey
-    tier: C
+
+# ── Playwright companies (proprietary ATS — scraped directly from career page) ──
+# These companies don't expose a public jobs API.
+# careers_url: the job listings or search page; title and location filters still apply.
+
+playwright_companies:
+  - name: Atlassian
+    careers_url: https://www.atlassian.com/company/careers/all-jobs
+  - name: Apple
+    careers_url: https://jobs.apple.com/en-us/search
+  - name: Netflix
+    careers_url: https://jobs.netflix.com/search
+  - name: Google
+    careers_url: https://careers.google.com/jobs/results/
+  - name: GitHub
+    careers_url: https://www.github.careers/careers-home

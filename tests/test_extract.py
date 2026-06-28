@@ -330,7 +330,7 @@ class TestExtractJdStructs:
         client.messages.create.return_value = r
         result = extract_jd_structs(client, [_make_job()])
         assert len(result) == 1
-        assert result[0]["jd_quality"] == "blank"
+        assert result[0]["jd_quality"] == "extraction_failed"
 
     def test_invalid_struct_replaced_with_low_quality(self):
         """A struct missing required keys must be replaced — not passed downstream."""

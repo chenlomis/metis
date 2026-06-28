@@ -591,7 +591,7 @@ def main():
     )
 
     parser = argparse.ArgumentParser(
-        prog="scorerole",
+        prog="metis",
         description="AI-powered job alert digest — filters, scores, and delivers "
                     "only what's worth your time.",
     )
@@ -698,24 +698,35 @@ def main():
     # sources subcommand
     sources_p = subparsers.add_parser(
         "sources",
-        help="Manage company career-page sources.",
+        help="Manage job sources (email alerts + career-page scraping).",
         description=(
-            "View and manage the company career pages scorerole checks each run.\n\n"
-            "  scorerole sources              show active sources\n"
-            "  scorerole sources list         show active sources\n"
-            "  scorerole sources add Stripe   add a company by name\n"
-            "  scorerole sources remove       interactively remove companies\n"
-            "  scorerole sources on           enable company sources\n"
-            "  scorerole sources off          disable company sources"
+            "View and manage all sources scorerole monitors each run.\n\n"
+            "  scorerole sources                      show all sources\n"
+            "  scorerole sources email                list email alert sources\n"
+            "  scorerole sources email add            add an email alert source\n"
+            "  scorerole sources email remove         remove an email alert source\n"
+            "  scorerole sources add Stripe           add a career-page company\n"
+            "  scorerole sources remove               remove a career-page company\n"
+            "  scorerole sources on                   enable career-page scraping\n"
+            "  scorerole sources off                  disable career-page scraping"
         ),
     )
     sources_sub = sources_p.add_subparsers(dest="sources_action")
-    sources_sub.add_parser("list",   help="Show active sources.")
-    sources_add_p = sources_sub.add_parser("add",    help="Add a company by name.")
+    sources_sub.add_parser("list", help="Show all active sources.")
+
+    # email sub-subcommand
+    email_p   = sources_sub.add_parser("email", help="Manage email alert sources.")
+    email_sub = email_p.add_subparsers(dest="email_action")
+    email_sub.add_parser("list",   help="List email alert sources.")
+    email_sub.add_parser("add",    help="Add an email alert source (interactive).")
+    email_sub.add_parser("remove", help="Remove an email alert source (interactive).")
+
+    # company sub-subcommands
+    sources_add_p = sources_sub.add_parser("add",    help="Add a career-page company.")
     sources_add_p.add_argument("company_name", nargs="+", help="Company name to add.")
-    sources_sub.add_parser("remove", help="Interactively remove companies.")
-    sources_sub.add_parser("on",     help="Enable company sources.")
-    sources_sub.add_parser("off",    help="Disable company sources.")
+    sources_sub.add_parser("remove", help="Interactively remove a career-page company.")
+    sources_sub.add_parser("on",     help="Enable career-page scraping.")
+    sources_sub.add_parser("off",    help="Disable career-page scraping.")
 
     # feedback subcommand
     feedback_p = subparsers.add_parser(
@@ -863,10 +874,11 @@ def main():
 
     elif args.command == "sources":
         from .sources_cmd import run_sources
-        action = getattr(args, "sources_action", None)
-        name_parts = getattr(args, "company_name", None)
-        name = " ".join(name_parts) if name_parts else None
-        run_sources(action, name)
+        action       = getattr(args, "sources_action", None)
+        email_action = getattr(args, "email_action", None)
+        name_parts   = getattr(args, "company_name", None)
+        name         = " ".join(name_parts) if name_parts else None
+        run_sources(action, name, email_action=email_action)
 
     elif args.command == "feedback":
         _validate_env(config, require_gmail=False)

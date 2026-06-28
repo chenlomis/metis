@@ -223,9 +223,32 @@ Data stored locally in `~/.job_pipeline/` (outside the repo, never committed):
 
 ---
 
+## Proactive company sources
+
+In addition to reading LinkedIn alert emails, Metis proactively scrapes company career pages on every run. A curated list of **53 companies** is bundled — covering Greenhouse, Lever, Ashby, and proprietary ATS systems via Playwright:
+
+| ATS type | Count | How it works |
+|---|---|---|
+| Greenhouse | 46 | Public jobs API (`boards-api.greenhouse.io`) |
+| Ashby | 6 | Playwright headless browser scrape |
+| Playwright (proprietary) | 4 | Direct career-page scrape (Atlassian, Apple, Netflix, Google) |
+| Lever | 0 (reserved) | Public postings API |
+
+All companies are active by default. To exclude or add companies:
+
+```bash
+scorerole sources          # list all companies + status
+scorerole sources add <name>   # add a company (auto-detects ATS)
+scorerole sources remove       # interactive remove
+```
+
+Title and location filters are derived from your `profile.yaml` — only roles matching your `target.roles` list and your country (inferred from `candidate.location`) are passed to scoring. The company list itself is role-agnostic and works for any job function.
+
+**One-off runs against a custom company subset:** see `proactive_sample.py` in the repo root for an example of scraping a specific set of companies and sending a digest without touching the scheduled pipeline. Swap the `COMPANIES` list to target the companies you want; the script uses the same scoring and rendering path as the regular pipeline.
+
 ## Cost
 
-Scoring a typical 10-job batch costs approximately **$0.05–0.15** with `claude-sonnet-4-6`. Running `scorerole` daily on a typical alert volume (20–30 roles/week) costs roughly **$0.50–2.00/month** at current pricing.
+Scoring a typical 10-job batch from LinkedIn alerts costs approximately **$0.05–0.15** with `claude-sonnet-4-6`. Proactive scraping across all 53 companies typically surfaces 50–100 new roles per run (depending on lookback window) — a full run costs roughly **$0.25–0.45**. Running daily costs roughly **$5–12/month** at current pricing.
 
 **When more than `MAX_JOBS_PER_RUN` new roles are found** (default: 20), scorerole pauses and shows the count and estimated API cost before proceeding. You can score everything (Haiku pre-screens first to cut cost ~40–60%), or let it cap. Roles beyond the cap stay unseen and reappear next run — they are never silently discarded.
 
@@ -297,6 +320,42 @@ This happens when a stale `scorerole.egg-info/` directory exists from a previous
 rm -rf scorerole.egg-info
 pip install -e .
 ```
+
+**A company appeared in my LinkedIn notifications but not in my digest**
+
+LinkedIn has two separate channels: **email job alerts** (what scorerole reads) and **in-app push notifications** (what you see in the LinkedIn app's notification bell). These are different systems. Push notification types that do NOT produce emails:
+- "Company X is hiring. Apply today." — company page hiring announcements
+- "Results from the new AI-powered job search" — LinkedIn's in-app AI recommender
+- "Jobs similar to one you recently viewed" — recommendation engine
+
+Only saved job search alerts (from the bell icon on a search results page, set to Daily frequency) reliably produce emails. If a company you care about isn't generating email alerts, the proactive sources list is the right coverage mechanism — run `scorerole sources add <name>` to add it.
+
+**A specific role seems to be missing — I know it exists**
+
+Roles that were processed (even if filtered or skipped) are recorded in `~/.job_pipeline/seen_roles.json` with a 30-day TTL. Once a role is in that file, it won't reappear regardless of verdict. Two common causes:
+
+- The role was filtered by a hard gate (`jd_blank` — empty job description from the ATS API; `salary_floor` — disclosed salary below your floor). Run `scorerole --lookback 14d --dry-run` and check the log for `Gate filtered:` lines.
+- You ran the pipeline while your deal-breaker list had a mismatch, and the role got locked out before you corrected the profile.
+
+To re-evaluate a specific role without resetting everything, remove its hash from `seen_roles.json`:
+
+```python
+# Find the hash for a role and remove it
+import re, hashlib, json
+from pathlib import Path
+
+def role_hash(title, company):
+    key = re.sub(r"[^a-z0-9]", "", (title + company).lower())
+    return hashlib.md5(key.encode()).hexdigest()[:12]
+
+p = Path.home() / ".job_pipeline/seen_roles.json"
+data = json.loads(p.read_text())
+h = role_hash("Staff Product Manager", "Acme")
+data.pop(h, None)
+p.write_text(json.dumps(data, indent=2))
+```
+
+The role will reappear on the next run if LinkedIn resends it within the lookback window (or if it's in a proactive source company).
 
 **`scorerole: command not found` after install**
 

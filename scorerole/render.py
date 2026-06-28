@@ -338,7 +338,7 @@ def build_digest_html(jobs: List[JobDict], run_date: str, deal_breaker_count: in
         f'<tr>'
         f'{_stat_cell(len(jobs),    "Evaluated", "#5F5E5A")}'
         f'<td width="6">&nbsp;</td>'
-        f'{_stat_cell(len(apply),   "Solid match",    "#854F0B")}'
+        f'{_stat_cell(len(apply),   "Solid match",    "#3B6D11")}'
         f'<td width="6">&nbsp;</td>'
         f'{_stat_cell(len(consider),"Moderate match", "#854F0B")}'
         f'</tr></table>'

@@ -876,7 +876,7 @@ def _run_proactive_sources_wizard(profile: dict, Q_STYLE=None):
         log.debug("proactive sources not available (%s) — skipping wizard", e)
         return
 
-    n_curated = count_companies(["S", "A"])
+    n_curated = count_companies()
     target_roles = ", ".join(profile.get("target", {}).get("roles", ["your target role"]))
     already_enabled = profile.get("proactive_sources", {}).get("enabled", False)
 
@@ -900,7 +900,6 @@ def _run_proactive_sources_wizard(profile: dict, Q_STYLE=None):
     if answer:
         profile["proactive_sources"] = {
             "enabled": True,
-            "tiers": ["S", "A"],
             "extra_companies": profile.get("proactive_sources", {}).get("extra_companies", []),
             "exclude_companies": profile.get("proactive_sources", {}).get("exclude_companies", []),
         }

@@ -142,7 +142,9 @@ def _extract_chunk(client: anthropic.Anthropic, jobs: list[dict],
         return [s if _is_valid_struct(s) else {**_BLANK_STRUCT, "jd_quality": "low"} for s in structs]
     except (json.JSONDecodeError, ValueError) as exc:
         log.warning("Extraction JSON parse failed (%s) — using blank structs for %d jobs", exc, len(jobs))
-        return [dict(_BLANK_STRUCT) for _ in jobs]
+        # Use "extraction_failed" not "blank" — JD content may exist; only "blank" triggers
+        # the jd_blank hard gate in check_hard_gates(). Scoring proceeds without grounding.
+        return [{**dict(_BLANK_STRUCT), "jd_quality": "extraction_failed"} for _ in jobs]
 
 
 def extract_jd_structs(client: anthropic.Anthropic, jobs: list[dict],

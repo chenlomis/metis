@@ -3,12 +3,12 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "scorerole"
-version = "0.1.0"
-description = "Personalized job alert digest — filters, scores, and delivers only what's worth your time"
+name = "metis-job"
+version = "0.2.0"
+description = "AI-powered job alert digest — filters, scores, and delivers only what's worth your time"
 requires-python = ">=3.11"
 dependencies = [
-    "anthropic",
+    "anthropic>=0.40",
     "httpx",
     "beautifulsoup4",
     "python-dotenv",
@@ -18,12 +18,16 @@ dependencies = [
     "pdfplumber",
     "questionary>=2.0",
     "rich>=13.0",
+    "openpyxl>=3.1",
+    "requests",
+    "InquirerPy>=0.3.4",
 ]
 
 [project.scripts]
-scorerole = "scorerole.pipeline:main"
+metis = "scorerole.pipeline:main"
 
 [project.optional-dependencies]
+browser = ["playwright>=1.40"]
 dev = ["pytest>=8.0"]
 
 [tool.setuptools.packages.find]

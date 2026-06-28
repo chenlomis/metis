@@ -73,6 +73,15 @@ Proactive jobs (Greenhouse/Lever API) arrive with JD pre-fetched. `enrich_jobs()
 **D-18 · Company list (companies.yml) is role-agnostic; title/location filtering derived from profile**
 The company list is a curated set of employers worth watching. Which roles to surface is derived from `profile.target.roles` (title patterns) and `profile.candidate.location` (country-level filter). This means the same companies.yml works for any job function — PM, SWE, design, etc.
 
+**D-48 · No tier system — all companies in companies.yml are active by default (June 2026)**
+The original S/A/B tier annotation limited runs to 15 of 50 companies. Tiers were removed: all companies in companies.yml are active unless explicitly excluded via `proactive_sources.exclude_companies` in `profile.yaml`. This gives full coverage across all 53 companies (46 Greenhouse, 6 Ashby, 4 Playwright) on every run. The tier field no longer exists in companies.yml or in profile.proactive_sources. Individual companies can still be excluded via `scorerole sources remove`.
+
+**D-49 · Title filter strips level prefix for broader recall (June 2026)**
+`_build_title_patterns()` in `proactive.py` generates two tiers: level-qualified patterns (e.g. "staff product manager") and base-role patterns without the level prefix (e.g. "product manager"). This ensures companies that don't level-prefix their titles (Anthropic, OpenAI, GitHub, etc.) still surface matching roles. The level-fit evaluation happens downstream in scoring, not at the title-filter stage.
+
+**D-50 · playwright_companies section for proprietary-ATS companies (June 2026)**
+Companies that don't expose a public Greenhouse/Lever/Ashby API are scraped via Playwright headless Chromium. They live in a `playwright_companies:` block in companies.yml with a `careers_url` field (the job listings or search page). Initial entries: Atlassian, Apple, Netflix, Google. The same title and location filters apply; location is extracted from the JD body by the scoring layer since Playwright scrapes don't return structured location fields.
+
 ---
 
 ## Interface & extensibility
@@ -147,6 +156,44 @@ Several modules call `os.getenv()` at import time (score.py, extract.py, linkedi
 
 **D-29 · Employer-lens scoring: deferred**
 Rejection patterns (applied to roles → got rejected) could indicate a mismatch between self-assessment and employer assessment. Adding an employer lens to scoring is a later concern — it requires enough track data to be meaningful and risks producing confident wrong signals on thin data. Address after `scorerole report` surfaces the pattern clearly.
+
+---
+
+## System diagram & documentation
+
+**D-51 · System overview diagram uses a 5-color visual language (June 2026)**
+The Mermaid flowchart in `ARCHITECTURE.md § 1. System Overview` uses a consistent semantic color system so component roles are scannable without reading labels:
+- **Blue** = user-provided data (resume, profile answers, feedback text the user types)
+- **Purple** = external sources being fetched from (LinkedIn alerts, career site APIs)
+- **Amber + ✦** = AI processing nodes (AI Scorer, `metis feedback` which calls Haiku)
+- **Gray** = file artifacts (profile.yaml, seen_roles.json, runs.jsonl, etc.)
+- **Green** = deliverables/outputs that reach the user (email digest, summary report)
+- **Commands** = monospace `[metis ...]` text labels on arrows, NOT boxes — commands are verbs (actions), not nouns (components), so they annotate the edge that performs them.
+
+`metis summary` does NOT get the ✦ marker — it reads files and aggregates stats but makes no AI calls.
+
+**D-52 · System overview diagram abstracts away model names; keeps 5-zone structure**
+The overview uses "AI Scorer" as the unit, not "Haiku" / "Sonnet". The two-pass architecture (Haiku extract → Sonnet score) is detailed in `§ 3. Scoring Pipeline (deep dive)`. Exposing model names in the overview would couple the diagram to the current model selection, which may change without changing the architecture.
+
+The five zones (SETUP / INPUTS / PIPELINE / OUTPUTS / USER LOOP) map 1:1 to the five `### N.` subsections that follow the diagram, giving readers a clear navigation path from overview to detail.
+
+**D-53 · Artifact map is the canonical reference for file read/write relationships**
+`ARCHITECTURE.md § Data Files` contains a "What writes what" table mapping each runtime file to its writer and reader. Key non-obvious entries:
+- `seen_roles.json` is bidirectional with AI Scorer: read first (dedup gate), written after scoring
+- `runs.jsonl` is the data source for `metis summary` (NOT `applications.xlsx`)
+- `last_run.json` is written by AI Scorer and read by `metis feedback` (for run context display)
+- `feedback_log.jsonl` is written by `metis feedback` but never read back (audit trail only)
+- Capped roles (pre-scoring cap, staged to `role_queue.json`) are NOT written to `seen_roles.json` — they reappear next run
+- Hard-gate filtered roles (`jd_blank`, `salary_floor`, deal-breakers) ARE written to `seen_roles.json` (same as scored roles) — they will NOT reappear unless manually removed
+
+**D-54 · `jd_quality: "extraction_failed"` must NOT trigger the `jd_blank` hard gate**
+`check_hard_gates()` in `extract.py` fires `jd_blank` only when `jd_quality == "blank"`. There are three distinct values:
+- `"blank"` — Haiku received empty JD text; truly no content to score. Gate fires → `verdict="filtered"`.
+- `"low"` — Haiku received JD text but rated it low quality (e.g., stub or duplicate boilerplate). Gate does not fire; Sonnet scores with caution.
+- `"extraction_failed"` — Haiku received a full JD but its output failed JSON parse. Gate must NOT fire — the JD content exists and Sonnet can score directly from the raw text without extraction grounding.
+
+Root cause this fixed (June 28): `_extract_chunk()` fell back to `dict(_BLANK_STRUCT)` on JSON parse errors. `_BLANK_STRUCT` has `jd_quality: "blank"` hardcoded → gate fired even for 15K-char JDs. Fix: fallback now returns `{**_BLANK_STRUCT, "jd_quality": "extraction_failed"}`.
+Enforced by: `TestHardGates` in `tests/test_core.py`.
 
 ---
 

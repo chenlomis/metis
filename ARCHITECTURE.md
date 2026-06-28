@@ -11,7 +11,86 @@ of 3–8 roles worth acting on.
 
 ---
 
-## Pipeline Flow
+## How It Works
+
+Metis has three phases that repeat across your job search: **one-time setup**, the
+**scoring pipeline** (runs on demand or on a schedule), and the **user loop** where
+you act on digest results and calibrate scoring over time.
+
+### 1. System Overview
+
+```mermaid
+flowchart TD
+    subgraph SETUP["⚙️  One-time setup"]
+        INIT[metis init\nwizard] -->|generates| PROFILE["profile.yaml\n~/.job_pipeline/"]
+        INIT -.->|optional| SCHED["metis schedule set\nlaunchd · cron"]
+    end
+
+    subgraph INPUTS["📬  On every run"]
+        LI["LinkedIn alert emails\n(3 sender types)"]
+        EA["Other alert emails\nWaymo · GitHub · …\n(opt-in via metis sources email add)"]
+    end
+
+    subgraph PIPELINE["🧠  Scoring pipeline"]
+        SRC["sources/\nIMAP fetch · parse · 3-layer dedup · enrich JD"]
+        EX["Haiku extract\n27 structured fields per JD"]
+        SC["Sonnet score\n6-dimension rubric + feedback calibration"]
+        RK["rank_jobs()\napply · consider · skip"]
+        SRC --> EX --> SC --> RK
+    end
+
+    subgraph OUTPUTS["📤  Outputs"]
+        DIGEST["Email digest\nranked HTML via Gmail SMTP"]
+        XLSX["applications.xlsx\nApply + Consider rows appended"]
+        RUNJSONL["runs.jsonl\nscoring trace (every job, all verdicts)"]
+    end
+
+    subgraph LOOP["🔄  User loop"]
+        USER(("You"))
+        TRACK["metis track\nparse confirm/reject emails\n→ update xlsx status"]
+        FB["~/.job_pipeline/feedback.md\nfree-text calibration notes"]
+        RPT["metis summary\npipeline report: funnel stats,\nverdict accuracy, recent activity"]
+    end
+
+    PROFILE --> SRC
+    LI & EA --> SRC
+    SCHED -.->|triggers| SRC
+    RK --> DIGEST
+    RK --> XLSX
+    RK --> RUNJSONL
+    DIGEST --> USER
+    USER -->|"applies → confirmation emails arrive"| TRACK
+    TRACK -->|"status: Applied · Interviewing · Rejected"| XLSX
+    RUNJSONL --> RPT
+    RPT --> USER
+    USER -->|"metis feedback"| FB
+    FB -.->|"injected into system prompt\non every scoring run"| SC
+```
+
+The five boxes above map to the five sections that follow.
+
+---
+
+### 2. Setup & Profile
+
+`metis init` is a re-runnable wizard that builds `~/.job_pipeline/profile.yaml` —
+the single source of truth for all scoring. It covers:
+
+- **Who you are** — current role, years of experience, top skills
+- **What you're targeting** — role titles, seniority, domains, work model preferences
+- **Hard filters** — deal-breakers, minimum compensation, excluded locations
+- **Score thresholds** — what score counts as "apply" vs "consider" vs "skip"
+
+The profile is sent as a cached system prompt block on every Sonnet call. Claude reads
+it as context — free-text fields work without code changes; structured fields (thresholds,
+deal-breakers) are also read directly in `pipeline.py` and `score.py`.
+
+`metis schedule set` installs a launchd user agent (macOS) or crontab entry (Linux)
+so the pipeline fires automatically at your chosen cadence without any manual trigger.
+
+---
+
+### 3. Scoring Pipeline (deep dive)
 
 ```
 Gmail (IMAP)
@@ -42,7 +121,7 @@ sources/linkedin.py — enrich_jobs()
     │ extracts external ATS URL (Greenhouse/Lever/Ashby) from applyAction
     │ retries 3x with exponential backoff on 429/5xx/timeout
     ▼
-extract.py — extract_jd_structs()          ← Layer 1 (NEW)
+extract.py — extract_jd_structs()          ← Layer 1 (Haiku)
     │ Haiku call at temperature=0 per chunk (≤10 jobs/chunk)
     │ extracts 27 structured fields: salary, work model, domain, seniority,
     │   degree req, visa, company stage, customer type, culture signals, etc.
@@ -53,7 +132,7 @@ extract.py — check_hard_gates()
     │ salary_floor:     disclosed salary_max < floor*0.9 → filtered
     │ (all other gates handled by Layer 2 — require nuanced judgment)
     ▼
-score.py — score_jobs_batch()
+score.py — score_jobs_batch()              ← Layer 2 (Sonnet)
     │ Sonnet call on gate-surviving jobs only (cost savings)
     │ each job block includes [EXTRACTED CONTEXT] from Layer 1
     │ profile as cached system prompt; explicit 6-dimension rubric
@@ -80,10 +159,35 @@ tracker.py — write_to_tracker()
     │ deduped by normalized title+company key; sorts by date descending
 ```
 
-### Feedback calibration flow (separate from pipeline)
+---
+
+### 4. Tracker & Report
+
+`applications.xlsx` is the central state store for your job application funnel.
+It is written by the pipeline and read by reporting — never edited manually.
+
+**On every pipeline run** — `tracker.py` appends new Apply + Consider roles. Rows are
+deduped by normalized `title + company` so re-scoring doesn't create duplicates.
+Column order is frozen (see `CLAUDE.md` constraint) — downstream tools (Numbers, Excel)
+depend on it.
+
+**After you apply** — confirmation and rejection emails arrive in Gmail. `metis track`
+parses them (via `track.py`) and updates the matching row's status column:
+`Applied → Interviewing → Offer / Rejected`. This closes the loop between what metis
+recommended and what you actually did.
+
+**`metis summary`** — reads `runs.jsonl` (not `applications.xlsx`) and produces a pipeline
+report covering: funnel conversion rates (apply/consider/skip/filtered breakdown), verdict
+accuracy vs. actual behavior, source breakdown, and recent activity timeline. `runs.jsonl`
+contains every job regardless of verdict, which is what makes funnel stats possible —
+`applications.xlsx` only has Apply + Consider rows. Requires at least a few runs of data.
+
+---
+
+### 5. Feedback Loop (deep dive)
 
 ```
-scorerole feedback
+metis feedback
     │ load last_run.json → display last digest summary
     │ collect free-form text (blank line to finish)
     ▼
@@ -107,6 +211,10 @@ score.py — build_score_system()
     │ injected as CANDIDATE CALIBRATION FEEDBACK block in Sonnet system prompt
     │ cached with system prompt — zero marginal cost per role
 ```
+
+Key design choice: **no silent auto-calibration.** Feedback is always explicit and
+user-initiated. The pipeline never auto-adjusts thresholds based on behavior —
+it only incorporates text you explicitly wrote via `metis feedback`.
 
 ---
 
@@ -261,11 +369,39 @@ Dev-only env vars (never put in `.env`):
 
 ```
 ~/.job_pipeline/
-  profile.yaml       — structured candidate profile (generated by scorerole init)
-  seen_roles.json    — {role_hash: iso_timestamp} — 30-day TTL dedup store
+  profile.yaml          — candidate profile (written by scorerole init; read every run by AI Scorer)
+  seen_roles.json       — {role_hash: iso_timestamp} 30-day TTL; read before scoring (dedup gate),
+                          written after scoring (only scored roles — capped/filtered are NOT written
+                          so they reappear in future runs)
+  runs.jsonl            — append-only scoring trace; one JSON line per job per run, every verdict
+                          (apply/consider/skip/filtered/prescreened); read by scorerole summary
+  last_run.json         — summary of most recent run (job count, verdicts, run_id);
+                          written by pipeline, read by scorerole feedback for run context
+  applications.xlsx     — job tracker; Apply + Consider rows written by pipeline,
+                          status updated by scorerole track; NOT read by scorerole summary
+  feedback.md           — free-text calibration notes; written by scorerole feedback,
+                          injected into Sonnet system prompt on every scoring run (no TTL)
+  feedback_log.jsonl    — audit trail for feedback entries (never injected into prompts)
+  schedule.json         — active schedule config (written by scorerole schedule set)
+  email_sources.yaml    — user-configured non-LinkedIn email alert sources
+                          (written by scorerole sources email add; read by IMAP fetch)
   logs/YYYY-MM-DD.log
-  debug_email.txt    — written by scorerole debug
+  debug_email.txt       — written by scorerole debug
 ```
+
+**What writes what (artifact map):**
+
+| Artifact | Written by | Read by |
+|---|---|---|
+| `profile.yaml` | `scorerole init` (Haiku extracts from resume) | AI Scorer (every run, as system prompt) |
+| `seen_roles.json` | AI Scorer (after scoring, scored roles only) | AI Scorer (before scoring, dedup gate) |
+| `runs.jsonl` | AI Scorer (`trace.py`, every job every run) | `scorerole summary` |
+| `last_run.json` | AI Scorer (end of each run) | `scorerole feedback` (run context) |
+| `applications.xlsx` | AI Scorer (Apply+Consider) + `scorerole track` (status) | not read by pipeline |
+| `feedback.md` | `scorerole feedback` | AI Scorer (injected into Sonnet system prompt) |
+| `feedback_log.jsonl` | `scorerole feedback` | audit trail only, never read back |
+| `email_sources.yaml` | `scorerole sources email add` | IMAP fetch (which senders to pull) |
+| `schedule.json` | `scorerole schedule set` | `scorerole schedule` (status display) |
 
 **File permissions:** `~/.job_pipeline/` is created with `mode=0o700` (owner-only directory).
 `profile.yaml` and `seen_roles.json` are created with `mode=0o600` (owner-only read/write).
@@ -345,8 +481,8 @@ scorerole schedule remove   # unload OS job, delete plist + schedule.json
 {
   "frequency":     "twice_weekly",
   "time":          "08:00",
-  "scorerole_bin": "/Users/lomischen/job-alert-pipeline/venv/bin/scorerole",
-  "working_dir":   "/Users/lomischen/job-alert-pipeline",
+  "metis_bin":   "~/.local/bin/metis",
+  "working_dir": "~/.job_pipeline",
   "installed_at":  "2026-06-15T08:00:00",
   "platform":      "Darwin"
 }

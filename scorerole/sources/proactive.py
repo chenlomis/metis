@@ -133,9 +133,21 @@ _DEFAULT_EXCLUDE = [
 ]
 
 
+_LEVEL_PREFIXES = {
+    "staff", "senior", "sr", "sr.", "principal", "lead", "junior", "jr",
+    "associate", "founding", "head", "director", "group",
+}
+
+
 def _build_title_patterns(target_roles: list[str]) -> tuple[list[str], list[str]]:
-    """Derive (include_patterns, exclude_patterns) from profile target.roles."""
-    # Expand common abbreviations
+    """Derive (include_patterns, exclude_patterns) from profile target.roles.
+
+    Generates two tiers of patterns per role:
+      1. Level-qualified (e.g. "staff product manager") — precise match
+      2. Base role without level prefix (e.g. "product manager") — broader recall
+         so companies that don't level-prefix their titles (Anthropic, OpenAI, etc.)
+         still surface in search. The scoring step handles level-fit afterwards.
+    """
     _EXPANSIONS = {
         "pm": ["product manager", "pm"],
         "swe": ["software engineer", "swe", "software developer"],
@@ -146,16 +158,34 @@ def _build_title_patterns(target_roles: list[str]) -> tuple[list[str], list[str]
     }
 
     include = []
+
+    def _add(pattern: str):
+        if pattern not in include:
+            include.append(pattern)
+
     for role in target_roles:
         r = role.lower().strip()
-        include.append(r)
-        # Add expansions for known abbreviations in the role string
+        _add(r)
+        # Level-qualified expansions (e.g. "staff pm" → "staff product manager")
         for abbr, expansions in _EXPANSIONS.items():
             if abbr in r.split():
                 for exp in expansions:
-                    candidate = r.replace(abbr, exp)
-                    if candidate not in include:
-                        include.append(candidate)
+                    _add(r.replace(abbr, exp))
+
+        # Strip leading level prefix to get base role, then add base expansions.
+        # "Staff PM" → base "pm" → adds "product manager", "pm"
+        # This ensures roles titled "Product Manager, X" at companies that don't
+        # use level prefixes still pass the title filter.
+        words = r.split()
+        while words and words[0] in _LEVEL_PREFIXES:
+            words = words[1:]
+        base = " ".join(words)
+        if base and base != r:
+            _add(base)
+            for abbr, expansions in _EXPANSIONS.items():
+                if abbr in base.split():
+                    for exp in expansions:
+                        _add(base.replace(abbr, exp))
 
     return include or ["product manager"], _DEFAULT_EXCLUDE
 
@@ -240,6 +270,7 @@ def _scrape_greenhouse(
         rh = _role_hash(title, name)
         if rh in seen_hashes:
             continue
+        seen_hashes.add(rh)
 
         jd = "\n\n".join(p for p in [title, location, _strip_html(job.get("content", ""))] if p)
         matches.append({
@@ -306,6 +337,7 @@ def _scrape_lever(
         rh = _role_hash(title, name)
         if rh in seen_hashes:
             continue
+        seen_hashes.add(rh)
 
         parts = [
             title, location,
@@ -364,12 +396,12 @@ def _playwright_fallback(
 
 
 def _guess_careers_url(company: dict):
+    if company.get("careers_url"):
+        return company["careers_url"]
     ats  = company.get("ats", "")
     slug = company.get("slug", "")
     if ats == "ashby":
         return f"https://jobs.ashbyhq.com/{slug}"
-    if ats == "workday":
-        return company.get("careers_url")  # must be set explicitly in yml for Workday
     return None
 
 
@@ -419,6 +451,7 @@ def _playwright_scrape(
                 rh = _role_hash(title_text, name)
                 if rh in seen_hashes:
                     continue
+                seen_hashes.add(rh)
 
                 # Fetch individual JD page for body text
                 jd_text = _fetch_jd_page(context, full_url)
@@ -504,19 +537,20 @@ def _load_companies_yml() -> dict:
         return yaml.safe_load(f)
 
 
-def count_companies(tiers: list[str]) -> int:
-    """Return how many companies are in the given tiers (for init display)."""
+def count_companies() -> int:
+    """Return total number of companies across all sources."""
     cfg = _load_companies_yml()
-    tier_set = set(tiers)
-    gh = [c for c in cfg.get("greenhouse_companies", []) if c.get("tier") in tier_set]
-    lv = [c for c in cfg.get("lever_companies", []) if c.get("tier") in tier_set]
-    ash = [c for c in cfg.get("ashby_companies", []) if c.get("tier") in tier_set]
-    return len(gh) + len(lv) + len(ash)
+    return (
+        len(cfg.get("greenhouse_companies", []))
+        + len(cfg.get("lever_companies", []))
+        + len(cfg.get("ashby_companies", []))
+        + len(cfg.get("playwright_companies", []))
+    )
 
 
-def estimate_monthly_cost(tiers: list[str]) -> str:
-    """Rough monthly cost estimate for proactive scraping at given tiers."""
-    n = count_companies(tiers)
+def estimate_monthly_cost() -> str:
+    """Rough monthly cost estimate for proactive scraping."""
+    n = count_companies()
     # ~2 new roles/company/week, ~50% pass pre-screen, $0.015/role scored, 4 weeks/month
     roles_per_month = n * 2 * 4
     scored = roles_per_month * 0.5
@@ -535,7 +569,6 @@ def fetch_proactive(profile: dict, seen_hashes: set) -> "list[dict]":
     if not ps.get("enabled", True):
         return []
 
-    tiers = set(ps.get("tiers", ["S", "A"]))
     extra = ps.get("extra_companies", []) or []
     exclude_names = {n.lower() for n in (ps.get("exclude_companies", []) or [])}
     lookback_days = ps.get("lookback_days", DEFAULT_LOOKBACK_DAYS)
@@ -549,14 +582,12 @@ def fetch_proactive(profile: dict, seen_hashes: set) -> "list[dict]":
     cfg = _load_companies_yml()
 
     def _keep(company: dict) -> bool:
-        return (
-            company.get("tier") in tiers
-            and company.get("name", "").lower() not in exclude_names
-        )
+        return company.get("name", "").lower() not in exclude_names
 
     gh_companies  = [c for c in cfg.get("greenhouse_companies", []) if _keep(c)]
     lv_companies  = [c for c in cfg.get("lever_companies", []) if _keep(c)]
     ash_companies = [c for c in cfg.get("ashby_companies", []) if _keep(c)]
+    pw_companies  = [c for c in cfg.get("playwright_companies", []) if _keep(c)]
 
     # User-added companies: [{name, ats, slug}]
     for co in extra:
@@ -600,5 +631,18 @@ def fetch_proactive(profile: dict, seen_hashes: set) -> "list[dict]":
             log.warning(f"proactive: {co['name']} (ashby) — unexpected error: {e}")
             _record_company_result(co["name"], success=False)
 
-    log.info(f"proactive: total {len(results)} new roles across {len(gh_companies)+len(lv_companies)+len(ash_companies)} companies")
+    for co in pw_companies:
+        try:
+            jobs = _playwright_fallback(co, include, excl, target_country, lookback_days, seen_hashes)
+            _record_company_result(co["name"], success=True)
+            results.extend(jobs)
+            log.info(f"proactive: {co['name']} (playwright) — {len(jobs)} new roles")
+        except Exception as e:
+            log.warning(f"proactive: {co['name']} (playwright) — unexpected error: {e}")
+            _record_company_result(co["name"], success=False)
+
+    total_companies = (
+        len(gh_companies) + len(lv_companies) + len(ash_companies) + len(pw_companies)
+    )
+    log.info(f"proactive: total {len(results)} new roles across {total_companies} companies")
     return results

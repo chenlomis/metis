@@ -338,9 +338,21 @@ def _build_score_suffix(name: str, apply_t: int, consider_t: int) -> str:
                                Default each to 50 when absent (neutral, no penalty).
                                Compare against the candidate's stated company_types and aspirations.
 
-  domain_background   (0.15)  How native is the candidate's background to this domain?
-                               native(100) → adjacent(70) → tangential(40) → foreign(10).
+  domain_background   (0.15)  Does this role require niche domain expertise the candidate demonstrably lacks?
+                               Score by how much the DOMAIN BARRIER (not just industry preference) costs real effectiveness:
+                               100 — native domain (AI infra, dev tools, enterprise SaaS, platform/infra PM); or any domain
+                                     where general PM skills transfer without meaningful loss.
+                               70  — adjacent domain (B2C consumer, fintech, productivity, marketplace); PM fundamentals
+                                     apply, domain knowledge is learnable on the job. This is the DEFAULT when domain
+                                     is ambiguous — do NOT penalize the absence of industry_targets match alone.
+                               40  — regulated/compliance domain requiring specific credential knowledge the candidate
+                                     doesn't hold: healthcare (HIPAA/FDA clearance), financial regulation (SEC/FINRA),
+                                     automotive safety (ISO 26262), defense/GovTech (clearance, ITAR).
+                               10  — hard technical niche with mandatory domain credentials clearly absent
+                                     (e.g., clinical pharmacology, nuclear safety, air traffic control).
                                Use extracted customer_type, product_surface, industry as signal.
+                               Positive industry_targets (AI infra, dev tools) signal what the candidate PREFERS —
+                               they do NOT make all other domains a penalty. Only regulate compliance barriers score low.
 
   company_stage       (0.10)  Does the company stage match the candidate's stated preference?
                                Use extracted company_stage and company_tier.

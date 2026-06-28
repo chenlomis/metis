@@ -25,3 +25,5 @@ private/
 # Logs
 *.log
 scorerole.egg-info/
+metis_job.egg-info/
+scorerole.egg-info/

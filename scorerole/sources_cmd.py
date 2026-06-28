@@ -10,8 +10,6 @@ Commands:
 """
 from __future__ import annotations
 
-from __future__ import annotations
-
 import logging
 import re
 import time
@@ -20,7 +18,10 @@ from pathlib import Path
 import requests
 import yaml
 
-from .theme import THEME
+from rich import box as rich_box
+from rich.table import Table
+
+from .theme import THEME, console
 
 log = logging.getLogger(__name__)
 
@@ -142,28 +143,43 @@ def resolve_company(name: str) -> dict | None:
 # ── Display helpers ───────────────────────────────────────────────────────────
 
 def _ats_label(ats: str) -> str:
-    return {"greenhouse": "Greenhouse", "lever": "Lever", "ashby": "Ashby"}.get(ats, ats)
+    return {"greenhouse": "Greenhouse", "lever": "Lever", "ashby": "Ashby", "playwright": "Playwright"}.get(ats, ats)
+
+
+def _print_email_section() -> None:
+    """Print the email alert sources section (built-in + user-configured)."""
+    from .email_sources_cmd import _BUILTIN
+    from .sources.email_alerts import load_email_sources, format_label, detect_format
+
+    user_sources = load_email_sources()
+    all_rows = _BUILTIN + user_sources
+
+    console.print("  [bold]Email alerts[/bold]")
+    table = Table(box=rich_box.SIMPLE, show_header=False, padding=(0, 1))
+    table.add_column("Company", style="dim",  min_width=14)
+    table.add_column("Sender",  style="dim",  min_width=38)
+    table.add_column("Status",  min_width=10)
+
+    for row in all_rows:
+        status = "[dim]built-in[/dim]" if row.get("builtin") else f"[{THEME['success']}]active[/]"
+        table.add_row(row["company"], row["sender"], status)
+
+    console.print(table)
+    console.print(
+        "  [dim]scorerole sources email add     add an email source[/dim]\n"
+    )
 
 
 def _print_sources(cfg: dict, profile: dict):
-    try:
-        from rich.console import Console
-        from rich.table import Table
-        from rich import box as rich_box
-        console = Console()
-    except ImportError:
-        _print_sources_plain(cfg, profile)
-        return
+    console.print()
+    _print_email_section()
 
     ps = profile.get("proactive_sources", {})
-    enabled = ps.get("enabled", False)
-    tiers   = set(ps.get("tiers", ["S", "A"]))
-    extras  = {e["name"].lower() for e in (ps.get("extra_companies") or [])}
+    enabled  = ps.get("enabled", False)
     excludes = {n.lower() for n in (ps.get("exclude_companies") or [])}
 
     status_str = f"[{THEME['success']}]enabled[/]" if enabled else "[dim]disabled[/dim]"
-    console.print()
-    console.print(f"  Company sources: {status_str}")
+    console.print(f"  [bold]Career page scraping[/bold]  {status_str}")
     if not enabled:
         console.print("  [dim]Run `scorerole sources on` to enable.[/dim]")
         console.print()
@@ -177,20 +193,20 @@ def _print_sources(cfg: dict, profile: dict):
         [(c, "greenhouse") for c in cfg.get("greenhouse_companies", [])]
         + [(c, "lever")      for c in cfg.get("lever_companies", [])]
         + [(c, "ashby")      for c in cfg.get("ashby_companies", [])]
+        + [(c, "playwright") for c in cfg.get("playwright_companies", [])]
     )
 
-    curated_shown = False
     for co, ats in sorted(all_companies, key=lambda x: x[0]["name"].lower()):
         name_lower = co["name"].lower()
         if name_lower in excludes:
             table.add_row(co["name"], _ats_label(ats), "[dim]excluded[/dim]")
-        elif co.get("tier") in tiers:
-            if not curated_shown:
-                curated_shown = True
-            table.add_row(co["name"], _ats_label(ats), f"[{THEME['success']}]active[/]" if enabled else "[dim]inactive[/dim]")
+        else:
+            table.add_row(co["name"], _ats_label(ats),
+                          f"[{THEME['success']}]active[/]" if enabled else "[dim]inactive[/dim]")
 
     for extra in (ps.get("extra_companies") or []):
-        table.add_row(extra["name"], _ats_label(extra.get("ats", "")), f"[{THEME['accent']}]added[/]" if enabled else "[dim]inactive[/dim]")
+        table.add_row(extra["name"], _ats_label(extra.get("ats", "")),
+                      f"[{THEME['accent']}]added[/]" if enabled else "[dim]inactive[/dim]")
 
     console.print(table)
     console.print(
@@ -203,7 +219,6 @@ def _print_sources(cfg: dict, profile: dict):
 def _print_sources_plain(cfg: dict, profile: dict):
     ps = profile.get("proactive_sources", {})
     enabled = ps.get("enabled", False)
-    tiers   = set(ps.get("tiers", ["S", "A"]))
     excludes = {n.lower() for n in (ps.get("exclude_companies") or [])}
 
     print(f"\nCompany sources: {'enabled' if enabled else 'disabled'}\n")
@@ -211,15 +226,14 @@ def _print_sources_plain(cfg: dict, profile: dict):
         [(c, "greenhouse") for c in cfg.get("greenhouse_companies", [])]
         + [(c, "lever")      for c in cfg.get("lever_companies", [])]
         + [(c, "ashby")      for c in cfg.get("ashby_companies", [])]
+        + [(c, "playwright") for c in cfg.get("playwright_companies", [])]
     )
     for co, ats in sorted(all_companies, key=lambda x: x[0]["name"].lower()):
         name_lower = co["name"].lower()
         if name_lower in excludes:
             status = "excluded"
-        elif co.get("tier") in tiers:
-            status = "active" if enabled else "inactive"
         else:
-            continue
+            status = "active" if enabled else "inactive"
         print(f"  {co['name']:<25} {_ats_label(ats):<12} {status}")
     for extra in (ps.get("extra_companies") or []):
         status = "added (active)" if enabled else "added (inactive)"
@@ -236,33 +250,21 @@ def cmd_list():
 
 
 def cmd_add(name: str):
-    try:
-        from rich.console import Console
-        console = Console()
-    except ImportError:
-        console = None
-
-    def _print(msg):
-        if console:
-            console.print(msg)
-        else:
-            print(msg)
-
     profile = _load_profile()
-    ps = profile.setdefault("proactive_sources", {"enabled": True, "tiers": ["S", "A"], "extra_companies": [], "exclude_companies": []})
+    ps = profile.setdefault("proactive_sources", {"enabled": True, "extra_companies": [], "exclude_companies": []})
     extras: list[dict] = ps.setdefault("extra_companies", [])
     excludes: list[str] = ps.setdefault("exclude_companies", [])
 
     # Already in extra_companies?
     if any(e["name"].lower() == name.lower() for e in extras):
-        _print(f"  [{THEME['warning']}]{name}[/] is already in your sources.")
+        console.print(f"  [{THEME['warning']}]{name}[/] is already in your sources.")
         return
 
     # Remove from exclude list if previously excluded
     before = len(excludes)
     ps["exclude_companies"] = [n for n in excludes if n.lower() != name.lower()]
     if len(ps["exclude_companies"]) < before:
-        _print(f"  Removed [bold]{name}[/bold] from your exclusion list.")
+        console.print(f"  Removed [bold]{name}[/bold] from your exclusion list.")
 
     # Check if it's already in the curated list
     cfg = _load_yml()
@@ -273,27 +275,21 @@ def cmd_add(name: str):
     )
     for co, ats in all_companies:
         if co["name"].lower() == name.lower() or name.lower() in co["name"].lower():
-            active_tiers = set(ps.get("tiers", ["S", "A"]))
-            if co.get("tier") in active_tiers:
-                _print(f"  [{THEME['success']}]✓[/]  [bold]{co['name']}[/bold] is already in the curated list and active.")
-            else:
-                extras.append({"name": co["name"], "ats": ats, "slug": co["slug"]})
-                _save_profile(profile)
-                _print(f"  [{THEME['success']}]✓[/]  Added [bold]{co['name']}[/bold] ({_ats_label(ats)}) to your sources.")
+            console.print(f"  [{THEME['success']}]✓[/]  [bold]{co['name']}[/bold] is already in the curated list and active.")
             return
 
     # Try ATS resolution
-    _print(f"  Looking up [bold]{name}[/bold]…")
+    console.print(f"  Looking up [bold]{name}[/bold]…")
     resolved = resolve_company(name)
     if resolved:
         extras.append(resolved)
         _save_profile(profile)
-        _print(
+        console.print(
             f"  [{THEME['success']}]✓[/]  Added [bold]{resolved['name']}[/bold] "
             f"({_ats_label(resolved['ats'])}, slug: {resolved['slug']})."
         )
     else:
-        _print(
+        console.print(
             f"\n  [{THEME['warning']}]Couldn't find [bold]{name}[/bold] automatically.[/]\n\n"
             f"  [{THEME['muted']}]We search Greenhouse, Lever, and Ashby — the most common job platforms.\n"
             f"  {name} may use a different or proprietary system.[/]\n\n"
@@ -318,21 +314,8 @@ def cmd_remove():
         print("InquirerPy required for interactive remove. Edit ~/.job_pipeline/profile.yaml directly.")
         return
 
-    try:
-        from rich.console import Console
-        console = Console()
-    except ImportError:
-        console = None
-
-    def _print(msg):
-        if console:
-            console.print(msg)
-        else:
-            print(msg)
-
     profile = _load_profile()
     ps      = profile.get("proactive_sources", {})
-    tiers   = set(ps.get("tiers", ["S", "A"]))
     extras  = ps.get("extra_companies") or []
     excludes = set(ps.get("exclude_companies") or [])
 
@@ -341,11 +324,12 @@ def cmd_remove():
         [(c, "greenhouse") for c in cfg.get("greenhouse_companies", [])]
         + [(c, "lever")      for c in cfg.get("lever_companies", [])]
         + [(c, "ashby")      for c in cfg.get("ashby_companies", [])]
+        + [(c, "playwright") for c in cfg.get("playwright_companies", [])]
     )
 
     active_curated = [
         co for co, _ in all_companies
-        if co.get("tier") in tiers and co["name"].lower() not in excludes
+        if co["name"].lower() not in excludes
     ]
     active_extras = [e for e in extras if e["name"].lower() not in excludes]
 
@@ -356,7 +340,7 @@ def cmd_remove():
         choices.append(IChoice(name=f"{e['name']}  (added by you)", value=("extra", e["name"])))
 
     if not choices:
-        _print("  No active sources to remove.")
+        console.print("  No active sources to remove.")
         return
 
     selected = inquirer.checkbox(
@@ -365,7 +349,7 @@ def cmd_remove():
     ).execute()
 
     if not selected:
-        _print("  Nothing changed.")
+        console.print("  Nothing changed.")
         return
 
     extra_names  = {e["name"].lower() for e in extras}
@@ -384,21 +368,15 @@ def cmd_remove():
     _save_profile(profile)
 
     removed = [name for _, name in selected]
-    _print(f"  [{THEME['success']}]✓[/]  Removed: {', '.join(removed)}")
+    console.print(f"  [{THEME['success']}]✓[/]  Removed: {', '.join(removed)}")
 
 
 def cmd_on():
     profile = _load_profile()
     ps = profile.setdefault("proactive_sources", {})
     ps["enabled"] = True
-    if "tiers" not in ps:
-        ps["tiers"] = ["S", "A"]
     _save_profile(profile)
-    try:
-        from rich.console import Console
-        Console().print(f"  [{THEME['success']}]✓[/]  Company sources enabled.")
-    except ImportError:
-        print("  Company sources enabled.")
+    console.print(f"  [{THEME['success']}]✓[/]  Company sources enabled.")
 
 
 def cmd_off():
@@ -406,17 +384,17 @@ def cmd_off():
     ps = profile.setdefault("proactive_sources", {})
     ps["enabled"] = False
     _save_profile(profile)
-    try:
-        from rich.console import Console
-        Console().print("  [dim]Company sources disabled. Your source list is preserved.[/dim]")
-    except ImportError:
-        print("  Company sources disabled.")
+    console.print("  [dim]Company sources disabled. Your source list is preserved.[/dim]")
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
-def run_sources(action: str | None, name: str | None = None):
-    if action in (None, "list"):
+def run_sources(action: str | None, name: str | None = None,
+                email_action: str | None = None):
+    if action == "email":
+        from .email_sources_cmd import run_email_sources
+        run_email_sources(email_action)
+    elif action in (None, "list"):
         cmd_list()
     elif action == "add":
         if not name:
@@ -431,4 +409,4 @@ def run_sources(action: str | None, name: str | None = None):
         cmd_off()
     else:
         print(f"Unknown sources action: {action!r}")
-        print("Usage: scorerole sources [list | add <name> | remove | on | off]")
+        print("Usage: scorerole sources [list | add <name> | remove | on | off | email]")

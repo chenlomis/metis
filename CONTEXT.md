@@ -9,18 +9,28 @@ Then ask for specific files on demand.
 Personal CLI tool: pull LinkedIn job alerts → score against candidate profile → email ranked digest.
 Also scrapes company career pages proactively (Greenhouse/Lever APIs + Playwright fallback).
 
-## Current state (as of 2026-06-21)
-- **Done:** Full pipeline (fetch → dedup → extract → score → digest email → tracker write), `scorerole init`, `scorerole init2` (beta conversational onboarding), proactive sources (S/A/B tier company scraping), scheduling (launchd/cron with retry), `scorerole track`, `scorerole feedback`, `scorerole sources`, scoring traceability (`trace.py` → `~/.job_pipeline/runs.jsonl`), format regression tests (`tests/test_render_format.py`), LinkedIn 3-case positional shift detection, tracker input validation (`_is_plausible_job_row`)
+## Current state (as of 2026-06-27)
+- **Done:** Full pipeline (fetch → dedup → extract → score → digest email → tracker write), `scorerole init`, `scorerole init2` (beta conversational onboarding), proactive sources (53 companies, tier-free — Greenhouse/Lever/Ashby/Playwright), scheduling (launchd/cron with retry), `scorerole track`, `scorerole feedback`, `scorerole sources`, scoring traceability (`trace.py` → `~/.job_pipeline/runs.jsonl`), format regression tests (`tests/test_render_format.py`), LinkedIn 3-case positional shift detection, tracker input validation (`_is_plausible_job_row`), broadened title filter (level-prefix stripping for base-role recall), within-run dedup fix, **console centralization** (all modules import `console` from `theme.py`; `schedule_cmd.py` is the intentional exception — it uses questionary directly), **ARCHITECTURE.md restructured** with "How It Works" section + Mermaid system overview diagram + corrected artifact map table
 - **In progress:** `scorerole init2` UX polish (beta); email parsing reliability (regex primary, LLM fallback planned)
-- **Near-term backlog:** `scorerole report` (score distribution + apply-rate trends), config-as-parameters refactor (MCP prerequisite), one-command install, cross-platform scheduling (Windows Task Scheduler)
+- **Near-term backlog:** `scorerole summary` (score distribution + apply-rate trends from `runs.jsonl`), config-as-parameters refactor (MCP prerequisite), one-command install, cross-platform scheduling (Windows Task Scheduler)
 - **Later:** MCP server wrapper, PyPI publish, employer-lens scoring, evaluation harness
+
+## OSS readiness — open questions (to investigate, not yet resolved)
+
+1. **Email provider: Gmail-only today** — IMAP (`imap.gmail.com`) and SMTP config is Gmail-specific. Outlook/Exchange uses different hosts, OAuth2 instead of app passwords, different folder conventions. Open question: config flag or separate `sources/outlook.py`?
+
+2. **Spreadsheet: xlsx via openpyxl, no Excel required** — `applications.xlsx` is standard xlsx written by `openpyxl`. Opens in Excel, Apple Numbers, LibreOffice, Google Sheets without conversion. The `openpyxl` dep is already in `requirements.txt`. No OSS blocker here.
+
+3. **Shell compatibility** — the CLI itself is pure Python and runs in any shell. `setup_cron.sh` is bash-only. Venv activation docs assume bash/zsh syntax (`source venv/bin/activate`). Windows users need different syntax; PowerShell path is undocumented. `schedule_cmd.py` uses Python subprocess at runtime — no bash dependency there.
+
+4. **Optional dependencies at install time** — several are assume-present: `ts-node`/Node (React Email renderer — has Python fallback, not blocking), Playwright Chromium (for playwright_companies — has Greenhouse/Lever/Ashby fallbacks), `pdfplumber`/`python-docx` (resume parsing, only needed for `scorerole init`). Need to audit whether `requirements.txt` separates optional from required.
 
 ## Mental model: config boundary
 
 | File | Owns |
 |---|---|
 | `~/.job_pipeline/profile.yaml` | Candidate identity + search preferences |
-| `~/.job_pipeline/sources.yaml` *(planned)* | Job sources config (proactive tiers, custom companies) |
+| `~/.job_pipeline/sources.yaml` *(planned)* | Job sources config (proactive company overrides) |
 | `~/.job_pipeline/config.yaml` *(planned)* | Thresholds, schedule, system knobs |
 | `~/.job_pipeline/feedback.md` | Free-text calibration notes injected into scoring prompt |
 
@@ -94,7 +104,7 @@ scorerole/
     __init__.py     — fetch_alerts() router (LinkedIn + proactive)
     linkedin.py     — IMAP fetch, email parse, JD enrichment
     proactive.py    — Greenhouse/Lever API scraping + Playwright fallback
-    companies.yml   — curated S/A/B/C tier company list
+    companies.yml   — 53-company curated list (Greenhouse/Lever/Ashby/Playwright, no tiers)
 ```
 
 ## Data files (runtime, live outside repo at ~/.job_pipeline/)
@@ -117,7 +127,7 @@ logs/                 — daily run logs + scheduled.log
 - `trace.py` is the observability layer — `write_trace()` must be called for every job (prescreened, filtered, and scored). Do not remove or skip these calls.
 - Several modules still call `os.getenv()` at import time (score.py, extract.py, linkedin.py). This is a known library hygiene issue — do not make it worse. The config-as-parameters refactor will fix it.
 - **`render.py` email format is locked.** Legend: "Strength match / Caution / domain gap / Hard blocker". Stat tile: "Evaluated". Score breakdown must not appear in cards. Skipped section is a flat 2-col table. Enforced by `tests/test_render_format.py` — run after any render.py edit.
-- **`_role_hash()` in `state.py` is frozen.** MD5, `[:12]` slice, same normalization regex. Changing it invalidates `seen_roles.json` and causes a flood re-send.
+- **`_role_hash()` in `state.py` — treat as stable.** MD5, `[:12]` slice. Now uses `_normalize_company()` to strip trailing suffixes (" AI", " Inc", " LLC", etc.) before hashing — "NVIDIA AI" and "NVIDIA" hash identically. Changing the function further invalidates `seen_roles.json` and causes a flood re-send; document any changes in CLAUDE.md §6.
 - **`_HEADERS` column order in `tracker.py` is frozen.** Existing `applications.xlsx` data relies on positional column indices. Header text is safe to rename; order is not.
 - **`pipeline.py` stage order is load-bearing.** Deal-breaker split must run after `new_role_timestamps` is built and before `render_html`. `save_seen_roles` must run after `send_digest`. Do not reorder stages without explicit instruction.
 - **`score.py` eval schema and `render.py` are a coupled contract.** Verdict enum, 6 dimension names, 2 leveragePoints, 1 frictionPoint. Change both together or not at all.
