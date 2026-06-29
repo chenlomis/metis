@@ -83,9 +83,14 @@ def _apply_status_fill(ws, row_idx: int, col: int, value: str) -> None:
 
 
 def update_confirmation(ws, row_idx: int, date_applied: str) -> None:
-    """Flip action_taken → Applied and set date_applied + application_status."""
+    """Flip action_taken → Applied and set date_applied + application_status.
+
+    Preserves an existing date_applied — the earliest confirmation date is
+    canonical and should not be overwritten by a follow-up email.
+    """
     ws.cell(row_idx, 6).value = "Applied"
-    ws.cell(row_idx, 7).value = date_applied
+    if not ws.cell(row_idx, 7).value:
+        ws.cell(row_idx, 7).value = date_applied
     ws.cell(row_idx, 8).value = "Pending"
     _apply_status_fill(ws, row_idx, 6, "Applied")
     _apply_status_fill(ws, row_idx, 8, "Pending")

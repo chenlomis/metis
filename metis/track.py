@@ -18,6 +18,7 @@ import datetime
 import email as email_lib
 import imaplib
 import logging
+import re
 import sys
 import time
 
@@ -385,103 +386,6 @@ def fetch_candidate_emails(
 
     log.info("track: fetched %d candidate emails since %s", len(emails), since_str)
     return emails
-
-
-# ---------------------------------------------------------------------------
-# Classification
-# ---------------------------------------------------------------------------
-
-def _normalize_body(text: str) -> str:
-    """Normalize body text for reliable phrase matching.
-
-    Handles two common PDF extraction artifacts:
-    - Curly apostrophes (U+2019 → ') so "won't", "we'll", "we've" match straight-apostrophe phrases
-    - Newlines mid-sentence (replaced with space) so multi-line phrases match
-    """
-    text = text.replace("’", "'").replace("‘", "'")
-    text = text.replace("\r\n", " ").replace("\n", " ")
-    return text.lower()
-
-
-_LLM_CLASSIFY_PROMPT = """\
-You are classifying a job-application email into exactly one of four categories.
-
-Categories:
-- confirmation   : the sender acknowledges receiving the application or confirms a next step
-- rejection      : the sender declines the application or ends consideration
-- recruiter_screen : the sender requests to schedule a call, phone screen, or interview
-- unknown        : none of the above (newsletters, automated alerts, unrelated)
-
-Reply with exactly one lowercase word from the list above. No punctuation, no explanation.
-
-Subject: {subject}
-
-Body (truncated):
-{body}"""
-
-_LLM_BODY_CHAR_LIMIT = 1500
-_LLM_VALID_CLASSES = frozenset(["confirmation", "rejection", "recruiter_screen", "unknown"])
-
-
-def _classify_with_llm(subject: str, body: str, client) -> str:
-    """Ask Haiku to classify an email that phrase matching left as 'unknown'.
-
-    Returns one of the four classification strings; falls back to 'unknown'
-    on any API error or unexpected response.
-    """
-    from .prompts import track_classify_system_prompt
-
-    truncated_body = body[:_LLM_BODY_CHAR_LIMIT]
-    prompt = _LLM_CLASSIFY_PROMPT.format(subject=subject, body=truncated_body)
-    try:
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=10,
-            system=track_classify_system_prompt(),
-            messages=[{"role": "user", "content": prompt}],
-        )
-        result = response.content[0].text.strip().lower()
-        if result in _LLM_VALID_CLASSES:
-            return result
-        log.warning("track: LLM returned unexpected class %r — falling back to 'unknown'", result)
-    except Exception as exc:
-        log.warning("track: LLM classification failed (%s) — falling back to 'unknown'", exc)
-    return "unknown"
-
-
-def classify_email(body: str, subject: str = "", llm_client=None) -> str:
-    """Return 'confirmation', 'rejection', 'recruiter_screen', or 'unknown'.
-
-    Body phrases take priority. Recruiter screen is checked before confirmation
-    because scheduling language is unambiguous and some forward-moving phrases
-    ("we'd like to move forward") could otherwise collide with confirmation.
-    When the body is ambiguous, the subject tiebreaker runs. If still unknown
-    and an llm_client is provided, Haiku is called as a last-resort classifier.
-    """
-    body_norm = _normalize_body(body)
-
-    for phrase in _REJECTION_PHRASES:
-        if phrase in body_norm:
-            return "rejection"
-    for phrase in _RECRUITER_SCREEN_PHRASES:
-        if phrase in body_norm:
-            return "recruiter_screen"
-    for phrase in _CONFIRMATION_PHRASES:
-        if phrase in body_norm:
-            return "confirmation"
-
-    # Subject-line tiebreaker for empty/unusual bodies
-    if _SUBJECT_IMPLIES_RECRUITER_SCREEN.search(subject):
-        return "recruiter_screen"
-    if _SUBJECT_IMPLIES_CONFIRMATION.search(subject):
-        return "confirmation"
-    if _SUBJECT_IMPLIES_REJECTION.search(subject):
-        return "rejection"
-
-    if llm_client is not None:
-        return _classify_with_llm(subject, body, llm_client)
-
-    return "unknown"
 
 
 # ---------------------------------------------------------------------------

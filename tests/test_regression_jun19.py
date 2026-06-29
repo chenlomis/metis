@@ -116,17 +116,17 @@ class TestLeverageFrictionRender:
         assert "Strong AI background" in html
         assert "S; t; r; o; n; g" not in html
         # Should be a single <p> block, not many
-        assert html.count("&#10003;") == 1
+        assert html.count("&#8593;") == 1
 
     def test_bare_string_friction_renders_single_bullet(self):
         html = self._render([], "No domain experience")
         assert "No domain experience" in html
         assert "N; o;" not in html
-        assert html.count("? ") == 1
+        assert html.count("&#8595;") == 1
 
     def test_list_with_two_leverage_points(self):
         html = self._render(["Point A", "Point B"], [])
-        assert html.count("&#10003;") == 2
+        assert html.count("&#8593;") == 2
         assert "Point A" in html
         assert "Point B" in html
 
