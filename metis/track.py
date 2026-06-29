@@ -795,7 +795,7 @@ def create_backfill_row(ws, parsed: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Digest backfill — parse past "Personalized Job Alert Digest" emails
+# Digest backfill — parse past "Metis Digest" emails
 # ---------------------------------------------------------------------------
 
 def _parse_digest_html(html: str, email_date: str) -> list[dict]:
@@ -1069,7 +1069,7 @@ def backfill_from_digests(
                 imap.login(gmail_address, app_password)
                 imap.select("INBOX")
 
-                _, data = imap.search(None, f'SINCE {since_str} SUBJECT "Personalized Job Alert Digest"')
+                _, data = imap.search(None, f'SINCE {since_str} SUBJECT "Metis Digest"')
                 if not data or not data[0]:
                     log.info("track: no digest emails found since %s", since_str)
                     return 0
