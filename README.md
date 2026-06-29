@@ -55,30 +55,7 @@ The runtime operates as a closed-loop agentic workflow. New roles are continuous
 
 The overall architecture prioritizes modularity, cost-aware inference, privacy-first local state, and continuous learning, allowing individual components to evolve independently as better models, data sources, or evaluation strategies become available.
 
-```
-LinkedIn job alert emails          Company career pages
-  (3 sender types, 2 formats)        (Greenhouse / Lever / Ashby)
-         |                                     |
-         +-------------+  +------------------+
-                       |  |
-                  Gmail (IMAP)
-                       |
-              sources/linkedin.py
-              sources/proactive.py
-                       |
-               3-layer dedup
-          (job_id / title+company / 30-day hash)
-                       |
-           cap check + cost estimate
-                       |
-         Haiku pre-screen (when over cap)
-                       |
-         Sonnet full scoring (27 fields)
-                       |
-          Ranked HTML digest (React Email / Python fallback)
-                       |
-                 Gmail (SMTP)
-```
+![Metis architecture diagram](docs/assets/metis-architecture.png)
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for data flow diagrams and notes on extending each layer.
 
