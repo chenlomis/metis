@@ -31,7 +31,7 @@ export interface DigestPayload {
   date: string;
   totalEvaluated: number;
   candidateName: string;
-  greeting: string;       // salutation line: "Good morning, Lomis 👋"
+  greeting: string;       // salutation line: "Good morning, Alex 👋"
   greetingSub?: string;   // body line: "We evaluated N roles today…"
   jobs: Job[];
 }

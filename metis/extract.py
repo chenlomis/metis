@@ -141,7 +141,9 @@ def _extract_chunk(client: anthropic.Anthropic, jobs: list[dict]) -> list[dict]:
         return [s if _is_valid_struct(s) else {**_BLANK_STRUCT, "jd_quality": "low"} for s in structs]
     except (json.JSONDecodeError, ValueError) as exc:
         log.warning("Extraction JSON parse failed (%s) — using blank structs for %d jobs", exc, len(jobs))
-        return [dict(_BLANK_STRUCT) for _ in jobs]
+        # Use "extraction_failed" not "blank" — JD content may exist; only "blank" triggers
+        # the jd_blank hard gate in check_hard_gates(). Scoring proceeds without grounding.
+        return [{**dict(_BLANK_STRUCT), "jd_quality": "extraction_failed"} for _ in jobs]
 
 
 def extract_jd_structs(client: anthropic.Anthropic, jobs: list[dict]) -> list[dict]:
@@ -164,11 +166,11 @@ def extract_jd_structs(client: anthropic.Anthropic, jobs: list[dict]) -> list[di
             structs = _extract_chunk(client, chunk)
         except Exception as exc:
             log.warning("Extraction chunk failed (%s) — blank structs for %d jobs", exc, len(chunk))
-            structs = [dict(_BLANK_STRUCT) for _ in chunk]
+            structs = [{**dict(_BLANK_STRUCT), "jd_quality": "extraction_failed"} for _ in chunk]
 
         # Pad if response was short
         while len(structs) < len(chunk):
-            structs.append(dict(_BLANK_STRUCT))
+            structs.append({**dict(_BLANK_STRUCT), "jd_quality": "extraction_failed"})
         all_structs.extend(structs[: len(chunk)])
 
     return all_structs
@@ -215,8 +217,12 @@ def check_hard_gates(jd_struct: dict, profile_data: dict) -> tuple[bool, str]:
 # Formatting for Layer 2
 # ---------------------------------------------------------------------------
 
-def format_extraction_for_scoring(ext: dict) -> str:
+def format_extraction_for_scoring(ext: dict, listing_company: str = "") -> str:
     """Convert extraction struct to a compact human-readable block for Sonnet context.
+
+    listing_company: the company name from the original job listing (e.g. from LinkedIn).
+    When company_stage is unknown but a listing company is known, it is included so Sonnet
+    does not apply the 'anon employer' tag contradicting the displayed job title.
 
     Returns empty string when struct is absent or blank (no JD case was already gated).
     """
@@ -273,6 +279,10 @@ def format_extraction_for_scoring(ext: dict) -> str:
     stage = ext.get("company_stage", "unknown")
     tier  = ext.get("company_tier")
     co_str = stage + (f" / {tier}" if tier else "")
+    # When stage is unknown but the listing has a known company name, surface it so
+    # Sonnet does not apply an 'anon employer' tag that contradicts the job title display.
+    if stage == "unknown" and listing_company and listing_company.lower() not in ("", "unknown", "anonymous"):
+        co_str += f" (listed as: {listing_company})"
     lines.append(f"  Company: {co_str}")
 
     # Culture

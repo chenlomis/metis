@@ -1,52 +1,52 @@
-# scorerole — Claude Code context
+# metis — Claude Code context
 
 ## What this project is
-A personal job alert pipeline. It pulls job listings, scores them against a user profile using Claude, and sends a personalized email digest. CLI entry point: `scorerole` → `scorerole/pipeline.py`.
+A personal job alert pipeline. It pulls job listings, scores them against a user profile using Claude, and sends a personalized email digest. CLI entry point: `metis` → `metis/pipeline.py`.
 
 ## Key commands
 ```
 # Main runner (no subcommand)
-scorerole                          # pull → score → send digest; incremental (since last run, fallback 3d)
-scorerole --lookback 7d            # override window; accepts: 3d, 14d, 2026-06-01
-scorerole --no-limit               # ignore MAX_JOBS_PER_RUN cap; Haiku pre-screens to control cost
-scorerole --dry-run                # full run (fetch + score), zero writes — no email, no seen_roles, no tracker
+metis                          # pull → score → send digest; incremental (since last run, fallback 3d)
+metis --lookback 7d            # override window; accepts: 3d, 14d, 2026-06-01
+metis --no-limit               # ignore MAX_JOBS_PER_RUN cap; Haiku pre-screens to control cost
+metis --dry-run                # full run (fetch + score), zero writes — no email, no seen_roles, no tracker
 
 # init — build/update scoring profile
-scorerole init
-scorerole init --resume PATH       # PDF, DOCX, or TXT (prompted interactively if omitted)
-scorerole init --linkedin PATH     # LinkedIn export PDF or data archive (optional enrichment)
+metis init
+metis init --resume PATH       # PDF, DOCX, or TXT (prompted interactively if omitted)
+metis init --linkedin PATH     # LinkedIn export PDF or data archive (optional enrichment)
 
 # reset — clear seen-role state
-scorerole reset                    # prompts for confirmation
-scorerole reset --force            # skip confirmation
-scorerole reset --profile          # also delete profile.yaml
-scorerole reset --profile --force
+metis reset                    # prompts for confirmation
+metis reset --force            # skip confirmation
+metis reset --profile          # also delete profile.yaml
+metis reset --profile --force
 
 # schedule — cron delivery
-scorerole schedule                 # show current schedule + OS cron/launchd status
-scorerole schedule set             # install or replace schedule (interactive wizard)
-scorerole schedule remove          # remove job + delete schedule.json
+metis schedule                 # show current schedule + OS cron/launchd status
+metis schedule set             # install or replace schedule (interactive wizard)
+metis schedule remove          # remove job + delete schedule.json
 
 # track — parse confirmation/rejection emails → update Applications xlsx
-scorerole track                    # parse last 7 days; opens spreadsheet if rows changed
-scorerole track --lookback 30d     # accepts same DURATION format as main runner
-scorerole track --dry-run          # parse + classify, no xlsx write, no open; prints matches to stdout
+metis track                    # parse last 7 days; opens spreadsheet if rows changed
+metis track --lookback 30d     # accepts same DURATION format as main runner
+metis track --dry-run          # parse + classify, no xlsx write, no open; prints matches to stdout
 
 # feedback — calibration notes that shape future scoring
-scorerole feedback                 # collect → Claude parse → conflict detect → save to feedback.md
-scorerole feedback list            # show last 5 entries (full history: ~/.job_pipeline/feedback.md)
+metis feedback                 # collect → Claude parse → conflict detect → save to feedback.md
+metis feedback list            # show last 5 entries (full history: ~/.job_pipeline/feedback.md)
 
 # debug — dump most recent LinkedIn alert email
-scorerole debug                    # → ~/.job_pipeline/debug_email.txt
+metis debug                    # → ~/.job_pipeline/debug_email.txt
 
 # theme override (any command)
-SCOREROLE_THEME=light scorerole [...]
-SCOREROLE_THEME=dark  scorerole [...]
+METIS_THEME=light metis [...]
+METIS_THEME=dark  metis [...]
 ```
 
 ## File map
 ```
-scorerole/
+metis/
   pipeline.py      — CLI entry point, routes subcommands
   init_cmd.py      — interactive profile setup wizard (InquirerPy + Rich)
   theme.py         — ALL colors, styles, and print helpers (single source of truth)
@@ -64,7 +64,7 @@ scorerole/
 emails/
   JobAlertDigest.tsx        — root email template
   components/
-    DigestHeader.tsx         — header with stat tiles (ScoreRole wordmark, greeting, stats)
+    DigestHeader.tsx         — header with stat tiles (Metis wordmark, greeting, stats)
     CardFooter.tsx           — "View posting →" button
     TierSection.tsx          — apply/consider tier sections
     SkippedGrid.tsx          — skipped jobs grid
@@ -77,9 +77,9 @@ types.ts            — DigestPayload, Job TypeScript interfaces
 ## Profile location
 `~/.job_pipeline/profile.yaml` — owner-only (chmod 600). Contains salary floor, deal-breakers, strengths. Never commit.
 
-`profile.yaml` is the **active profile** — the only file scorerole reads at runtime. `lomis-profile.md` in the same directory is a legacy free-text version predating the YAML wizard; the code falls back to it only if `profile.yaml` is missing. It is not actively maintained.
+`profile.yaml` is the **active profile** — the only file metis reads at runtime. Generated by `metis init`.
 
-**`SCOREROLE_PROFILE` env var** overrides the profile path without touching `profile.yaml`. Used by `run_persona_test.py` for persona testing. Never set this in `.env`. Safe to unset anytime: `unset SCOREROLE_PROFILE`.
+**`METIS_PROFILE` env var** overrides the profile path without touching `profile.yaml`. Used by `run_persona_test.py` for persona testing. Never set this in `.env`. Safe to unset anytime: `unset METIS_PROFILE`.
 
 ## Persona data directories
 
@@ -87,13 +87,13 @@ Each persona gets its own fully isolated data directory. Your real pipeline is n
 
 | Persona | Data dir | Profile |
 |---|---|---|
-| Lomis (PM) | `~/.job_pipeline/` | `~/.job_pipeline/profile.yaml` |
+| Primary | `~/.job_pipeline/` | `~/.job_pipeline/profile.yaml` |
 | Designer | `~/.job_pipeline_designer/` | `~/.job_pipeline_designer/profile.yaml` |
 | MLE | `~/.job_pipeline_mle/` | `~/.job_pipeline_mle/profile.yaml` |
 
 **Two env vars control everything:**
-- `SCOREROLE_PROFILE` — which profile.yaml to use (which persona's preferences/identity)
-- `SCOREROLE_DATA_DIR` — where seen_roles, last_run, feedback, runs.jsonl live (state isolation)
+- `METIS_PROFILE` — which profile.yaml to use (which persona's preferences/identity)
+- `METIS_DATA_DIR` — where seen_roles, last_run, feedback, runs.jsonl live (state isolation)
 
 Neither is set → real PM pipeline runs as normal.
 
@@ -101,38 +101,38 @@ Neither is set → real PM pipeline runs as normal.
 
 ```bash
 # Designer
-SCOREROLE_PROFILE=~/.job_pipeline_designer/profile.yaml \
-SCOREROLE_DATA_DIR=~/.job_pipeline_designer \
-scorerole --lookback 7d --dry-run
+METIS_PROFILE=~/.job_pipeline_designer/profile.yaml \
+METIS_DATA_DIR=~/.job_pipeline_designer \
+metis --lookback 7d --dry-run
 
 # MLE
-SCOREROLE_PROFILE=~/.job_pipeline_mle/profile.yaml \
-SCOREROLE_DATA_DIR=~/.job_pipeline_mle \
-scorerole --lookback 7d --dry-run
+METIS_PROFILE=~/.job_pipeline_mle/profile.yaml \
+METIS_DATA_DIR=~/.job_pipeline_mle \
+metis --lookback 7d --dry-run
 ```
 
 ### Setting up / refreshing a persona profile
 
 ```bash
 # Reconfigure designer profile interactively (init2 wizard)
-SCOREROLE_PROFILE=~/.job_pipeline_designer/profile.yaml \
-SCOREROLE_DATA_DIR=~/.job_pipeline_designer \
-scorerole init2
+METIS_PROFILE=~/.job_pipeline_designer/profile.yaml \
+METIS_DATA_DIR=~/.job_pipeline_designer \
+metis init2
 
 # Same for MLE
-SCOREROLE_PROFILE=~/.job_pipeline_mle/profile.yaml \
-SCOREROLE_DATA_DIR=~/.job_pipeline_mle \
-scorerole init2
+METIS_PROFILE=~/.job_pipeline_mle/profile.yaml \
+METIS_DATA_DIR=~/.job_pipeline_mle \
+metis init2
 ```
 
 ### Resetting a persona's seen-role state
 
 ```bash
 # Clear designer dedup (seen_roles.json) — does NOT touch your PM pipeline
-SCOREROLE_DATA_DIR=~/.job_pipeline_designer scorerole reset --force
+METIS_DATA_DIR=~/.job_pipeline_designer metis reset --force
 
 # Clear MLE
-SCOREROLE_DATA_DIR=~/.job_pipeline_mle scorerole reset --force
+METIS_DATA_DIR=~/.job_pipeline_mle metis reset --force
 ```
 
 ### Automated persona test runner
@@ -163,15 +163,29 @@ pytest tests/test_core.py tests/test_schedule.py -q    # fast pass (~60 tests, <
 
 ## Critical constraints
 
+### -1. Proactive source scrapes always use render.py format and role+location filtering
+
+**Any time a proactive career-page scrape runs** (scheduled, one-off, or test), two invariants must hold:
+
+1. **Filtering:** Use `_build_title_patterns(profile.target.roles)` for title matching and `_detect_country(profile.candidate.location)` for location matching. Only roles that pass both filters are passed to scoring. Do NOT bypass these even in one-off scripts — they prevent irrelevant roles from wasting API calls and polluting the digest.
+
+2. **Output format:** The output email MUST be rendered via `render_html()` from `render.py`. Never use a custom rendering path (paragraph summaries, "X/100" scores, 3+2 bullet format, or any ad-hoc HTML). `render_html()` calls `build_digest_html()` internally and produces the canonical format enforced by `tests/test_render_format.py`. The only acceptable caller is `render_html(scored_jobs, run_date, deal_breaker_count=n)`.
+
+These rules apply to one-off scripts (`proactive_sample.py`, etc.) as well as the main pipeline.
+
 ### 0. render.py email format is locked — do not change without explicit request
 `build_digest_html()` and `_job_card()` in `render.py` produce the canonical digest format.
 The following are **intentional and must not be changed** unless the user explicitly asks to change the format:
 
 - Stat tile first label: `"Evaluated"` (not "Roles evaluated", not "Total evaluated")
-- Legend second dot: `"Caution / domain gap"` (not "Proceed with awareness")
-- Legend third dot: `"Hard blocker"` (not "Real concern")
+- Stat tile second label: `"Solid Match"` (not "Apply", not "Strong match")
+- Stat tile third label: `"Moderate Match"` (not "Consider")
+- Section headers: `"Solid Match"` / `"Moderate Match"` / `"Limited Match"` (not Apply/Consider/Skipped)
+- Legend dots: `"Strengths"` / `"Caution"` / `"Blockers"` (not "Caution / domain gap" / "Hard blocker")
+- Button: filled with verdict color, white text (`color:#ffffff`) — not outlined with border
+- Personalized greeting: rendered when `candidate_name` is set in profile.yaml; `_make_greeting()` generates time-aware salutation + subtitle
 - Score breakdown: `render_score_breakdown()` must NOT be called from `_job_card()` — the breakdown must not appear in email cards
-- Skipped section: flat 2-column table with `"Role · Company"` and `"Why Skipped"` column headers; role titles are hyperlinked
+- Skipped section: flat 2-column table with `"Role · Company"` and `"Why skipped"` column headers; role titles are hyperlinked
 
 These constraints are enforced by `tests/test_render_format.py`. Run that test after any render.py change — a failure means the format regressed. Fix the regression, not the test.
 
@@ -183,9 +197,9 @@ These constraints are enforced by `tests/test_render_format.py`. Run that test a
 - `Q_STYLE = QUESTIONARY_STYLE` is retained in `run_init()` only to pass to `schedule_cmd.py` via `_run_proactive_sources_wizard()`. It is not used for any prompts in `init_cmd.py` itself.
 
 ### 2. Theme is the only place for colors
-- All colors, styles, and questionary/InquirerPy style objects live in `scorerole/theme.py`.
+- All colors, styles, and questionary/InquirerPy style objects live in `metis/theme.py`.
 - `init_cmd.py` imports `QUESTIONARY_STYLE`, `INQUIRER_STYLE`, `console`, and print helpers from theme. No hardcoded hex values anywhere else.
-- Light/dark detection: `SCOREROLE_THEME=light|dark` env var → `COLORFGBG` fallback → default dark.
+- Light/dark detection: `METIS_THEME=light|dark` env var → `COLORFGBG` fallback → default dark.
 
 ### 3. Email is React Email (TSX), not plain HTML
 - Rendered via `ts-node` in `render.py:render_html()`. Falls back to `build_digest_html()` Python if ts-node fails.

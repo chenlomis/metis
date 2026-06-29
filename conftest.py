@@ -1,7 +1,7 @@
 """Root conftest — guards against running tests outside the project venv.
 
 If core runtime deps (rich, InquirerPy, anthropic, …) are not importable,
-every test that touches scorerole.* would crash at collection time instead of
+every test that touches metis.* would crash at collection time instead of
 producing a useful error.  This hook catches that early and tells the runner
 exactly what to do rather than emitting 300+ confusing tracebacks.
 """

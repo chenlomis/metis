@@ -1,7 +1,7 @@
-"""Visual theme for scorerole CLI.
+"""Visual theme for metis CLI.
 
 Single source of truth for colors, questionary style, and print helpers.
-Set SCOREROLE_THEME=light or SCOREROLE_THEME=dark to override detection.
+Set METIS_THEME=light or METIS_THEME=dark to override detection.
 """
 import os
 import shutil
@@ -21,7 +21,7 @@ from rich.text import Text
 
 def _detect_dark() -> bool:
     # Explicit override always wins
-    override = os.environ.get("SCOREROLE_THEME", "").lower()
+    override = os.environ.get("METIS_THEME", "").lower()
     if override == "light":
         return False
     if override == "dark":
@@ -64,9 +64,9 @@ if IS_DARK:
         "accent":       "#5aadff",
         "accent_bg":    "#172033",
         "accent_txt":   "#bfdbfe",
-        "accent_muted": "#2a4060",
+        "accent_muted": "#7a9ac8",
         "bright":       "#e8e8e3",
-        "muted":        "#888888",
+        "muted":        "#a3a3a3",
         "dim":          "#444444",
         "success":      "#7dd3a8",
         "warning":      "#f0b060",
@@ -78,9 +78,9 @@ else:
         "accent":       "#2563eb",
         "accent_bg":    "#eff6ff",
         "accent_txt":   "#1e40af",
-        "accent_muted": "#93c5fd",
+        "accent_muted": "#60a5fa",
         "bright":       "#171717",
-        "muted":        "#737373",
+        "muted":        "#6b7280",
         "dim":          "#c4c4c4",
         "success":      "#15803d",
         "warning":      "#b45309",
@@ -151,11 +151,19 @@ console = _BoundedConsole()
 # ---------------------------------------------------------------------------
 
 def print_hint(text: str) -> None:
-    """Dim hint text — 2-space indent, consistent across wrapped continuation lines."""
+    """Tip text — label in accent, body in muted; 2-space indent on all wrapped lines."""
     prefix = "  "
     avail  = max(40, console.width - len(prefix))
-    for line in textwrap.wrap(text, width=avail) or [text]:
-        console.print(f"{prefix}[{THEME['dim']} italic]{_escape(line)}[/]")
+    lines  = textwrap.wrap(text, width=avail) or [text]
+    for i, line in enumerate(lines):
+        if i == 0 and " — " in line:
+            label, _, rest = line.partition(" — ")
+            console.print(
+                f"{prefix}[{THEME['accent']}]{_escape(label)} —[/] "
+                f"[{THEME['muted']}]{_escape(rest)}[/]"
+            )
+        else:
+            console.print(f"{prefix}[{THEME['muted']}]{_escape(line)}[/]")
 
 
 def print_section(step: str, label: str, description: str = "") -> None:

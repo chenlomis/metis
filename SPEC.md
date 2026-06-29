@@ -1,7 +1,7 @@
-# scorerole — Product Spec
+# metis — Product Spec
 
 > **LOCKED — v0.1 (June 2026) — tagged `spec-v0.1`**
-> This is the source of truth for what scorerole should do and how we know it's correct.
+> This is the source of truth for what metis should do and how we know it's correct.
 > Code is checked against this spec, not the other way around.
 > Changes require explicit owner approval — do not edit as part of routine code changes.
 > For setup instructions see README.md.
@@ -16,7 +16,7 @@ background, and deciding if it's worthwhile to apply — not only consumes time 
 limited attention. At 50 roles/week that's 2–4 hours of low-signal scanning before any
 actual application work begins.
 
-**scorerole** automates the screening step. It reads your job alert emails, scores
+**metis** automates the screening step. It reads your job alert emails, scores
 each role against a structured profile of your background and preferences, and delivers
 a ranked digest that surfaces only the roles worth your time — with enough context
 (match rationale, friction points) to make a quick apply/skip decision.
@@ -39,14 +39,14 @@ a ranked digest that surfaces only the roles worth your time — with enough con
 
 ## 3. Data & Privacy
 
-scorerole is a local CLI tool. It does not run a server, collect analytics, or send
+metis is a local CLI tool. It does not run a server, collect analytics, or send
 data to any third party beyond what is listed below.
 
 | What | Where it goes | Why |
 |---|---|---|
-| Resume text | Anthropic API | Profile extraction during `scorerole init` |
-| Full profile content (background, experience, strengths, deal_breakers) | Anthropic API | Sent as the scoring system prompt on every `scorerole` run |
-| Job metadata (title, company, location) + JD text (up to ~1,500 chars per role) | Anthropic API | Sent as the scoring batch message on every `scorerole` run |
+| Resume text | Anthropic API | Profile extraction during `metis init` |
+| Full profile content (background, experience, strengths, deal_breakers) | Anthropic API | Sent as the scoring system prompt on every `metis` run |
+| Job metadata (title, company, location) + JD text (up to ~1,500 chars per role) | Anthropic API | Sent as the scoring batch message on every `metis` run |
 | Rendered HTML digest | User's own Gmail (via SMTP) | Digest delivery |
 | JD page fetches | LinkedIn.com (public HTTP) | JD enrichment; fetched from the user's own IP address |
 
@@ -74,7 +74,7 @@ lightweight CLI commands, who find manual screening a time drain.
 
 ---
 
-### Flow 1 — Profile Setup (`scorerole init`)
+### Flow 1 — Profile Setup (`metis init`)
 
 **Goal:** A new user completes setup in under 5 minutes and has a working profile
 ready to score against.
@@ -96,7 +96,7 @@ ready to score against.
      RECIPIENT_EMAIL        Where to send the digest (normally your own email).
 
 3. Create your profile
-     scorerole init
+     metis init
 
      Step 1 — Resume
                Provide the path to your resume (PDF, DOCX, or TXT).
@@ -122,12 +122,12 @@ ready to score against.
                Profile is saved to ~/.job_pipeline/profile.yaml.
 
 4. Run
-     scorerole  (see Flow 2)
+     metis  (see Flow 2)
 ```
 
 **Exit criteria:**
 - [ ] End-to-end first-time setup completes in under 5 minutes
-- [x] `scorerole init` completes without error given a valid PDF, DOCX, or TXT resume
+- [x] `metis init` completes without error given a valid PDF, DOCX, or TXT resume
 - [x] Profile is saved to `~/.job_pipeline/profile.yaml` after step 4
 - [x] Missing `.env` key → error names the missing variable and links to where to get it
 - [x] Resume file not found → re-prompts for path; no crash
@@ -135,7 +135,7 @@ ready to score against.
 
 #### 1b — Profile Update (existing profile)
 
-When `scorerole init` detects an existing profile, it shows a mode menu instead of
+When `metis init` detects an existing profile, it shows a mode menu instead of
 restarting the full wizard:
 
 ```
@@ -149,21 +149,21 @@ Start fresh   — full 4-step wizard with a new resume; overwrites existing prof
 - [ ] Quick edit does not call Claude or consume API tokens
 - [ ] "Start fresh" requires an explicit menu selection; cannot be triggered accidentally
 - [ ] The latest saved version always overrides the previous one
-- [ ] Profile changes take effect on the very next `scorerole` run
+- [ ] Profile changes take effect on the very next `metis` run
 
 ---
 
-### Flow 2 — Running the Pipeline (`scorerole`)
+### Flow 2 — Running the Pipeline (`metis`)
 
-**Goal:** User runs `scorerole` and receives a ranked digest of new roles worth reviewing.
+**Goal:** User runs `metis` and receives a ranked digest of new roles worth reviewing.
 
 ```
-scorerole [--lookback DURATION] [--all]
+metis [--lookback DURATION] [--all]
 ```
 
 **Input format — LinkedIn job alert emails**
 
-scorerole reads emails from three LinkedIn sender addresses:
+metis reads emails from three LinkedIn sender addresses:
 - `jobalerts-noreply@linkedin.com` — standard "Your job alert for X" digests
 - `jobs-noreply@linkedin.com` — "Company is hiring" recommendation emails
 - `jobs-listings@linkedin.com` — "Jobs you might like" digests
@@ -174,7 +174,7 @@ Two parsing strategies handle different email layouts:
 
 **Failure mode if LinkedIn changes their email format:** 0 roles are parsed; no error
 is raised; the pipeline exits with "No new roles to evaluate." This is the #1 first-failure
-mode for new users. Diagnostic: run `scorerole debug` to inspect the raw email body and
+mode for new users. Diagnostic: run `metis debug` to inspect the raw email body and
 check whether the expected URL pattern is present.
 
 ---
@@ -194,13 +194,13 @@ check whether the expected URL pattern is present.
 → User is notified interactively:
     "Found 47 new roles. Evaluating first 20.
      Remaining 27 will appear in your next run.
-     To evaluate all now: scorerole --all  (~$0.24–$0.71 estimated)"
+     To evaluate all now: metis --all  (~$0.24–$0.71 estimated)"
 → Roles beyond the cap are NOT marked as seen — they appear in the next run
 ```
 
 **With `--all` flag:**
 ```
-scorerole --all [--lookback DURATION]
+metis --all [--lookback DURATION]
 → Bypasses the per-run cap (does NOT bypass the 14-day dedup gate)
 → Haiku pre-screens all roles on title+company to filter obvious mismatches cheaply
 → Estimated API cost is shown before scoring begins
@@ -216,28 +216,28 @@ scorerole --all [--lookback DURATION]
 **Exit criteria:**
 - [x] Roles seen in a previous digest do not reappear within the 14-day window
 - [x] Roles beyond the cap are NOT written to `seen_roles.json`; they reappear next run
-- [x] Running `scorerole` twice with no new emails shows "no new roles", not empty digest
+- [x] Running `metis` twice with no new emails shows "no new roles", not empty digest
 - [x] User is notified when the role count exceeds the cap (interactive runs)
 - [x] `--all` shows a cost estimate before making any scoring API calls
 - [x] Cron / non-interactive runs never block on a prompt; they cap silently and log
-- [x] scorerole does not re-evaluate previously seen roles unless `scorerole reset` is run
+- [x] metis does not re-evaluate previously seen roles unless `metis reset` is run
 - [x] Digest has a default visual style; visual customisation requires editing `render.py`
 - [x] No digest sent when all roles are filtered by deal-breakers (exits cleanly with log message)
 
 ---
 
-### Flow 3 — Automated Scheduling (`scorerole schedule`)
+### Flow 3 — Automated Scheduling (`metis schedule`)
 
 **Goal:** User sets up a recurring digest that runs without any manual command.
 
 ```
 Set up during init (recommended for new users):
-  scorerole init
+  metis init
   → At the end of the wizard, asks "Set up automated digests?"
   → If yes: runs the scheduling wizard inline
 
 Or at any time:
-  scorerole schedule --set
+  metis schedule --set
 ```
 
 **Scheduling wizard:**
@@ -250,7 +250,7 @@ Or at any time:
 2. At what time?  [HH:MM 24-hour format, default 08:00]
 
 3. Install
-     macOS  → writes launchd plist to ~/Library/LaunchAgents/com.scorerole.digest.plist
+     macOS  → writes launchd plist to ~/Library/LaunchAgents/com.metis.digest.plist
               and loads it via launchctl (no admin rights required)
      Linux  → adds a tagged line to the user's crontab (crontab -l / crontab -)
      Config → saved to ~/.job_pipeline/schedule.json
@@ -258,66 +258,66 @@ Or at any time:
 
 **Inspecting and updating the schedule:**
 ```
-scorerole schedule
+metis schedule
   → Shows: frequency, time, --lookback used, binary path, OS job status
   → Warns if the binary path (baked in at install time) no longer exists
 
-scorerole schedule --set
+metis schedule --set
   → Re-runs the wizard; replaces the existing schedule cleanly
 
-scorerole schedule --remove
+metis schedule --remove
   → Unloads the OS job, deletes the plist/crontab entry, clears schedule.json
 ```
 
 **What the scheduled job does:**
-The OS job calls `scorerole --lookback Xd` where `Xd` is derived from the
+The OS job calls `metis --lookback Xd` where `Xd` is derived from the
 frequency (daily → 1d, twice-weekly → 4d, weekly → 7d). It is exactly
 equivalent to the user running that command manually — the same dedup gate,
 cap, and delivery path apply.
 
 **Exit criteria:**
-- [x] After `scorerole schedule --set`, the launchd plist exists and is loaded
-- [x] `scorerole schedule` shows the active schedule and OS job health
-- [x] `scorerole schedule --remove` clears both the OS job and `schedule.json`
-- [x] Re-running `scorerole schedule --set` replaces the existing schedule without orphaning the old plist
-- [x] If the venv binary has moved, `scorerole schedule` warns clearly
-- [x] The scheduling wizard is offered (but not required) at the end of `scorerole init`
-- [x] Existing `scorerole` and `scorerole --all` manual runs are unaffected
+- [x] After `metis schedule --set`, the launchd plist exists and is loaded
+- [x] `metis schedule` shows the active schedule and OS job health
+- [x] `metis schedule --remove` clears both the OS job and `schedule.json`
+- [x] Re-running `metis schedule --set` replaces the existing schedule without orphaning the old plist
+- [x] If the venv binary has moved, `metis schedule` warns clearly
+- [x] The scheduling wizard is offered (but not required) at the end of `metis init`
+- [x] Existing `metis` and `metis --all` manual runs are unaffected
 - [ ] Missed runs (machine was asleep) are silently skipped — no backfill *(known; see ARCHITECTURE.md T-11)*
 
 ---
 
-### Flow 4 — Reset & Troubleshoot (`scorerole reset`, `scorerole debug`)
+### Flow 4 — Reset & Troubleshoot (`metis reset`, `metis debug`)
 
 **Goal:** User needs to inspect what's happening or clear state after a gap or issue.
 
 ```
-scorerole debug
+metis debug
   → Fetches and dumps the most recent LinkedIn alert email body
   → Saves to ~/.job_pipeline/debug_email.txt; prints first 2000 chars to terminal
   → Useful for diagnosing why expected roles aren't appearing
 
-scorerole reset
+metis reset
   → Clears seen_roles.json (dedup state only; profile is preserved)
   → Prompts for confirmation before deleting
   → Next run re-evaluates all roles within the lookback window
 
-scorerole reset --profile
+metis reset --profile
   → Also deletes ~/.job_pipeline/profile.yaml
-  → scorerole init must be run before the next pipeline run
+  → metis init must be run before the next pipeline run
 ```
 
 **Exit criteria:**
-- [ ] `scorerole debug` produces output regardless of whether jobs were found; never crashes *(partial — IMAP auth failure during debug produces a clean error message, but no output file)*
-- [x] `scorerole reset` prompts for confirmation; does not delete without it
-- [x] After `scorerole reset`, a same-day run re-evaluates previously seen roles
-- [x] `scorerole reset --profile` + `scorerole` without init → clean error pointing to `scorerole init`, not a Python traceback
+- [ ] `metis debug` produces output regardless of whether jobs were found; never crashes *(partial — IMAP auth failure during debug produces a clean error message, but no output file)*
+- [x] `metis reset` prompts for confirmation; does not delete without it
+- [x] After `metis reset`, a same-day run re-evaluates previously seen roles
+- [x] `metis reset --profile` + `metis` without init → clean error pointing to `metis init`, not a Python traceback
 
 ---
 
 ## 7. Profile Schema
 
-All fields are user-editable — either through `scorerole init` or by editing
+All fields are user-editable — either through `metis init` or by editing
 `~/.job_pipeline/profile.yaml` directly.
 
 | Section | What it captures |
@@ -353,9 +353,10 @@ requires editing `render.py` or the React Email template (`render.ts`).
 
 **Structure:**
 ```
-Header:   "Personalized Job Alert Digest — [date]"
-Stat row: [N roles evaluated]  [N apply]  [N consider]
-Legend:   green = strength match · amber = proceed with awareness · red = real concern
+Subject:  "Metis Digest — N new roles for you — [date]"
+Header:   Personalized greeting (time-of-day + name) when candidate_name set; "Metis Digest" otherwise
+Stat row: [N Evaluated]  [N Solid Match]  [N Moderate Match]
+Legend:   green = Strengths · amber = Caution · red = Blockers
 
 ── Apply  (score ≥ 75) ──────────────────────────────────────────────────
   Title                                                          [score%]
@@ -372,7 +373,7 @@ Legend:   green = strength match · amber = proceed with awareness · red = real
   [compact 2-column grid: title · company · location · top friction tag]
 
 ── Footer ───────────────────────────────────────────────────────────────
-  scorerole · powered by Claude · N roles evaluated
+  metis · powered by Claude · N roles evaluated
   [· N filtered by deal-breaker]  ← shown only when roles were filtered
 ```
 
@@ -386,7 +387,7 @@ Legend:   green = strength match · amber = proceed with awareness · red = real
   *(prompted; not post-processed — `[]` is enforced but `["none"]` is not caught)*
 - [x] Digest renders at 600px max width with no overflow or broken layout
 - [x] "View posting →" links resolve to the correct LinkedIn job URL
-- [x] Digest delivered within a few minutes of running `scorerole`
+- [x] Digest delivered within a few minutes of running `metis`
   (target: 60–90 seconds for a 20-role run)
 
 ---
@@ -400,12 +401,12 @@ All user-facing configuration lives in two places: `.env` (runtime and secrets) 
 |---|---|---|---|
 | Lookback window | `--lookback` flag or `DEFAULT_LOOKBACK` in `.env` | `3d` | Accepts `7d`, `14d`, `2026-06-01`, `yesterday` |
 | Max roles per run | `MAX_JOBS_PER_RUN` in `.env` | `20` | Set to `0` for no cap |
-| Score all roles (bypass cap) | `--all` flag | off | Bypasses the per-run cap only. Does NOT bypass the 14-day dedup gate. Use `scorerole reset` to clear dedup state. |
+| Score all roles (bypass cap) | `--all` flag | off | Bypasses the per-run cap only. Does NOT bypass the 14-day dedup gate. Use `metis reset` to clear dedup state. |
 | Apply threshold | `scoring.apply_threshold` in `profile.yaml` | `75` | Roles at or above → "Apply" |
 | Consider threshold | `scoring.consider_threshold` in `profile.yaml` | `55` | Roles between thresholds → "Consider"; below → "Skipped" |
 | Level-mismatch penalty | `scoring.level_mismatch_deduction` in `profile.yaml` | `10` | Deducted when job title lacks a seniority signal (Staff / Lead / Director / VP / etc.) |
 
-| Automated digest schedule | `scorerole schedule --set` | off | Daily / twice-weekly (Mon+Thu) / weekly. Installs a launchd job (macOS) or crontab entry (Linux). Config stored in `~/.job_pipeline/schedule.json`. |
+| Automated digest schedule | `metis schedule --set` | off | Daily / twice-weekly (Mon+Thu) / weekly. Installs a launchd job (macOS) or crontab entry (Linux). Config stored in `~/.job_pipeline/schedule.json`. |
 
 **Planned but not yet implemented:**
 - Per-criterion score weighting (e.g., weight remote policy 2×)
@@ -437,17 +438,17 @@ Rationale for non-obvious product decisions:
 | Q1 | Run latency: 60–90s for 20 roles is acceptable. > 10 min = investigate. | Dominated by sequential JD HTTP fetches; parallelisation is possible but not needed yet. |
 | Q2 | `deal_breakers` are hard filters, not score penalties. | A deal-breaker violation means the role should never appear in the digest, period. Future: opt-in soft-filter mode for users who prefer a penalty. |
 | Q3 | Future sources: Tier A (IMAP email — Indeed, Glassdoor); Tier B (HTTP/RSS — VC boards like a16z). | Tier A reuses the existing IMAP parser. Tier B is a separate engineering track with different auth and scraping concerns. |
-| Q4 | `salary_floor_usd` is the single source of truth for the salary hard gate. | `salary_floor_usd` in `profile.yaml` is the authoritative floor. When the user updates salary via `scorerole init`, any salary mention in `deal_breakers[]` is automatically removed to prevent conflict (deal-breakers are applied before the `salary_floor_usd` check, so a stale deal-breaker would silently override the user's explicit floor). Planned: if listed salary < 90% of floor → filter; if 90–99% → score normally, add amber "salary near floor" tag. Not yet implemented — currently `salary_floor_usd` is sent to Claude as context and Claude applies it with its own judgment. |
+| Q4 | `salary_floor_usd` is the single source of truth for the salary hard gate. | `salary_floor_usd` in `profile.yaml` is the authoritative floor. When the user updates salary via `metis init`, any salary mention in `deal_breakers[]` is automatically removed to prevent conflict (deal-breakers are applied before the `salary_floor_usd` check, so a stale deal-breaker would silently override the user's explicit floor). Planned: if listed salary < 90% of floor → filter; if 90–99% → score normally, add amber "salary near floor" tag. Not yet implemented — currently `salary_floor_usd` is sent to Claude as context and Claude applies it with its own judgment. |
 | Q5 | Haiku pre-screen filters on function only — not seniority level. | The pre-screen sees only title+company (no JD). It cannot reliably assess scope: a "Senior PM" role may be Staff-scope in practice. Pre-screen filters only wrong-function roles (engineering, marketing, design, sales) and obvious deal-breaker matches. All PM/product roles at any seniority level pass through to full Sonnet scoring, where scope is assessed against the JD. Missing 1 in 10 function-mismatches is acceptable; false negatives on level are not. |
-| Q6 | `scorerole config` not re-added. | `scorerole init` and `.env` cover all configuration surfaces. No meaningful third category. |
+| Q6 | `metis config` not re-added. | `metis init` and `.env` cover all configuration surfaces. No meaningful third category. |
 | Q7 | Single-user only for v0.1. | No secondary persona. Senior Companion is a separate unrelated project. |
 | Q8 | Crash / failure recovery — known limitation in v0.1. | `seen_roles.json` is only written after a successful digest delivery. Any failure before that point (scoring error, SMTP failure, crash) leaves roles unmarked. A re-run re-fetches and re-scores the same roles, incurring additional API cost. This behaviour prioritises delivery guarantee (never mark a role seen if the user didn't receive the digest) over cost efficiency. **Future mitigation:** save the rendered HTML to disk on SMTP failure so the user can resend without re-scoring (ARCHITECTURE.md T-07). |
-| Q9 | `profile.yaml` schema versioning — not handled in v0.1. | No `schema_version` field exists. Missing fields fail gracefully (silently omitted from scoring prompt). Renamed or restructured fields would silently produce incorrect scoring with no warning. If scorerole is updated and the profile schema changes, re-run `scorerole init → Quick edit` to review and fill in any new fields. **Future:** add `schema_version` to profile.yaml; detect version mismatch on load and prompt for migration. |
+| Q9 | `profile.yaml` schema versioning — not handled in v0.1. | No `schema_version` field exists. Missing fields fail gracefully (silently omitted from scoring prompt). Renamed or restructured fields would silently produce incorrect scoring with no warning. If metis is updated and the profile schema changes, re-run `metis init → Quick edit` to review and fill in any new fields. **Future:** add `schema_version` to profile.yaml; detect version mismatch on load and prompt for migration. |
 | Q10 | Relocation choices in wizard are US-only — known limitation. | `_RELOCATION_CITIES` is a hardcoded list of 9 US metros. International users can express relocation preferences by editing `profile.yaml` directly (`candidate.open_to_relocation: ["London, UK", "Toronto, ON"]`). A free-text "Other" field in the wizard is a planned UX improvement. |
 | Q11 | Easy Apply vs. external ATS is invisible in the digest — by design for v0.1. | `apply_url` (the external ATS link from LinkedIn JSON-LD) is fetched and stored in the job dict but not surfaced in the digest card. Both Easy Apply and external-ATS roles display the same "View posting →" LinkedIn link. Surfacing the distinction (e.g. a "Direct apply" badge on cards with an ATS link) is planned for a future digest version. |
 | Q12 | Deal-breaker filtering relies on Claude's judgment, not deterministic matching. | The `verdict="filtered"` is set by the scoring model based on profile deal-breaker text. An ambiguous role might occasionally slip through. Deterministic keyword matching against `deal_breakers[]` is a future option for users who need guaranteed filtering. |
-| Q13 | Gmail INBOX assumed — label-filtered emails not supported. | The IMAP search targets the INBOX folder. If a user has a Gmail filter that labels LinkedIn job alerts and archives them, `scorerole` will find 0 emails. Workaround: disable the archive action on that Gmail filter, or adjust the filter to keep matching emails in INBOX. |
+| Q13 | Gmail INBOX assumed — label-filtered emails not supported. | The IMAP search targets the INBOX folder. If a user has a Gmail filter that labels LinkedIn job alerts and archives them, `metis` will find 0 emails. Workaround: disable the archive action on that Gmail filter, or adjust the filter to keep matching emails in INBOX. |
 | Q14 | Scoring API errors (network, rate limit) produce a traceback — known limitation in v0.1. | No retry logic on `score_jobs_batch`. A transient API error during scoring exits with a traceback. JD enrichment work is lost; re-running re-fetches and re-scores. A single retry with exponential backoff is planned. |
-| Q15 | Long `notes` / AI-instructions field is hard to edit in-wizard. | `questionary.text` is a single-line input. Editing a multi-sentence `notes` value is awkward. Workaround: use `scorerole init → Open in editor` to edit `profile.yaml` directly for any long free-text field. |
-| Q16 | Scheduled job bakes in the venv binary path at install time. | The launchd plist and crontab line store the absolute path to `scorerole` (inside the venv). If the venv is recreated, the path becomes stale and the scheduled run fails silently. Mitigation: `scorerole schedule` detects this and warns. Fix: `scorerole schedule --set` reinstalls with the current binary. An alternative (using `env scorerole`) would require the venv to be on PATH at launchd start time, which is unreliable across macOS versions. Absolute path is more predictable. |
-| Q17 | Twice-weekly uses Monday and Thursday specifically. | Chosen to space digests evenly across the work week (3 days apart). This gives 4-day lookback coverage with minimal overlap. Users who prefer different days can run `scorerole schedule --set` and select "Weekly" for a custom single day, then run again for their second day — though this creates two independent plist entries, which is not yet supported in v0.1. Alternative: edit `schedule.json` and re-run `scorerole schedule --set` to regenerate the plist. |
+| Q15 | Long `notes` / AI-instructions field is hard to edit in-wizard. | `questionary.text` is a single-line input. Editing a multi-sentence `notes` value is awkward. Workaround: use `metis init → Open in editor` to edit `profile.yaml` directly for any long free-text field. |
+| Q16 | Scheduled job bakes in the venv binary path at install time. | The launchd plist and crontab line store the absolute path to `metis` (inside the venv). If the venv is recreated, the path becomes stale and the scheduled run fails silently. Mitigation: `metis schedule` detects this and warns. Fix: `metis schedule --set` reinstalls with the current binary. An alternative (using `env metis`) would require the venv to be on PATH at launchd start time, which is unreliable across macOS versions. Absolute path is more predictable. |
+| Q17 | Twice-weekly uses Monday and Thursday specifically. | Chosen to space digests evenly across the work week (3 days apart). This gives 4-day lookback coverage with minimal overlap. Users who prefer different days can run `metis schedule --set` and select "Weekly" for a custom single day, then run again for their second day — though this creates two independent plist entries, which is not yet supported in v0.1. Alternative: edit `schedule.json` and re-run `metis schedule --set` to regenerate the plist. |

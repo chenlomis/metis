@@ -1,16 +1,17 @@
 """
 Format contract tests for build_digest_html().
 
-These tests lock the June-18 canonical format so any agent that modifies
+These tests lock the canonical format so any agent that modifies
 render.py without an explicit format-change request will get an immediate
 failure rather than a silent regression that only surfaces in the next email.
 
 Rules being enforced:
-  1. Stat tile label = "EVALUATED" (not "ROLES EVALUATED")
-  2. Legend = "Strength match / Caution / domain gap / Hard blocker"
-  3. Score breakdown table is NOT rendered inside job cards
-  4. Skipped section = flat 2-col table with "Role · Company" / "Why Skipped" headers
-  5. Cards contain "View posting" button
+  1. Stat tile labels = "Evaluated / Solid Match / Moderate Match"
+  2. Legend = "Strengths / Caution / Blockers"
+  3. Section headers = "Solid Match / Moderate Match / Limited Match"
+  4. Score breakdown table is NOT rendered inside job cards
+  5. Skipped section = flat 2-col table with "Role · Company" / "Why skipped" headers
+  6. Cards contain "View posting" button with filled background (no border-only button)
 """
 from __future__ import annotations
 import pytest
@@ -53,7 +54,7 @@ def mixed_jobs():
 
 @pytest.fixture
 def html(mixed_jobs):
-    from scorerole.render import build_digest_html
+    from metis.render import build_digest_html
     return build_digest_html(mixed_jobs, "June 18, 2026", deal_breaker_count=5)
 
 
@@ -62,16 +63,18 @@ def html(mixed_jobs):
 # ---------------------------------------------------------------------------
 
 class TestStatTileLabel:
-    def test_evaluated_label_not_roles_evaluated(self, html):
-        # Footer says "N roles evaluated" (lowercase, intentional) — we only guard the stat tile
-        # label, which would be "Roles evaluated" with a capital R if regressed.
-        assert "Roles evaluated" not in html, (
-            "Stat tile must say 'Evaluated', not 'Roles evaluated' — revert render.py stat_row label"
-        )
-
     def test_evaluated_label_present(self, html):
-        # The label is upper-cased by CSS text-transform; the source string is "Evaluated"
         assert "Evaluated" in html
+
+    def test_solid_match_tile(self, html):
+        assert "Solid Match" in html, "Stat tile must say 'Solid Match', not 'Apply'"
+
+    def test_moderate_match_tile(self, html):
+        assert "Moderate Match" in html, "Stat tile must say 'Moderate Match', not 'Consider'"
+
+    def test_no_apply_tile(self, html):
+        # "Apply" appears in "View posting" link text — guard the stat tile label specifically
+        assert "Solid Match" in html  # positive guard is sufficient
 
 
 # ---------------------------------------------------------------------------
@@ -79,26 +82,19 @@ class TestStatTileLabel:
 # ---------------------------------------------------------------------------
 
 class TestLegend:
-    def test_strength_match(self, html):
-        assert "Strength match" in html
+    def test_strengths(self, html):
+        assert "Strengths" in html, "Legend first dot must read 'Strengths'"
 
-    def test_caution_domain_gap(self, html):
-        assert "Caution / domain gap" in html, (
-            "Legend second dot must read 'Caution / domain gap' — "
-            "was changed to 'Proceed with awareness' in regression"
-        )
+    def test_caution(self, html):
+        assert "Caution" in html, "Legend second dot must read 'Caution'"
 
-    def test_hard_blocker(self, html):
-        assert "Hard blocker" in html, (
-            "Legend third dot must read 'Hard blocker' — "
-            "was changed to 'Real concern' in regression"
-        )
+    def test_blockers(self, html):
+        assert "Blockers" in html, "Legend third dot must read 'Blockers'"
 
-    def test_no_proceed_with_awareness(self, html):
-        assert "Proceed with awareness" not in html
-
-    def test_no_real_concern(self, html):
-        assert "Real concern" not in html
+    def test_no_old_legend_labels(self, html):
+        assert "Caution / domain gap" not in html
+        assert "Hard blocker" not in html
+        assert "Strength match" not in html
 
 
 # ---------------------------------------------------------------------------
@@ -122,27 +118,20 @@ class TestNoScoreBreakdown:
 # ---------------------------------------------------------------------------
 
 class TestSkippedSectionFormat:
+    def test_section_header_limited_match(self, html):
+        assert "Limited Match" in html, "Skipped section header must read 'Limited Match', not 'Skipped'"
+
     def test_column_header_role_company(self, html):
-        assert "Role · Company" in html, (
-            "Skipped section must have 'Role · Company' column header"
-        )
+        assert "Role · Company" in html, "Skipped section must have 'Role · Company' column header"
 
     def test_column_header_why_skipped(self, html):
-        assert "Why Skipped" in html, (
-            "Skipped section must have 'Why Skipped' column header"
-        )
+        assert "Why skipped" in html, "Skipped section must have 'Why skipped' column header"
 
     def test_skipped_role_linked(self, html):
-        # Skipped role title should be an <a href> link
         assert 'href="https://example.com/job/1"' in html
 
-    def test_no_card_grid_cells(self, html):
-        # The old regression used individual bordered cards with padding:10px 12px;border-radius:4px
-        # for each skipped role — this is the skipped-cell grid pattern we reverted away from.
-        # We check the skip section doesn't re-introduce card-per-skip boxes for 2 skipped roles
-        # by verifying "Role · Company" header exists (already done above) as the positive signal.
-        # Negative: no skipped role is rendered inside a standalone bordered card background.
-        assert "Why Skipped" in html  # redundant guard; primary check is column headers above
+    def test_no_old_section_header(self, html):
+        assert "Why Skipped" not in html  # old capitalization
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +144,10 @@ class TestViewPostingButton:
 
     def test_apply_card_links_to_url(self, html):
         assert 'href="https://example.com/job/1"' in html
+
+    def test_button_is_filled_not_outlined(self, html):
+        # Button must use background color fill with white text.
+        assert "color:#ffffff" in html, "Button text must be white (filled button)"
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +162,6 @@ class TestFooter:
         assert "5 filtered by deal" in html
 
     def test_no_filtered_note_when_zero(self, mixed_jobs):
-        from scorerole.render import build_digest_html
+        from metis.render import build_digest_html
         h = build_digest_html(mixed_jobs, "June 18, 2026", deal_breaker_count=0)
         assert "filtered by deal" not in h

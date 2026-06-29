@@ -1,9 +1,9 @@
 """track.py — parse confirmation and rejection emails, update the Applications tracker.
 
 Usage:
-    scorerole track                   # parse emails from last 7 days
-    scorerole track --lookback 30d    # extend lookback
-    scorerole track --no-excel        # print matches to stdout, no xlsx write or open
+    metis track                   # parse emails from last 7 days
+    metis track --lookback 30d    # extend lookback
+    metis track --no-excel        # print matches to stdout, no xlsx write or open
 
 Pipeline:
     1. Fetch emails from Gmail matching broad subject-line patterns
@@ -204,13 +204,13 @@ _COMPANY_FROM_SUBJECT = [
     re.compile(r"we have received your application for ([A-Za-z0-9][A-Za-z0-9 &.,]+?)(?:[!,]|$)", re.IGNORECASE),
     # "{COMPANY}: Thanks for..." (Atlassian)
     re.compile(r"^([A-Za-z0-9][^:]+?):\s+thanks for", re.IGNORECASE),
-    # "Lomis, Thank you from {COMPANY}" — leading name prefix
+    # "Alex, Thank you from {COMPANY}" — leading name prefix with candidate first name
     re.compile(r"^[A-Z][a-z]+,\s+thank you from ([A-Za-z0-9][^!,\n]+?)(?:[!,]|$)", re.IGNORECASE),
 ]
 
 # Trailing noise to strip from extracted company names
 _COMPANY_TRAILING_NOISE = re.compile(
-    r"\s*[-–]\s*(?:[A-Z][a-z]+ [A-Z][a-z]+|[A-Z][a-z]+,? [A-Z][a-z]+)$"  # "- Lomis Chen"
+    r"\s*[-–]\s*(?:[A-Z][a-z]+ [A-Z][a-z]+|[A-Z][a-z]+,? [A-Z][a-z]+)$"  # "- Alex Chen" — trailing candidate name
 )
 _COMPANY_LEADING_THE   = re.compile(r"^the\s+", re.IGNORECASE)
 _COMPANY_SENDER_SUFFIX = re.compile(
@@ -357,7 +357,7 @@ def fetch_candidate_emails(
     # Gmail evaluates these server-side so no per-message round trips needed.
     # Each term is a COMPLETE WORD or phrase as it appears in real subjects.
     # Gmail IMAP does word-based search — "apply" does NOT match "applying".
-    # All terms derived from real email samples in scorerole_confEmail/.
+    # All terms derived from real email samples in metis_confEmail/.
     _SUBJECT_SEARCHES = [
         # Confirmation — "Thank you for applying to {Company}" (Greenhouse, direct)
         "thank you for applying",
@@ -595,8 +595,8 @@ def _clean_company(raw: str) -> str | None:
     Returns None if the extracted string looks like a job title rather than a company name.
     """
     company = raw.strip().rstrip("!").strip()
-    company = re.sub(r",\s+[A-Z][a-z]+$", "", company)       # trailing ", Lomis"
-    company = _COMPANY_TRAILING_NOISE.sub("", company)         # trailing "- Lomis Chen"
+    company = re.sub(r",\s+[A-Z][a-z]+$", "", company)       # trailing ", FirstName"
+    company = _COMPANY_TRAILING_NOISE.sub("", company)         # trailing "- Candidate Name"
     company = _COMPANY_LEADING_THE.sub("", company)            # leading "the "
     company = _COMPANY_SENDER_SUFFIX.sub("", company)          # trailing "Recruiting", "Talent"
     company = company.strip()
@@ -683,6 +683,40 @@ def extract_role(subject: str, body: str) -> str | None:
     return None
 
 
+_ROLE_EXTRACT_PROMPT = """\
+You are extracting a job role title from an application confirmation email.
+
+Subject: {subject}
+
+Email body (first 1500 chars):
+{body}
+
+Reply with ONLY the job title/role name the candidate applied for.
+Examples of valid replies: "Staff Product Manager", "Principal PM – AI Platform", "Senior Software Engineer"
+If no specific role title is mentioned anywhere in the email, reply with exactly: NONE
+No punctuation, no explanation, no quotes."""
+
+
+def _extract_role_llm(subject: str, body: str, client) -> str | None:
+    """Haiku fallback when regex role extraction returns nothing."""
+    try:
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=30,
+            messages=[{"role": "user", "content": _ROLE_EXTRACT_PROMPT.format(
+                subject=subject,
+                body=body[:1500],
+            )}],
+        )
+        result = resp.content[0].text.strip()
+        if result.upper() == "NONE" or not result:
+            return None
+        return _clean_role(result)
+    except Exception as exc:
+        log.debug("track: LLM role extraction failed (%s)", exc)
+        return None
+
+
 def parse_email(email_dict: dict, llm_client=None) -> dict:
     """Classify and extract structured fields from a candidate email."""
     subject = email_dict["subject"]
@@ -696,7 +730,11 @@ def parse_email(email_dict: dict, llm_client=None) -> dict:
     if not company:
         company = _company_from_sender(email_dict.get("sender", ""))
 
-    role    = extract_role(subject, body)
+    role = extract_role(subject, body)
+    # Claude fallback when regex comes up empty — many ATS templates don't use
+    # standard "applying for the X role" phrasing but do mention the title somewhere
+    if role is None and llm_client is not None:
+        role = _extract_role_llm(subject, body, llm_client)
     log.debug("track: parse  [%s] company=%r | %s", classification[:4], company, subject[:70])
 
     return {
@@ -861,7 +899,8 @@ def _apply_status_fill(ws, row_idx: int, col: int, value: str) -> None:
         "Pending":          "FFEB9C",
         "Proceeding":       "C6EFCE",
         "Rejected":         "FFC7CE",
-        "Skipped":          "D9D9D9",
+        "Limited Match":    "D9D9D9",
+        # "External" intentionally omitted — no fill (white/blank)
         "Recruiter Screen": "BDD7EE",  # light blue
     }
     color = _STATUS_FILL.get(value)
@@ -929,7 +968,7 @@ def create_skipped_row(ws, parsed: dict, skipped_meta: dict) -> None:
     score = skipped_meta.get("match_score")
     _write_row_from_email(
         ws, parsed,
-        suggestion_status="Skipped",
+        suggestion_status="Limited Match",
         date_suggested=skipped_meta.get("date_suggested"),
         match_score=(score / 100.0) if score else None,
         url=skipped_meta.get("url", ""),
@@ -946,10 +985,10 @@ def create_backfill_row(ws, parsed: dict) -> None:
     """Create a row for a confirmed application with no prior tracker entry.
 
     Used for roles applied to before the tracker existed, or applied to outside
-    the scorerole digest. suggestion_status='Pre-tracker' marks these as backfills.
-    date_suggested is left blank — we don't know when (or if) scorerole suggested it.
+    the metis digest. suggestion_status='External' marks these as applied outside
+    the digest flow. date_suggested is left blank.
     """
-    _write_row_from_email(ws, parsed, suggestion_status="Pre-tracker")
+    _write_row_from_email(ws, parsed, suggestion_status="External")
 
 
 # ---------------------------------------------------------------------------
@@ -967,7 +1006,7 @@ def _parse_digest_html(html: str, email_date: str) -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
 
     # ── Prefer embedded JSON data island (added to future digests) ──────────
-    tag = soup.find("script", {"type": "application/json", "id": "scorerole-data"})
+    tag = soup.find("script", {"type": "application/json", "id": "metis-data"})
     if tag and tag.string:
         import json as _json
         try:
@@ -1105,7 +1144,7 @@ def backfill_from_digests(
                 imap.login(gmail_address, app_password)
                 imap.select("INBOX")
 
-                _, data = imap.search(None, f'SINCE {since_str} SUBJECT "Personalized Job Alert Digest"')
+                _, data = imap.search(None, f'SINCE {since_str} SUBJECT "Metis Digest"')
                 if not data or not data[0]:
                     log.info("track: no digest emails found since %s", since_str)
                     return 0
@@ -1302,7 +1341,7 @@ def run_track(
                     create_skipped_row(ws, parsed, skipped_meta)
                     promote_skipped_role(company, role or "")
                 else:
-                    log.info("track: backfill (pre-tracker) — %s / %s", company, role or "?")
+                    log.info("track: backfill (external) — %s / %s", company, role or "?")
                     create_backfill_row(ws, parsed)
                 changed += 1
             else:

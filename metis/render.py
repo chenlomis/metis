@@ -33,10 +33,10 @@ GMAIL_ADDRESS      = os.getenv("GMAIL_ADDRESS", "")
 GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
 RECIPIENT_EMAIL    = os.getenv("RECIPIENT_EMAIL", GMAIL_ADDRESS)
 
-_FONT     = "-apple-system, 'Helvetica Neue', Arial, sans-serif"
-_C_MUTED  = "#888780"
+_FONT     = "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
+_C_MUTED  = "#72716d"   # matches colors.ts C_MUTED
 _C_BORDER = "#e5e5e5"
-_C_BODY   = "#5F5E5A"
+_C_BODY   = "#1f2118"   # matches colors.ts C_BODY (warm near-black, not gray)
 
 _TAG_THEME = {
     "green": ("#EAF3DE", "#3B6D11"),
@@ -77,14 +77,14 @@ def _leverage_friction(leverage_pts, friction_pts) -> str:
     for pt in leverage_pts:
         html += (
             f'<p style="margin:0 0 4px 0;font-size:13px;line-height:1.6;font-family:{_FONT}">'
-            f'<span style="color:{_C_MUTED}">&#8593; </span>'
-            f'<span style="color:{_C_BODY}">{pt}</span></p>'
+            f'<span style="color:#2d5a2d">&#8593; </span>'
+            f'<span style="color:#2d5a2d">{pt}</span></p>'
         )
     for pt in friction_pts:
         html += (
             f'<p style="margin:0 0 10px 0;font-size:13px;line-height:1.6;font-family:{_FONT}">'
-            f'<span style="color:{_C_MUTED}">&#8595; </span>'
-            f'<span style="color:#854F0B">{pt}</span></p>'
+            f'<span style="color:#7a5c1e">&#8595; </span>'
+            f'<span style="color:#7a5c1e">{pt}</span></p>'
         )
     if html and not friction_pts:
         html = html.replace('margin:0 0 3px 0', 'margin:0 0 10px 0')
@@ -206,8 +206,8 @@ def _job_card(job: dict, bg: str, pill_bg: str, pill_color: str) -> str:
         f'<table width="100%" cellpadding="0" cellspacing="0" border="0"><tr>'
         f'<td style="font-size:11px;color:{_C_MUTED};font-family:{_FONT}">{alumni_html}</td>'
         f'<td style="text-align:right">'
-        f'<a href="{link_url}" style="font-size:12px;font-weight:500;color:#185FA5;'
-        f'text-decoration:none;border:1px solid #ddd;padding:5px 12px;'
+        f'<a href="{link_url}" style="font-size:12px;font-weight:500;color:#ffffff;'
+        f'text-decoration:none;background:{pill_color};padding:5px 12px;'
         f'border-radius:4px;font-family:{_FONT};display:inline-block">'
         f'View posting &#8594;</a>'
         f'</td></tr></table>'
@@ -294,6 +294,61 @@ def build_digest_payload(
     }
 
 
+def _resolve_react_dir() -> "Path | None":
+    """Return the React Email working directory, bootstrapping it on first use.
+
+    Priority:
+      1. Project root (dev: cloned repo with node_modules already present)
+      2. ~/.job_pipeline/email_templates (installed: bootstrapped from package data)
+
+    Returns None if Node is not available or bootstrap fails.
+    """
+    # --- dev path: project root already has node_modules ---
+    dev_dir = Path(__file__).parent.parent
+    if (dev_dir / "node_modules" / ".bin" / "ts-node").exists() and (dev_dir / "render.ts").exists():
+        return dev_dir
+
+    # --- installed path: bootstrap from bundled package data ---
+    data_dir = Path(os.environ.get("METIS_DATA_DIR", Path.home() / ".job_pipeline"))
+    react_dir = data_dir / "email_templates"
+    ts_node   = react_dir / "node_modules" / ".bin" / "ts-node"
+
+    if ts_node.exists():
+        return react_dir  # already bootstrapped
+
+    # Check Node is available before attempting bootstrap
+    if subprocess.run(["node", "--version"], capture_output=True).returncode != 0:
+        log.warning("Node not found — falling back to Python renderer. Install Node ≥18 to use React Email.")
+        return None
+
+    # Copy bundled template source into data dir (once)
+    pkg_templates = Path(__file__).parent / "email_templates"
+    if not pkg_templates.exists():
+        log.warning("Bundled email_templates not found in package — falling back to Python renderer.")
+        return None
+
+    import shutil
+    react_dir.mkdir(parents=True, exist_ok=True)
+    for src in pkg_templates.rglob("*"):
+        if src.is_file():
+            dest = react_dir / src.relative_to(pkg_templates)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dest)
+
+    # Run npm install (one-time, ~30s)
+    log.info("First-time React Email setup — running npm install (this takes ~30 seconds) …")
+    result = subprocess.run(
+        ["npm", "install", "--prefer-offline"],
+        cwd=str(react_dir), capture_output=True, text=True, timeout=120,
+    )
+    if result.returncode != 0:
+        log.warning(f"npm install failed: {result.stderr[:300]} — falling back to Python renderer.")
+        return None
+
+    log.info("React Email setup complete.")
+    return react_dir
+
+
 def render_html(jobs: list[dict], run_date: str, deal_breaker_count: int = 0) -> str:
     from .profile import load_profile_yaml
     profile        = load_profile_yaml() or {}
@@ -302,11 +357,11 @@ def render_html(jobs: list[dict], run_date: str, deal_breaker_count: int = 0) ->
     consider_count = sum(1 for j in jobs if j.get("eval", {}).get("verdict") == "consider")
     greeting, greeting_sub = _make_greeting(candidate_name, apply_count, consider_count, len(jobs)) if candidate_name else ("", "")
 
-    pipeline_dir  = Path(__file__).parent.parent  # scorerole/ → project root
-    ts_node       = pipeline_dir / "node_modules" / ".bin" / "ts-node"
-    render_script = pipeline_dir / "render.ts"
+    pipeline_dir = _resolve_react_dir()
 
-    if ts_node.exists() and render_script.exists():
+    if pipeline_dir is not None:
+        ts_node       = pipeline_dir / "node_modules" / ".bin" / "ts-node"
+        render_script = pipeline_dir / "render.ts"
         payload = build_digest_payload(jobs, run_date, deal_breaker_count, candidate_name, greeting, greeting_sub)
         # ts-node reads the payload file after Python closes the fd, so we use mkstemp
         # (delete=False equivalent) and restrict permissions before writing any data.
@@ -345,11 +400,11 @@ def build_digest_html(jobs: list[dict], run_date: str, deal_breaker_count: int =
     stat_row = (
         f'<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:14px">'
         f'<tr>'
-        f'{_stat_cell(len(jobs),    "Evaluated", "#5F5E5A")}'
+        f'{_stat_cell(len(jobs),    "Evaluated", "#1f2118")}'
         f'<td width="6">&nbsp;</td>'
-        f'{_stat_cell(len(apply),   "Apply now",       "#3B6D11")}'
+        f'{_stat_cell(len(apply),   "Solid Match",     "#2d5a2d")}'
         f'<td width="6">&nbsp;</td>'
-        f'{_stat_cell(len(consider),"Consider",        "#854F0B")}'
+        f'{_stat_cell(len(consider),"Moderate Match",  "#854F0B")}'
         f'</tr></table>'
     )
 
@@ -362,12 +417,12 @@ def build_digest_html(jobs: list[dict], run_date: str, deal_breaker_count: int =
     legend = (
         f'<table cellpadding="0" cellspacing="0" border="0" style="margin-bottom:20px">'
         f'<tr>'
-        f'{_dot("#639922")}'
-        f'<td style="font-size:12px;color:{_C_MUTED};padding:0 12px 0 5px;font-family:{_FONT}">Strength match</td>'
-        f'{_dot("#BA7517")}'
-        f'<td style="font-size:12px;color:{_C_MUTED};padding:0 12px 0 5px;font-family:{_FONT}">Caution / domain gap</td>'
-        f'{_dot("#A32D2D")}'
-        f'<td style="font-size:12px;color:{_C_MUTED};padding:0 0 0 5px;font-family:{_FONT}">Hard blocker</td>'
+        f'{_dot("#2d5a2d")}'
+        f'<td style="font-size:12px;color:{_C_MUTED};padding:0 14px 0 5px;font-family:{_FONT}">Strengths</td>'
+        f'{_dot("#7a5c1e")}'
+        f'<td style="font-size:12px;color:{_C_MUTED};padding:0 14px 0 5px;font-family:{_FONT}">Caution</td>'
+        f'{_dot("#8b2e2e")}'
+        f'<td style="font-size:12px;color:{_C_MUTED};padding:0 0 0 5px;font-family:{_FONT}">Blockers</td>'
         f'</tr></table>'
     )
 
@@ -378,11 +433,11 @@ def build_digest_html(jobs: list[dict], run_date: str, deal_breaker_count: int =
         for i, job in enumerate(apply):
             if i:
                 cards += '<tr><td height="12" style="font-size:0;line-height:0">&nbsp;</td></tr>'
-            cards += f'<tr><td>{_job_card(job, "#ffffff", "#EAF3DE", "#3B6D11")}</td></tr>'
+            cards += f'<tr><td>{_job_card(job, "#ffffff", "#eef2ee", "#2d5a2d")}</td></tr>'
         apply_html = (
             f'<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:20px">'
             f'<tr><td colspan="1" style="padding-bottom:10px">'
-            f'{_section_header("Apply", _score_range(apply), "#639922", "#3B6D11")}'
+            f'{_section_header("Solid Match", _score_range(apply), "#2d5a2d", "#2d5a2d")}'
             f'</td></tr>'
             f'{cards}'
             f'</table>'
@@ -395,11 +450,11 @@ def build_digest_html(jobs: list[dict], run_date: str, deal_breaker_count: int =
         for i, job in enumerate(consider):
             if i:
                 cards += '<tr><td height="12" style="font-size:0;line-height:0">&nbsp;</td></tr>'
-            cards += f'<tr><td>{_job_card(job, "#fafafa", "#FAEEDA", "#854F0B")}</td></tr>'
+            cards += f'<tr><td>{_job_card(job, "#fafafa", "#f4f0e8", "#7a5c1e")}</td></tr>'
         consider_html = (
             f'<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:20px">'
             f'<tr><td style="padding-bottom:10px">'
-            f'{_section_header("Consider", _score_range(consider), "#BA7517", "#854F0B")}'
+            f'{_section_header("Moderate Match", _score_range(consider), "#7a5c1e", "#7a5c1e")}'
             f'</td></tr>'
             f'{cards}'
             f'</table>'
@@ -413,14 +468,14 @@ def build_digest_html(jobs: list[dict], run_date: str, deal_breaker_count: int =
             f'<td style="font-size:10px;color:{_C_MUTED};text-transform:uppercase;'
             f'letter-spacing:0.06em;padding:0 12px 8px 0;font-family:{_FONT}">Role · Company</td>'
             f'<td style="font-size:10px;color:{_C_MUTED};text-transform:uppercase;'
-            f'letter-spacing:0.06em;padding:0 0 8px 12px;font-family:{_FONT}">Why Skipped</td>'
+            f'letter-spacing:0.06em;padding:0 0 8px 12px;font-family:{_FONT}">Why skipped</td>'
             f'</tr>'
         )
         skip_rows = "".join(_skip_row(job, i) for i, job in enumerate(skips))
         skip_html = (
             f'<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:20px">'
             f'<tr><td colspan="2" style="padding-bottom:10px">'
-            f'{_section_header("Skipped", f"{len(skips)} roles · domain or title mismatch", "#888780", _C_MUTED)}'
+            f'{_section_header("Limited Match", f"{len(skips)} roles · domain or title mismatch", "#888780", _C_MUTED)}'
             f'</td></tr>'
             f'{col_hdr}'
             f'{skip_rows}'
@@ -437,16 +492,31 @@ def build_digest_html(jobs: list[dict], run_date: str, deal_breaker_count: int =
         f'<table width="100%" cellpadding="0" cellspacing="0" border="0">'
         f'<tr><td height="1" style="background:{_C_BORDER};font-size:0;line-height:0">&nbsp;</td></tr>'
         f'<tr><td style="padding-top:12px;font-size:11px;color:#aaa;text-align:center;'
-        f'font-family:{_FONT}">ScoreRole &middot; powered by Claude '
+        f'font-family:{_FONT}">Metis &middot; powered by Claude '
         f'&middot; {len(jobs)} roles evaluated{filtered_note}</td></tr>'
         f'</table>'
     )
 
-    greeting_html = (
-        f'<p style="font-size:14px;color:{_C_MUTED};margin:0 0 6px 0;'
-        f'font-family:{_FONT};line-height:1.5">{greeting}</p>'
-        if greeting else ""
+    _apply_count   = len(apply)
+    _consider_count = len(consider)
+    _subtitle = (
+        f'{len(jobs)} role{"s" if len(jobs) != 1 else ""}'
+        + (f' — {_apply_count} worth prioritizing' if _apply_count else '')
     )
+    if greeting:
+        greeting_html = (
+            f'<p style="font-size:18px;font-weight:600;color:#1f2118;margin:0 0 4px 0;'
+            f'font-family:{_FONT};line-height:1.3">{greeting}</p>'
+            f'<p style="font-size:13px;color:{_C_MUTED};margin:0 0 14px 0;'
+            f'font-family:{_FONT};line-height:1.5">{_subtitle}</p>'
+        )
+        header_h1 = ""
+    else:
+        greeting_html = ""
+        header_h1 = (
+            f'<h1 style="font-size:18px;font-weight:500;color:#1f2118;margin:0 0 14px 0;'
+            f'font-family:{_FONT}">Metis Digest</h1>'
+        )
     wordmark_row = (
         f'<table width="100%" cellpadding="0" cellspacing="0" border="0" '
         f'style="border-bottom:1px solid #eeeeee;margin-bottom:0">'
@@ -454,7 +524,7 @@ def build_digest_html(jobs: list[dict], run_date: str, deal_breaker_count: int =
         f'<td style="padding:12px 0">'
         f'<table cellpadding="0" cellspacing="0" border="0"><tr>'
         f'<td width="8" height="8" style="background:#1f2118;border-radius:2px;font-size:0;line-height:0">&nbsp;</td>'
-        f'<td style="padding-left:7px;font-size:12px;font-weight:500;color:#1f2118;font-family:{_FONT}">ScoreRole</td>'
+        f'<td style="padding-left:7px;font-size:12px;font-weight:500;color:#1f2118;font-family:{_FONT}">Metis</td>'
         f'</tr></table>'
         f'</td>'
         f'<td style="padding:12px 0;text-align:right;font-size:11px;color:{_C_MUTED};font-family:{_FONT}">{run_date}</td>'
@@ -479,7 +549,7 @@ def build_digest_html(jobs: list[dict], run_date: str, deal_breaker_count: int =
         f'<meta charset="UTF-8">'
         f'<meta name="viewport" content="width=device-width,initial-scale=1">'
         # Machine-readable data island — parsed by backfill_from_digests() in track.py
-        f'<script type="application/json" id="scorerole-data">'
+        f'<script type="application/json" id="metis-data">'
         f'{_json.dumps({"date": run_date, "jobs": _job_payload})}'
         f'</script>'
         f'</head>'
@@ -494,10 +564,9 @@ def build_digest_html(jobs: list[dict], run_date: str, deal_breaker_count: int =
         f'<tr><td style="padding:0">'
         f'<table width="100%" cellpadding="0" cellspacing="0" border="0" style="padding:0 20px">'
         f'<tr><td>{wordmark_row}</td></tr>'
-        f'<tr><td style="padding:16px 0 0">'
+        f'<tr><td style="padding:14px 0 0">'
         f'{greeting_html}'
-        f'<h1 style="font-size:18px;font-weight:500;color:#1f2118;margin:0 0 14px 0;'
-        f'font-family:{_FONT}">Personalized job alert digest</h1>'
+        f'{header_h1}'
         f'{stat_row}'
         f'</td></tr>'
         f'</table>'
@@ -519,10 +588,11 @@ def build_digest_html(jobs: list[dict], run_date: str, deal_breaker_count: int =
     )
 
 
-def send_digest(html: str, run_date: str, label: str = ""):
+def send_digest(html: str, run_date: str, label: str = "", job_count: int = 0):
     msg = MIMEMultipart("alternative")
     prefix = f"[{label}] " if label else ""
-    msg["Subject"] = f"{prefix}Personalized Job Alert Digest — {run_date}"
+    role_phrase = f"{job_count} new role{'s' if job_count != 1 else ''}" if job_count else "new roles"
+    msg["Subject"] = f"{prefix}Metis Digest — {role_phrase} for you — {run_date}"
     msg["From"]    = GMAIL_ADDRESS
     msg["To"]      = RECIPIENT_EMAIL
     msg.attach(MIMEText(html, "html"))

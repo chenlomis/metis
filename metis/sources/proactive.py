@@ -28,7 +28,7 @@ log = logging.getLogger(__name__)
 
 _COMPANIES_YML = Path(__file__).parent / "companies.yml"
 
-# Lookback used when scraping (matches default scorerole lookback)
+# Lookback used when scraping (matches default metis lookback)
 DEFAULT_LOOKBACK_DAYS = 7
 
 # Max consecutive failures before a company is flagged in digest
@@ -504,24 +504,66 @@ def _load_companies_yml() -> dict:
         return yaml.safe_load(f)
 
 
-def count_companies(tiers: list[str]) -> int:
-    """Return how many companies are in the given tiers (for init display)."""
+def count_all_companies() -> int:
+    """Return total number of companies in the pool."""
     cfg = _load_companies_yml()
-    tier_set = set(tiers)
-    gh = [c for c in cfg.get("greenhouse_companies", []) if c.get("tier") in tier_set]
-    lv = [c for c in cfg.get("lever_companies", []) if c.get("tier") in tier_set]
-    ash = [c for c in cfg.get("ashby_companies", []) if c.get("tier") in tier_set]
-    return len(gh) + len(lv) + len(ash)
+    return (
+        len(cfg.get("greenhouse_companies", []))
+        + len(cfg.get("lever_companies", []))
+        + len(cfg.get("ashby_companies", []))
+    )
 
 
-def estimate_monthly_cost(tiers: list[str]) -> str:
-    """Rough monthly cost estimate for proactive scraping at given tiers."""
-    n = count_companies(tiers)
-    # ~2 new roles/company/week, ~50% pass pre-screen, $0.015/role scored, 4 weeks/month
-    roles_per_month = n * 2 * 4
+def all_company_names() -> list[str]:
+    """Return sorted list of all company names in the pool."""
+    cfg = _load_companies_yml()
+    all_co = (
+        cfg.get("greenhouse_companies", [])
+        + cfg.get("lever_companies", [])
+        + cfg.get("ashby_companies", [])
+    )
+    return sorted(c["name"] for c in all_co)
+
+
+def estimate_monthly_cost(n_companies: int) -> str:
+    """Rough monthly cost estimate for scraping n companies."""
+    roles_per_month = n_companies * 2 * 4
     scored = roles_per_month * 0.5
     cost = scored * 0.015
     return f"~${cost:.2f}/month"
+
+
+def _resolve_companies(ps: dict, cfg: dict) -> tuple[list, list, list]:
+    """Return (gh_companies, lv_companies, ash_companies) from profile proactive_sources config.
+
+    Supports two profile schemas:
+      new: companies: [Anthropic, Figma, ...]   — explicit name list
+      old: tiers: [S, A]                         — backward-compat, derived from yml
+    """
+    exclude_names = {n.lower() for n in (ps.get("exclude_companies", []) or [])}
+    all_pool = (
+        [(c, "greenhouse") for c in cfg.get("greenhouse_companies", [])]
+        + [(c, "lever")     for c in cfg.get("lever_companies", [])]
+        + [(c, "ashby")     for c in cfg.get("ashby_companies", [])]
+    )
+
+    if "companies" in ps:
+        selected = {n.lower() for n in (ps["companies"] or [])}
+        keep = [
+            (c, ats) for c, ats in all_pool
+            if c["name"].lower() in selected and c["name"].lower() not in exclude_names
+        ]
+    else:
+        tiers = set(ps.get("tiers", ["S", "A"]))
+        keep = [
+            (c, ats) for c, ats in all_pool
+            if c.get("tier") in tiers and c["name"].lower() not in exclude_names
+        ]
+
+    gh  = [c for c, ats in keep if ats == "greenhouse"]
+    lv  = [c for c, ats in keep if ats == "lever"]
+    ash = [c for c, ats in keep if ats == "ashby"]
+    return gh, lv, ash
 
 
 def fetch_proactive(profile: dict, seen_hashes: set) -> "list[dict]":
@@ -535,40 +577,17 @@ def fetch_proactive(profile: dict, seen_hashes: set) -> "list[dict]":
     if not ps.get("enabled", True):
         return []
 
-    tiers = set(ps.get("tiers", ["S", "A"]))
-    extra = ps.get("extra_companies", []) or []
-    exclude_names = {n.lower() for n in (ps.get("exclude_companies", []) or [])}
     lookback_days = ps.get("lookback_days", DEFAULT_LOOKBACK_DAYS)
 
-    # Derive filters from profile
     target_roles   = profile.get("target", {}).get("roles", [])
     include, excl  = _build_title_patterns(target_roles)
     candidate_loc  = profile.get("candidate", {}).get("location", "")
     target_country = _detect_country(candidate_loc)
 
     cfg = _load_companies_yml()
+    gh_companies, lv_companies, ash_companies = _resolve_companies(ps, cfg)
 
-    def _keep(company: dict) -> bool:
-        return (
-            company.get("tier") in tiers
-            and company.get("name", "").lower() not in exclude_names
-        )
-
-    gh_companies  = [c for c in cfg.get("greenhouse_companies", []) if _keep(c)]
-    lv_companies  = [c for c in cfg.get("lever_companies", []) if _keep(c)]
-    ash_companies = [c for c in cfg.get("ashby_companies", []) if _keep(c)]
-
-    # User-added companies: [{name, ats, slug}]
-    for co in extra:
-        ats = co.get("ats", "").lower()
-        if ats == "greenhouse":
-            gh_companies.append(co)
-        elif ats == "lever":
-            lv_companies.append(co)
-        elif ats == "ashby":
-            ash_companies.append(co)
-
-    results = []
+    results: list[dict] = []
 
     for co in gh_companies:
         try:

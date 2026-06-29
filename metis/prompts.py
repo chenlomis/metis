@@ -1,8 +1,8 @@
-"""scorerole/prompts.py — canonical prompt templates for all LLM calls.
+"""metis/prompts.py — canonical prompt templates for all LLM calls.
 
 Single source of truth for identity, voice, and quality standards.
 All call sites import from here — no prompt strings live inline in other modules.
-Call sites: score.py, feedback.py, init2_cmd.py, extract.py, track.py
+Call sites: score.py, feedback.py, init_cmd.py, extract.py, track.py
 
 Structure per call type:
   who I am → what I do → constraints → expected output format
@@ -20,7 +20,7 @@ from typing import Optional
 # ---------------------------------------------------------------------------
 
 SCORING_IDENTITY = """\
-You are scorerole, a ruthlessly analytical career intelligence tool acting as \
+You are metis, a ruthlessly analytical career intelligence tool acting as \
 {candidate_name}'s personal headhunter. Your client's time is the scarcest \
 resource — your job is signal, not encouragement.
 
@@ -48,7 +48,7 @@ JD prose.\
 # ---------------------------------------------------------------------------
 
 INIT_EXTRACT_IDENTITY = """\
-You are scorerole's profile extractor. Your job is to convert a candidate's \
+You are metis's profile extractor. Your job is to convert a candidate's \
 raw inputs into a structured YAML profile — and to preserve their stated \
 intent verbatim for later use.
 
@@ -271,7 +271,7 @@ Extraction rules:
 # ---------------------------------------------------------------------------
 
 TRACK_CLASSIFY_IDENTITY = """\
-You are scorerole's application email classifier. Your function is mechanical.
+You are metis's application email classifier. Your function is mechanical.
 
 What you classify:
 These emails have already been pre-filtered by subject line — they are all \
@@ -303,7 +303,7 @@ application tracker — unknown is the safe default.\
 # ---------------------------------------------------------------------------
 
 FEEDBACK_IDENTITY = """\
-You are scorerole's calibration parser for {candidate_name}. \
+You are metis's calibration parser for {candidate_name}. \
 Your function is entirely mechanical.
 
 Strict constraints:
@@ -411,7 +411,7 @@ def scoring_system_prompt(
     """Assemble the full Layer 2 Sonnet system prompt.
 
     Ordering (intentional):
-      1. Identity — who scorerole is, evaluation standards
+      1. Identity — who metis is, evaluation standards
       2. Candidate brief — synthesized orientation for the headhunter
       3. Full rendered profile — detailed grounding (experience, strengths, etc.)
       4. Calibration feedback — user-provided adjustments from past runs

@@ -1,4 +1,4 @@
-"""Core logic tests for scorerole.
+"""Core logic tests for metis.
 
 Philosophy: "if this breaks, something important is wrong."
 These tests cover the functions whose silent failure would cause the most
@@ -26,33 +26,47 @@ class TestRoleHash:
     """_role_hash must be stable — dedup depends on it never changing."""
 
     def test_hash_is_12_chars(self):
-        from scorerole.state import _role_hash
+        from metis.state import _role_hash
         h = _role_hash("Staff Product Manager", "Anthropic")
         assert len(h) == 12
 
     def test_hash_is_stable(self):
         """Same inputs always produce the same hash (no randomness)."""
-        from scorerole.state import _role_hash
+        from metis.state import _role_hash
         assert _role_hash("Staff PM", "Stripe") == _role_hash("Staff PM", "Stripe")
 
     def test_hash_normalises_case_and_punctuation(self):
         """Normalisation means 'Staff PM @ Stripe' == 'staff pm stripe'."""
-        from scorerole.state import _role_hash
+        from metis.state import _role_hash
         assert _role_hash("Staff PM", "Stripe") == _role_hash("STAFF PM", "STRIPE")
         assert _role_hash("Staff PM", "Stripe") == _role_hash("Staff PM!", "Stripe.")
 
     def test_different_roles_produce_different_hashes(self):
-        from scorerole.state import _role_hash
+        from metis.state import _role_hash
         assert _role_hash("Staff PM", "Stripe") != _role_hash("Staff PM", "Anthropic")
         assert _role_hash("Staff PM", "Stripe") != _role_hash("Senior PM", "Stripe")
+
+    def test_company_variants_hash_identically(self):
+        """'NVIDIA' and 'NVIDIA AI' must dedup to the same hash — branding suffix, not a different company."""
+        from metis.state import _role_hash
+        assert _role_hash("Staff PM", "NVIDIA") == _role_hash("Staff PM", "NVIDIA AI")
+        assert _role_hash("Staff PM", "Anthropic") == _role_hash("Staff PM", "Anthropic Labs")
+        assert _role_hash("Staff PM", "Acme") == _role_hash("Staff PM", "Acme Corp.")
+        assert _role_hash("Staff PM", "Stripe") == _role_hash("Staff PM", "Stripe Inc.")
+
+    def test_distinct_companies_still_differ(self):
+        """Normalization must not collapse genuinely different companies."""
+        from metis.state import _role_hash
+        assert _role_hash("Staff PM", "Scale") != _role_hash("Staff PM", "Anthropic")
+        assert _role_hash("Staff PM", "OpenAI") != _role_hash("Staff PM", "Anthropic")
 
 
 class TestSeenRolesTTL:
     """save_seen_roles must prune expired entries; load_seen_roles must honour TTL."""
 
     def test_new_entries_survive_within_ttl(self, tmp_path):
-        from scorerole.state import save_seen_roles, load_seen_roles
-        with patch("scorerole.state.DATA_DIR", tmp_path):
+        from metis.state import save_seen_roles, load_seen_roles
+        with patch("metis.state.DATA_DIR", tmp_path):
             now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
             entries = {"abc123": now.isoformat()}
             save_seen_roles(entries)
@@ -61,8 +75,8 @@ class TestSeenRolesTTL:
 
     def test_expired_entries_are_pruned_on_load(self, tmp_path):
         """An entry from 31 days ago must not appear in load_seen_roles (TTL is 30d)."""
-        from scorerole.state import save_seen_roles, load_seen_roles
-        with patch("scorerole.state.DATA_DIR", tmp_path):
+        from metis.state import save_seen_roles, load_seen_roles
+        with patch("metis.state.DATA_DIR", tmp_path):
             old_ts = (
                 datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
                 - datetime.timedelta(days=31)
@@ -74,8 +88,8 @@ class TestSeenRolesTTL:
 
     def test_save_prunes_stale_entries(self, tmp_path):
         """Saving new entries must evict old ones from the file (TTL is 30d)."""
-        from scorerole.state import save_seen_roles
-        with patch("scorerole.state.DATA_DIR", tmp_path):
+        from metis.state import save_seen_roles
+        with patch("metis.state.DATA_DIR", tmp_path):
             old_ts = (
                 datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
                 - datetime.timedelta(days=31)
@@ -92,10 +106,10 @@ class TestSeenRolesTTL:
         """Roles dropped by the cap must NOT be written to seen_roles.json
         (regression for the role-burial bug fixed in commit 8e805de).
         """
-        from scorerole.state import save_seen_roles, load_seen_roles
+        from metis.state import save_seen_roles, load_seen_roles
         # Simulate: 3 roles found, only 1 scored, 2 capped
         now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None).isoformat()
-        with patch("scorerole.state.DATA_DIR", tmp_path):
+        with patch("metis.state.DATA_DIR", tmp_path):
             save_seen_roles({"scored_role": now})   # only the scored one
             seen = load_seen_roles()
         assert "scored_role" in seen
@@ -129,12 +143,12 @@ class TestExtractJobs:
     """extract_jobs() must reliably parse title / company / location / job_id."""
 
     def test_extracts_both_jobs(self):
-        from scorerole.sources.linkedin import extract_jobs
+        from metis.sources.linkedin import extract_jobs
         jobs = extract_jobs(_SAMPLE_ALERT_BODY)
         assert len(jobs) == 2
 
     def test_first_job_fields(self):
-        from scorerole.sources.linkedin import extract_jobs
+        from metis.sources.linkedin import extract_jobs
         job = extract_jobs(_SAMPLE_ALERT_BODY)[0]
         assert job["title"]    == "Senior Product Manager"
         assert job["company"]  == "Anthropic"
@@ -142,20 +156,20 @@ class TestExtractJobs:
         assert job["job_id"]   == "3901234567"
 
     def test_second_job_fields(self):
-        from scorerole.sources.linkedin import extract_jobs
+        from metis.sources.linkedin import extract_jobs
         job = extract_jobs(_SAMPLE_ALERT_BODY)[1]
         assert job["title"]   == "Staff Software Engineer"
         assert job["company"] == "Stripe"
         assert job["job_id"]  == "3901234568"
 
     def test_alumni_count_captured(self):
-        from scorerole.sources.linkedin import extract_jobs
+        from metis.sources.linkedin import extract_jobs
         job = extract_jobs(_SAMPLE_ALERT_BODY)[0]
         assert job["alumni_count"] == 3
 
     def test_url_format_is_clean(self):
         """URLs must be the canonical /jobs/view/ID/ format, not the tracking URL."""
-        from scorerole.sources.linkedin import extract_jobs
+        from metis.sources.linkedin import extract_jobs
         job = extract_jobs(_SAMPLE_ALERT_BODY)[0]
         assert job["url"] == "https://www.linkedin.com/jobs/view/3901234567/"
 
@@ -164,13 +178,13 @@ class TestExtractJobs:
             "", "Senior Product Manager", "Anthropic", "Remote",
             "View job: https://www.linkedin.com/comm/jobs/view/3901234567/DUPE/?trackingId=dupe",
         ])
-        from scorerole.sources.linkedin import extract_jobs
+        from metis.sources.linkedin import extract_jobs
         jobs = extract_jobs(body)
         ids = [j["job_id"] for j in jobs]
         assert ids.count("3901234567") == 1
 
     def test_returns_empty_on_no_jobs(self):
-        from scorerole.sources.linkedin import extract_jobs
+        from metis.sources.linkedin import extract_jobs
         assert extract_jobs("No jobs here") == []
 
 
@@ -191,12 +205,12 @@ class TestExtractJobsHtml:
     """
 
     def test_extracts_two_jobs(self):
-        from scorerole.sources.linkedin import extract_jobs_html
+        from metis.sources.linkedin import extract_jobs_html
         jobs = extract_jobs_html(self._HTML)
         assert len(jobs) == 2
 
     def test_title_and_company_parsed(self):
-        from scorerole.sources.linkedin import extract_jobs_html
+        from metis.sources.linkedin import extract_jobs_html
         jobs = extract_jobs_html(self._HTML)
         titles   = {j["title"]   for j in jobs}
         companies = {j["company"] for j in jobs}
@@ -219,30 +233,30 @@ class TestRankJobs:
         }
 
     def test_high_score_becomes_apply(self):
-        from scorerole.score import rank_jobs
+        from metis.score import rank_jobs
         jobs = rank_jobs([self._make_job("Senior PM", 80)])
         assert jobs[0]["eval"]["verdict"] == "apply"
 
     def test_mid_score_becomes_consider(self):
-        from scorerole.score import rank_jobs
+        from metis.score import rank_jobs
         jobs = rank_jobs([self._make_job("Mid PM", 60)])
         assert jobs[0]["eval"]["verdict"] == "consider"
 
     def test_low_score_becomes_skipped(self):
-        from scorerole.score import rank_jobs
+        from metis.score import rank_jobs
         jobs = rank_jobs([self._make_job("Junior PM", 30)])
         assert jobs[0]["eval"]["verdict"] == "skipped"
 
     def test_verdict_drift_corrected(self):
         """Claude might return verdict='apply' for score=62 — rank_jobs must fix it."""
-        from scorerole.score import rank_jobs
+        from metis.score import rank_jobs
         job = self._make_job("Drifted", score=62, raw_verdict="apply")
         result = rank_jobs([job])
         assert result[0]["eval"]["verdict"] == "consider"
 
     def test_sort_order(self):
         """apply before consider before skipped; higher score first within tier."""
-        from scorerole.score import rank_jobs
+        from metis.score import rank_jobs
         jobs = [
             self._make_job("Skip",     40, "skipped"),
             self._make_job("Apply-B",  76, "apply"),
@@ -255,7 +269,7 @@ class TestRankJobs:
 
     def test_boundary_at_apply_threshold(self):
         """Score of exactly 75 must be 'apply'; 74 must be 'consider'."""
-        from scorerole.score import rank_jobs
+        from metis.score import rank_jobs
         j75 = rank_jobs([self._make_job("Boundary", 75)])[0]
         j74 = rank_jobs([self._make_job("Below",    74)])[0]
         assert j75["eval"]["verdict"] == "apply"
@@ -264,7 +278,7 @@ class TestRankJobs:
     def test_filtered_verdict_preserved(self):
         """A deal_breaker violation (verdict='filtered', score=0) must not be
         reclassified as 'skipped' just because score=0."""
-        from scorerole.score import rank_jobs
+        from metis.score import rank_jobs
         job = {
             "title": "Director of Tobacco", "company": "Big Tobacco", "location": "NY",
             "eval": {"score": 0, "verdict": "filtered",
@@ -276,7 +290,7 @@ class TestRankJobs:
 
     def test_filtered_roles_sorted_last(self):
         """Filtered roles must sort after skipped."""
-        from scorerole.score import rank_jobs
+        from metis.score import rank_jobs
         jobs = [
             self._make_job("Filtered", 0, "filtered"),
             self._make_job("Skipped",  30, "skipped"),
@@ -297,24 +311,24 @@ class TestRecoverPartialJson:
     """_recover_partial_json must salvage complete objects from a truncated array."""
 
     def test_recovers_from_truncated_array(self):
-        from scorerole.score import _recover_partial_json
+        from metis.score import _recover_partial_json
         raw = '[{"score": 80, "verdict": "apply"}, {"score": 60, "verdict": "consi'
         objects = _recover_partial_json(raw)
         assert len(objects) == 1
         assert objects[0]["score"] == 80
 
     def test_recovers_multiple_complete_objects(self):
-        from scorerole.score import _recover_partial_json
+        from metis.score import _recover_partial_json
         raw = '[{"score": 80}, {"score": 60}, {"score": 40}]'
         objects = _recover_partial_json(raw)
         assert len(objects) == 3
 
     def test_returns_empty_list_on_garbage(self):
-        from scorerole.score import _recover_partial_json
+        from metis.score import _recover_partial_json
         assert _recover_partial_json("not json at all") == []
 
     def test_skips_invalid_inner_objects(self):
-        from scorerole.score import _recover_partial_json
+        from metis.score import _recover_partial_json
         raw = '[{"score": 80}, {bad json}, {"score": 40}]'
         objects = _recover_partial_json(raw)
         scores = [o["score"] for o in objects]
@@ -330,24 +344,24 @@ class TestParseLookback:
     """_parse_lookback must handle all documented formats."""
 
     def test_days_shorthand(self):
-        from scorerole.pipeline import _parse_lookback
+        from metis.pipeline import _parse_lookback
         result = _parse_lookback("3d")
         delta = datetime.datetime.now() - result
         assert 2 < delta.total_seconds() / 86400 < 4
 
     def test_iso_date(self):
-        from scorerole.pipeline import _parse_lookback
+        from metis.pipeline import _parse_lookback
         result = _parse_lookback("2026-05-10")
         assert result.year == 2026
         assert result.month == 5
         assert result.day == 10
 
     def test_invalid_returns_none(self):
-        from scorerole.pipeline import _parse_lookback
+        from metis.pipeline import _parse_lookback
         assert _parse_lookback("not-a-date") is None
 
     def test_zero_days_returns_near_now(self):
-        from scorerole.pipeline import _parse_lookback
+        from metis.pipeline import _parse_lookback
         result = _parse_lookback("0d")
         delta = datetime.datetime.now() - result
         assert delta.total_seconds() < 10
@@ -372,45 +386,45 @@ class TestRenderProfile:
     }
 
     def test_renders_non_empty(self):
-        from scorerole.profile import render_profile
+        from metis.profile import render_profile
         out = render_profile(self._PROFILE)
         assert len(out) > 100
 
     def test_contains_candidate_name(self):
-        from scorerole.profile import render_profile
+        from metis.profile import render_profile
         out = render_profile(self._PROFILE)
         assert "Alex Kim" in out
 
     def test_contains_target_roles(self):
-        from scorerole.profile import render_profile
+        from metis.profile import render_profile
         out = render_profile(self._PROFILE)
         assert "PM" in out
 
     def test_contains_aspirations(self):
-        from scorerole.profile import render_profile
+        from metis.profile import render_profile
         out = render_profile(self._PROFILE)
         assert "ASPIRATIONS" in out
         assert "AI-native products" in out
 
     def test_contains_deal_breakers(self):
-        from scorerole.profile import render_profile
+        from metis.profile import render_profile
         out = render_profile(self._PROFILE)
         assert "DEAL BREAKERS" in out
 
     def test_contains_experience(self):
-        from scorerole.profile import render_profile
+        from metis.profile import render_profile
         out = render_profile(self._PROFILE)
         assert "Acme" in out
         assert "0→1 product" in out
 
     def test_empty_profile_does_not_crash(self):
-        from scorerole.profile import render_profile
+        from metis.profile import render_profile
         out = render_profile({})
         assert isinstance(out, str)
 
     def test_profile_with_no_experience(self):
         """Resume with no work history must not crash or raise KeyError."""
-        from scorerole.profile import render_profile
+        from metis.profile import render_profile
         profile = {
             "candidate": {"name": "New Grad", "title": "Recent Graduate"},
             "target": {"level": "Junior", "roles": ["PM"]},
@@ -421,7 +435,7 @@ class TestRenderProfile:
 
     def test_profile_missing_optional_sections_renders_cleanly(self):
         """A profile with only candidate + target must not show empty headers."""
-        from scorerole.profile import render_profile
+        from metis.profile import render_profile
         profile = {
             "candidate": {"name": "Min User"},
             "target":    {"roles": ["Engineer"]},
@@ -461,7 +475,7 @@ View job: https://www.linkedin.com/comm/jobs/view/3901288888/XYZ_abc/?trackingId
 """
 
     def test_single_job_notification_parsed(self):
-        from scorerole.sources.linkedin import extract_jobs
+        from metis.sources.linkedin import extract_jobs
         jobs = extract_jobs(self._INDIVIDUAL_BODY)
         assert len(jobs) == 1
         assert jobs[0]["title"]   == "Sr. Product Manager Tech, Product Quality"
@@ -469,13 +483,13 @@ View job: https://www.linkedin.com/comm/jobs/view/3901288888/XYZ_abc/?trackingId
         assert jobs[0]["job_id"]  == "3901299999"
 
     def test_alumni_count_in_individual_email(self):
-        from scorerole.sources.linkedin import extract_jobs
+        from metis.sources.linkedin import extract_jobs
         jobs = extract_jobs(self._INDIVIDUAL_BODY)
         assert jobs[0]["alumni_count"] == 3
 
     def test_title_with_dash_parsed_correctly(self):
         """Em-dash in job title must not be mistaken for noise."""
-        from scorerole.sources.linkedin import extract_jobs
+        from metis.sources.linkedin import extract_jobs
         jobs = extract_jobs(self._INDIVIDUAL_BODY_WITH_DASH)
         assert len(jobs) == 1
         assert "Risk Platform" in jobs[0]["title"]
@@ -484,7 +498,7 @@ View job: https://www.linkedin.com/comm/jobs/view/3901288888/XYZ_abc/?trackingId
     def test_mixed_digest_and_individual_in_same_session(self):
         """A run that ingests both a digest email and an individual notification
         email must deduplicate correctly and return all unique jobs."""
-        from scorerole.sources.linkedin import extract_jobs
+        from metis.sources.linkedin import extract_jobs
         combined = _SAMPLE_ALERT_BODY + "\n" + self._INDIVIDUAL_BODY
         jobs = extract_jobs(combined)
         ids = [j["job_id"] for j in jobs]
@@ -498,7 +512,7 @@ class TestExtractJobsEdgeCases:
 
     def test_malformed_url_no_job_id_skipped(self):
         """A 'View job:' line with no numeric ID must be silently skipped."""
-        from scorerole.sources.linkedin import extract_jobs
+        from metis.sources.linkedin import extract_jobs
         body = (
             "Some Title\nSome Company\nSome City\n"
             "View job: https://www.linkedin.com/comm/jobs/view/not-a-number/\n"
@@ -509,7 +523,7 @@ class TestExtractJobsEdgeCases:
     def test_fewer_than_three_lines_before_url_skipped(self):
         """If there aren't enough context lines above the URL, job must be skipped
         rather than filling fields with noise."""
-        from scorerole.sources.linkedin import extract_jobs
+        from metis.sources.linkedin import extract_jobs
         body = (
             "Only one line\n"
             "View job: https://www.linkedin.com/comm/jobs/view/1234567890/X/\n"
@@ -520,7 +534,7 @@ class TestExtractJobsEdgeCases:
     def test_noise_lines_filtered_before_field_extraction(self):
         """'Actively hiring', 'Be an early applicant', etc. must not
         displace title/company/location from their expected positions."""
-        from scorerole.sources.linkedin import extract_jobs
+        from metis.sources.linkedin import extract_jobs
         body = (
             "Senior PM\n"
             "Anthropic\n"
@@ -538,7 +552,7 @@ class TestExtractJobsEdgeCases:
     def test_html_extraction_skips_navigation_links(self):
         """Short anchor text like 'View all jobs', 'Apply', 'LinkedIn' must
         not be parsed as job titles."""
-        from scorerole.sources.linkedin import extract_jobs_html
+        from metis.sources.linkedin import extract_jobs_html
         html = """
         <html><body>
           <a href="https://www.linkedin.com/comm/jobs/view/5000000001/?t=x">Head of AI</a>
@@ -555,7 +569,7 @@ class TestExtractJobsEdgeCases:
         assert titles.count("Head of AI") == 1
 
     def test_empty_html_body_returns_empty_list(self):
-        from scorerole.sources.linkedin import extract_jobs_html
+        from metis.sources.linkedin import extract_jobs_html
         assert extract_jobs_html("") == []
         assert extract_jobs_html("<html><body></body></html>") == []
 
@@ -577,7 +591,7 @@ class TestScoreJobsBatchEdgeCases:
     def test_claude_returns_fewer_objects_than_jobs(self):
         """If Claude returns 1 eval for 3 jobs, the missing 2 must be marked
         skipped with a parse-error friction note — not raise IndexError."""
-        from scorerole.score import score_jobs_batch
+        from metis.score import score_jobs_batch
         import unittest.mock as mock
 
         jobs = [self._make_job(f"Job {i}") for i in range(3)]
@@ -590,7 +604,7 @@ class TestScoreJobsBatchEdgeCases:
             cache_creation_input_tokens=0, cache_read_input_tokens=0,
         )
 
-        with mock.patch("scorerole.score._build_score_system", return_value="mock profile"):
+        with mock.patch("metis.score._build_score_system", return_value="mock profile"):
             fake_client = mock.MagicMock()
             fake_client.messages.create.return_value = fake_response
             result = score_jobs_batch(fake_client, jobs)
@@ -602,7 +616,7 @@ class TestScoreJobsBatchEdgeCases:
 
     def test_claude_returns_completely_broken_json(self):
         """If Claude returns garbage, all jobs must be marked skipped — no crash."""
-        from scorerole.score import score_jobs_batch
+        from metis.score import score_jobs_batch
         import unittest.mock as mock
 
         jobs = [self._make_job()]
@@ -613,7 +627,7 @@ class TestScoreJobsBatchEdgeCases:
             cache_creation_input_tokens=0, cache_read_input_tokens=0,
         )
 
-        with mock.patch("scorerole.score._build_score_system", return_value="mock profile"):
+        with mock.patch("metis.score._build_score_system", return_value="mock profile"):
             fake_client = mock.MagicMock()
             fake_client.messages.create.return_value = fake_response
             result = score_jobs_batch(fake_client, jobs)
@@ -653,14 +667,14 @@ class TestScoreJobsBatchChunking:
 
     def test_small_batch_single_chunk(self):
         """Fewer than _SCORE_CHUNK_SIZE jobs → exactly one API call."""
-        from scorerole.score import score_jobs_batch, _SCORE_CHUNK_SIZE
+        from metis.score import score_jobs_batch, _SCORE_CHUNK_SIZE
         import unittest.mock as mock
 
         jobs = self._make_jobs(_SCORE_CHUNK_SIZE - 1)
         fake_client = mock.MagicMock()
         fake_client.messages.create.return_value = self._fake_response(len(jobs))
 
-        with mock.patch("scorerole.score._build_score_system", return_value="mock"):
+        with mock.patch("metis.score._build_score_system", return_value="mock"):
             result = score_jobs_batch(fake_client, jobs)
 
         assert fake_client.messages.create.call_count == 1
@@ -668,7 +682,7 @@ class TestScoreJobsBatchChunking:
 
     def test_large_batch_multiple_chunks(self):
         """More than _SCORE_CHUNK_SIZE jobs → multiple API calls, all evals merged."""
-        from scorerole.score import score_jobs_batch, _SCORE_CHUNK_SIZE
+        from metis.score import score_jobs_batch, _SCORE_CHUNK_SIZE
         import unittest.mock as mock
 
         n = _SCORE_CHUNK_SIZE + 5  # guaranteed to require 2 chunks
@@ -684,7 +698,7 @@ class TestScoreJobsBatchChunking:
         fake_client = mock.MagicMock()
         fake_client.messages.create.side_effect = side_effect
 
-        with mock.patch("scorerole.score._build_score_system", return_value="mock"):
+        with mock.patch("metis.score._build_score_system", return_value="mock"):
             result = score_jobs_batch(fake_client, jobs)
 
         assert fake_client.messages.create.call_count == 2
@@ -694,7 +708,7 @@ class TestScoreJobsBatchChunking:
     def test_chunk_truncation_fills_remainder_with_error_eval(self):
         """If a chunk response is truncated (fewer evals than jobs), the missing
         slots must get _error_eval — not IndexError."""
-        from scorerole.score import score_jobs_batch, _SCORE_CHUNK_SIZE
+        from metis.score import score_jobs_batch, _SCORE_CHUNK_SIZE
         import unittest.mock as mock
 
         jobs = self._make_jobs(5)
@@ -702,7 +716,7 @@ class TestScoreJobsBatchChunking:
         fake_client = mock.MagicMock()
         fake_client.messages.create.return_value = self._fake_response(2)
 
-        with mock.patch("scorerole.score._build_score_system", return_value="mock"):
+        with mock.patch("metis.score._build_score_system", return_value="mock"):
             result = score_jobs_batch(fake_client, jobs)
 
         assert result[0]["eval"]["score"] == 70   # real eval
@@ -742,14 +756,14 @@ class TestScoreChunkRetry:
 
     def test_succeeds_on_first_try(self):
         """Happy path — no retries needed."""
-        from scorerole.score import score_jobs_batch
+        from metis.score import score_jobs_batch
         import unittest.mock as mock
 
         jobs = self._make_jobs(2)
         fake_client = mock.MagicMock()
         fake_client.messages.create.return_value = self._good_response(2)
 
-        with mock.patch("scorerole.score._build_score_system", return_value="mock"), \
+        with mock.patch("metis.score._build_score_system", return_value="mock"), \
              mock.patch("time.sleep"):
             result = score_jobs_batch(fake_client, jobs)
 
@@ -758,7 +772,7 @@ class TestScoreChunkRetry:
 
     def test_retries_on_500_and_succeeds(self):
         """First call raises InternalServerError; second call succeeds — result is correct."""
-        from scorerole.score import score_jobs_batch
+        from metis.score import score_jobs_batch
         import unittest.mock as mock
 
         jobs = self._make_jobs(2)
@@ -774,7 +788,7 @@ class TestScoreChunkRetry:
             good,
         ]
 
-        with mock.patch("scorerole.score._build_score_system", return_value="mock"), \
+        with mock.patch("metis.score._build_score_system", return_value="mock"), \
              mock.patch("time.sleep") as mock_sleep:
             result = score_jobs_batch(fake_client, jobs)
 
@@ -784,7 +798,7 @@ class TestScoreChunkRetry:
 
     def test_retries_on_rate_limit_and_succeeds(self):
         """RateLimitError (429) is also retried."""
-        from scorerole.score import score_jobs_batch
+        from metis.score import score_jobs_batch
         import unittest.mock as mock
 
         jobs = self._make_jobs(1)
@@ -799,7 +813,7 @@ class TestScoreChunkRetry:
             good,
         ]
 
-        with mock.patch("scorerole.score._build_score_system", return_value="mock"), \
+        with mock.patch("metis.score._build_score_system", return_value="mock"), \
              mock.patch("time.sleep"):
             result = score_jobs_batch(fake_client, jobs)
 
@@ -808,7 +822,7 @@ class TestScoreChunkRetry:
 
     def test_raises_after_max_retries(self):
         """Three consecutive 500s must propagate — not silently swallow."""
-        from scorerole.score import score_jobs_batch
+        from metis.score import score_jobs_batch
         import unittest.mock as mock
 
         jobs = self._make_jobs(1)
@@ -820,7 +834,7 @@ class TestScoreChunkRetry:
                   "message": "Internal server error"}},
         )
 
-        with mock.patch("scorerole.score._build_score_system", return_value="mock"), \
+        with mock.patch("metis.score._build_score_system", return_value="mock"), \
              mock.patch("time.sleep"):
             with pytest.raises(anthropic.InternalServerError):
                 score_jobs_batch(fake_client, jobs)
@@ -829,7 +843,7 @@ class TestScoreChunkRetry:
 
     def test_non_retryable_error_propagates_immediately(self):
         """A non-retryable error (e.g. AuthenticationError) must not be retried."""
-        from scorerole.score import score_jobs_batch
+        from metis.score import score_jobs_batch
         import unittest.mock as mock
 
         jobs = self._make_jobs(1)
@@ -840,7 +854,7 @@ class TestScoreChunkRetry:
             body={},
         )
 
-        with mock.patch("scorerole.score._build_score_system", return_value="mock"), \
+        with mock.patch("metis.score._build_score_system", return_value="mock"), \
              mock.patch("time.sleep"):
             with pytest.raises(anthropic.AuthenticationError):
                 score_jobs_batch(fake_client, jobs)
@@ -849,7 +863,7 @@ class TestScoreChunkRetry:
 
 
 # ---------------------------------------------------------------------------
-# init_cmd.py — salary floor / deal_breaker consistency
+# init_bak_cmd.py — salary floor / deal_breaker consistency
 # ---------------------------------------------------------------------------
 
 class TestApplyPrefsToProfile:
@@ -866,7 +880,7 @@ class TestApplyPrefsToProfile:
 
     def test_salary_floor_update_removes_salary_deal_breaker(self):
         """When salary_floor is updated, any salary mention in deal_breakers must be removed."""
-        from scorerole.init_cmd import _apply_prefs_to_profile
+        from metis.init_bak_cmd import _apply_prefs_to_profile
         profile = self._base_profile()
         _apply_prefs_to_profile(profile, {"salary_floor": "200000"})
         assert profile["salary_floor_usd"] == 200000
@@ -876,14 +890,14 @@ class TestApplyPrefsToProfile:
 
     def test_non_salary_deal_breakers_preserved(self):
         """Only salary-related deal-breakers are removed — others must survive."""
-        from scorerole.init_cmd import _apply_prefs_to_profile
+        from metis.init_bak_cmd import _apply_prefs_to_profile
         profile = self._base_profile()
         _apply_prefs_to_profile(profile, {"salary_floor": "200000"})
         assert any("management" in d for d in profile["deal_breakers"])
 
     def test_no_salary_deal_breaker_no_change(self):
         """If deal_breakers has no salary mention, the list must be unchanged."""
-        from scorerole.init_cmd import _apply_prefs_to_profile
+        from metis.init_bak_cmd import _apply_prefs_to_profile
         profile = {"deal_breakers": ["No management roles"], "salary_floor_usd": 200000}
         _apply_prefs_to_profile(profile, {"salary_floor": "180000"})
         assert profile["deal_breakers"] == ["No management roles"]
@@ -891,7 +905,7 @@ class TestApplyPrefsToProfile:
 
     def test_domain_flex_flexible_injects_calibration_note(self):
         """domain_flex='flexible' must inject the domain-gap friction note into profile.notes."""
-        from scorerole.init_cmd import _apply_prefs_to_profile
+        from metis.init_bak_cmd import _apply_prefs_to_profile
         profile = {"notes": "Existing calibration text."}
         _apply_prefs_to_profile(profile, {"domain_flex": "flexible"})
         assert "Domain gaps are friction" in profile["notes"]
@@ -899,7 +913,7 @@ class TestApplyPrefsToProfile:
 
     def test_domain_flex_replaces_prior_domain_note(self):
         """Re-running init with a different domain_flex must replace the old domain note."""
-        from scorerole.init_cmd import _apply_prefs_to_profile
+        from metis.init_bak_cmd import _apply_prefs_to_profile
         profile = {"notes": "Domain gaps are friction, not disqualifiers: old text."}
         _apply_prefs_to_profile(profile, {"domain_flex": "strict"})
         assert "Domain gaps are friction" not in profile["notes"]
@@ -925,24 +939,24 @@ class TestRenderEdgeCases:
 
     def test_empty_job_list_renders(self):
         """An empty list must render valid HTML without crashing."""
-        from scorerole.render import build_digest_html
+        from metis.render import build_digest_html
         html = build_digest_html([], "June 14, 2026")
         assert "<html" in html
         assert "0 roles evaluated" not in html or True  # any output is acceptable
 
     def test_all_skipped_renders_without_apply_section(self):
-        from scorerole.render import build_digest_html
+        from metis.render import build_digest_html
         jobs = [self._job("skipped", 30), self._job("skipped", 20)]
         html = build_digest_html(jobs, "June 14, 2026")
         assert "<html" in html
-        assert "Skipped" in html
+        assert "Limited Match" in html
 
     def test_all_filtered_shows_footer_count_only(self):
         """If every role was filtered by deal_breaker, no job sections appear,
         but the footer must mention the filtered count.
         build_digest_html receives only scored jobs (filtered ones removed upstream);
         deal_breaker_count is passed in separately."""
-        from scorerole.render import build_digest_html
+        from metis.render import build_digest_html
         # pass empty scored list + count=2, matching how pipeline.py calls it
         html = build_digest_html([], "June 14, 2026", deal_breaker_count=2)
         assert "filtered by deal" in html
@@ -950,20 +964,20 @@ class TestRenderEdgeCases:
         assert "View posting" not in html  # no job cards rendered
 
     def test_mixed_verdicts_all_sections_present(self):
-        from scorerole.render import build_digest_html
+        from metis.render import build_digest_html
         jobs = [
             self._job("apply",    80),
             self._job("consider", 60),
             self._job("skipped",  30),
         ]
         html = build_digest_html(jobs, "June 14, 2026")
-        assert "Apply" in html
-        assert "Consider" in html
-        assert "Skipped" in html
+        assert "Solid Match" in html
+        assert "Moderate Match" in html
+        assert "Limited Match" in html
 
     def test_no_friction_points_omits_friction_line(self):
         """A job with empty frictionPoints must not render a bare '↓ Friction:' row."""
-        from scorerole.render import build_digest_html
+        from metis.render import build_digest_html
         jobs = [self._job("apply", 80)]
         jobs[0]["eval"]["frictionPoints"] = []
         html = build_digest_html(jobs, "June 14, 2026")
@@ -971,7 +985,7 @@ class TestRenderEdgeCases:
 
     def test_empty_location_renders_without_separator(self):
         """A job with no location must render 'Company' not 'Company · '."""
-        from scorerole.render import build_digest_html
+        from metis.render import build_digest_html
         jobs = [self._job("apply", 80)]
         jobs[0]["location"] = ""
         html = build_digest_html(jobs, "June 14, 2026")
@@ -983,7 +997,7 @@ class TestSanitizeLocation:
     """_sanitize_location strips LinkedIn CTA text from location fields."""
 
     def _sanitize(self, loc: str) -> str:
-        from scorerole.sources.linkedin import _sanitize_location
+        from metis.sources.linkedin import _sanitize_location
         return _sanitize_location(loc)
 
     def test_normal_location_unchanged(self):
@@ -1023,7 +1037,7 @@ class TestSaveSkippedRoles:
                 "eval": {"score": score, "verdict": verdict}}
 
     def test_writes_entry_for_skipped_job(self, tmp_path, monkeypatch):
-        import scorerole.state as state
+        import metis.state as state
         monkeypatch.setattr(state, "SKIPPED_FILE", tmp_path / "skipped_roles.json")
         job = self._make_job("Senior PM", "Acme")
         state.save_skipped_roles([job])
@@ -1035,14 +1049,14 @@ class TestSaveSkippedRoles:
         assert entry["match_score"] == 45
 
     def test_empty_list_writes_nothing(self, tmp_path, monkeypatch):
-        import scorerole.state as state
+        import metis.state as state
         out = tmp_path / "skipped_roles.json"
         monkeypatch.setattr(state, "SKIPPED_FILE", out)
         state.save_skipped_roles([])
         assert not out.exists()
 
     def test_lookup_returns_entry(self, tmp_path, monkeypatch):
-        import scorerole.state as state
+        import metis.state as state
         monkeypatch.setattr(state, "SKIPPED_FILE", tmp_path / "skipped_roles.json")
         job = self._make_job("Staff PM", "Beta Corp")
         state.save_skipped_roles([job])
@@ -1051,13 +1065,13 @@ class TestSaveSkippedRoles:
         assert result["company"] == "Beta Corp"
 
     def test_lookup_returns_none_for_unknown(self, tmp_path, monkeypatch):
-        import scorerole.state as state
+        import metis.state as state
         monkeypatch.setattr(state, "SKIPPED_FILE", tmp_path / "skipped_roles.json")
         state.save_skipped_roles([self._make_job("PM", "X")])
         assert state.lookup_skipped_role("Unrelated", "Nobody") is None
 
     def test_expired_entries_pruned_on_write(self, tmp_path, monkeypatch):
-        import scorerole.state as state
+        import metis.state as state
         monkeypatch.setattr(state, "SKIPPED_FILE", tmp_path / "skipped_roles.json")
         monkeypatch.setattr(state, "SKIPPED_TTL_DAYS", 30)
         stale_time = (datetime.datetime.now() - datetime.timedelta(days=31)).isoformat()
@@ -1069,7 +1083,7 @@ class TestSaveSkippedRoles:
         assert all(v["role_title"] != "Old PM" for v in data.values())
 
     def test_file_permissions_are_0600(self, tmp_path, monkeypatch):
-        import stat, scorerole.state as state
+        import stat, metis.state as state
         monkeypatch.setattr(state, "SKIPPED_FILE", tmp_path / "skipped_roles.json")
         state.save_skipped_roles([self._make_job("PM", "Co")])
         mode = (tmp_path / "skipped_roles.json").stat().st_mode
@@ -1090,7 +1104,7 @@ class TestWriteToTracker:
 
     def test_apply_and_consider_rows_written(self, tmp_path, monkeypatch):
         pytest.importorskip("openpyxl")
-        import scorerole.xlsx as tracker
+        import metis.xlsx as tracker
         monkeypatch.setattr(tracker, "TRACKER_PATH", tmp_path / "applications.xlsx")
         jobs = [
             self._make_job("Senior PM", "Acme", "apply"),
@@ -1109,7 +1123,7 @@ class TestWriteToTracker:
 
     def test_duplicate_role_not_written_twice(self, tmp_path, monkeypatch):
         pytest.importorskip("openpyxl")
-        import scorerole.xlsx as tracker
+        import metis.xlsx as tracker
         monkeypatch.setattr(tracker, "TRACKER_PATH", tmp_path / "applications.xlsx")
         job = self._make_job("Senior PM", "Acme", "apply")
         tracker.write_to_tracker([job], run_date="2026-06-16")
@@ -1121,14 +1135,14 @@ class TestWriteToTracker:
 
     def test_no_eligible_roles_writes_nothing(self, tmp_path, monkeypatch):
         pytest.importorskip("openpyxl")
-        import scorerole.xlsx as tracker
+        import metis.xlsx as tracker
         monkeypatch.setattr(tracker, "TRACKER_PATH", tmp_path / "applications.xlsx")
         jobs = [self._make_job("PM", "X", "skipped", score=20)]
         tracker.write_to_tracker(jobs)
         assert not (tmp_path / "applications.xlsx").exists()
 
     def test_missing_openpyxl_logs_warning_and_returns(self, tmp_path, monkeypatch, caplog):
-        import scorerole.xlsx as tracker
+        import metis.xlsx as tracker
         monkeypatch.setattr(tracker, "TRACKER_PATH", tmp_path / "applications.xlsx")
         import unittest.mock as mock
         with mock.patch.dict("sys.modules", {"openpyxl": None}):
@@ -1136,7 +1150,7 @@ class TestWriteToTracker:
             tracker_fresh = importlib.reload(tracker)
             monkeypatch.setattr(tracker_fresh, "TRACKER_PATH", tmp_path / "applications.xlsx")
             import logging
-            with caplog.at_level(logging.WARNING, logger="scorerole.xlsx"):
+            with caplog.at_level(logging.WARNING, logger="metis.xlsx"):
                 tracker_fresh.write_to_tracker(
                     [self._make_job("PM", "Co", "apply")], run_date="2026-06-16"
                 )
@@ -1152,7 +1166,7 @@ class TestNoLimitFlag:
 
     def _parse(self, argv: list) -> object:
         import argparse
-        parser = argparse.ArgumentParser(prog="scorerole")
+        parser = argparse.ArgumentParser(prog="metis")
         parser.add_argument("--lookback", default="3d")
         parser.add_argument("--no-limit", dest="score_all", action="store_true")
         parser.add_argument("--no-tracker", dest="no_tracker", action="store_true")
@@ -1167,9 +1181,111 @@ class TestNoLimitFlag:
 
     def test_all_flag_not_accepted(self):
         import argparse
-        parser = argparse.ArgumentParser(prog="scorerole")
+        parser = argparse.ArgumentParser(prog="metis")
         parser.add_argument("--no-limit", dest="score_all", action="store_true")
         parser.add_subparsers(dest="command")
         with pytest.raises(SystemExit) as exc:
             parser.parse_args(["--all"])
         assert exc.value.code == 2
+
+
+# ---------------------------------------------------------------------------
+# salary_is_hard_floor flag — render_profile and scoring rubric behavior
+# ---------------------------------------------------------------------------
+
+class TestSalaryFloorFlag:
+
+    def _profile(self, hard_floor: bool) -> dict:
+        return {
+            "candidate": {"name": "Test User"},
+            "salary_floor_usd": 280000,
+            "salary_is_hard_floor": hard_floor,
+        }
+
+    def test_render_profile_hard_floor_label(self):
+        from metis.profile import render_profile
+        result = render_profile(self._profile(hard_floor=True))
+        assert "SALARY FLOOR" in result
+        assert "hard minimum" in result
+
+    def test_render_profile_aspirational_label(self):
+        from metis.profile import render_profile
+        result = render_profile(self._profile(hard_floor=False))
+        assert "SALARY TARGET" in result
+        assert "aspirational" in result
+        assert "SALARY FLOOR" not in result
+
+    def test_scoring_rubric_hard_floor_caps_undisclosed(self):
+        from metis.score import _build_score_suffix
+        rubric = _build_score_suffix("Test", 75, 55, salary_is_hard_floor=True)
+        assert "cap this dimension at 60" in rubric
+        assert "comp: undisclosed" in rubric
+
+    def test_scoring_rubric_aspirational_no_undisclosed_penalty(self):
+        from metis.score import _build_score_suffix
+        rubric = _build_score_suffix("Test", 75, 55, salary_is_hard_floor=False)
+        assert "absence of disclosure is not a concern" in rubric
+        assert "DO NOT USE" in rubric  # tag suppression notice
+
+
+class TestAnonEmployerFallback:
+
+    def test_known_company_surfaced_when_stage_unknown(self):
+        from metis.extract import format_extraction_for_scoring
+        ext = {"jd_quality": "good", "company_stage": "unknown", "company_tier": None}
+        result = format_extraction_for_scoring(ext, listing_company="Jobgether")
+        assert "listed as: Jobgether" in result
+
+    def test_no_fallback_when_stage_is_known(self):
+        from metis.extract import format_extraction_for_scoring
+        ext = {"jd_quality": "good", "company_stage": "series_b", "company_tier": None}
+        result = format_extraction_for_scoring(ext, listing_company="Jobgether")
+        assert "listed as" not in result
+
+    def test_no_fallback_for_empty_listing_company(self):
+        from metis.extract import format_extraction_for_scoring
+        ext = {"jd_quality": "good", "company_stage": "unknown", "company_tier": None}
+        result = format_extraction_for_scoring(ext, listing_company="")
+        assert "listed as" not in result
+
+
+# ---------------------------------------------------------------------------
+# Hard gate: jd_quality semantics — D-54
+# ---------------------------------------------------------------------------
+
+class TestHardGates:
+    """check_hard_gates must distinguish blank JD from extraction failure.
+
+    "extraction_failed" means Haiku's JSON output couldn't be parsed — the JD
+    content IS present and scoring should proceed.  Only "blank" (Haiku saw an
+    empty JD) should trigger the jd_blank gate.  Conflating the two silently
+    drops real roles.  See DECISIONS.md D-54.
+    """
+
+    def _gate(self, jd_quality, profile=None):
+        from metis.extract import check_hard_gates
+        struct = {"jd_quality": jd_quality}
+        return check_hard_gates(struct, profile or {})
+
+    def test_blank_jd_fires_gate(self):
+        passes, gate = self._gate("blank")
+        assert not passes
+        assert gate == "jd_blank"
+
+    def test_extraction_failed_does_not_fire_gate(self):
+        passes, gate = self._gate("extraction_failed")
+        assert passes, "extraction_failed must not trigger jd_blank — JD content exists"
+        assert gate == ""
+
+    def test_low_quality_does_not_fire_gate(self):
+        passes, gate = self._gate("low")
+        assert passes
+
+    def test_unknown_quality_does_not_fire_gate(self):
+        passes, gate = self._gate("unknown")
+        assert passes
+
+    def test_missing_jd_quality_does_not_fire_gate(self):
+        from metis.extract import check_hard_gates
+        passes, gate = check_hard_gates({}, {})
+        assert passes

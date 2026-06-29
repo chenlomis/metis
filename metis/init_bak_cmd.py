@@ -1,4 +1,4 @@
-"""scorerole init — interactive profile setup wizard.
+"""metis init — interactive profile setup wizard.
 
 Uses InquirerPy for prompts and Rich for formatted output.
 Parses a resume (PDF / DOCX / TXT), optionally a LinkedIn export,
@@ -537,7 +537,7 @@ def _collect_goals(Q_STYLE=None) -> dict:
 
     track = _ask_select(
         "Career track",
-        hint="Select the path you want scorerole to favor.",
+        hint="Select the path you want metis to favor.",
         choices=[
             IChoice(name="Senior IC — Staff / Principal / Distinguished", value="ic"),
             IChoice(name="Management — Director / VP / Head of",          value="management"),
@@ -553,7 +553,7 @@ def _collect_goals(Q_STYLE=None) -> dict:
 
     industry_targets = _ask(
         "Preferred industries",
-        hint="Enter industries scorerole should prioritize.  Use commas for multiple.  Press Enter to skip.",
+        hint="Enter industries metis should prioritize.  Use commas for multiple.  Press Enter to skip.",
         examples="healthcare, developer tools, AI infrastructure",
     )
 
@@ -565,7 +565,7 @@ def _collect_goals(Q_STYLE=None) -> dict:
 
     domain_flex = _ask_select(
         "Domain match weighting",
-        hint="Choose how strongly scorerole should penalize roles outside your past domains.",
+        hint="Choose how strongly metis should penalize roles outside your past domains.",
         choices=[
             IChoice(name="Transferable — adjacent experience counts strongly; small penalty for domain gaps", value="flexible"),
             IChoice(name="Balanced — domain gaps matter, but strong role fit can compensate  (default)",     value="moderate"),
@@ -657,7 +657,7 @@ def _collect_preferences(Q_STYLE) -> dict:
     console.print()
     print_section_intro(
         "Your resume and LinkedIn show your past experience and competencies. "
-        "This section captures your next-step goals so scorerole can rank roles "
+        "This section captures your next-step goals so metis can rank roles "
         "based on what you want, not only what you've already done.",
         ctrl_hint=True,
     )
@@ -871,51 +871,46 @@ def _apply_prefs_to_profile(profile: dict, prefs: dict) -> None:
 def _run_proactive_sources_wizard(profile: dict, Q_STYLE=None):
     """Wizard step that configures proactive company scraping in profile['proactive_sources']."""
     try:
-        from .sources.proactive import count_companies
+        from .sources_cmd import _cmd_add_interactive, _get_ps, _pool_by_name
     except (ImportError, ModuleNotFoundError) as e:
-        log.debug("proactive sources not available (%s) — skipping wizard", e)
+        log.debug("sources_cmd not available (%s) — skipping wizard", e)
         return
 
-    n_curated = count_companies(["S", "A"])
+    from .sources.proactive import count_all_companies
+    n_pool       = count_all_companies()
     target_roles = ", ".join(profile.get("target", {}).get("roles", ["your target role"]))
-    already_enabled = profile.get("proactive_sources", {}).get("enabled", False)
 
     console.print()
     console.rule("[dim]Company career pages[/dim]")
     console.print()
     console.print(
-        f"  LinkedIn alerts are already included. scorerole can also check a curated set of\n"
-        f"  company career pages directly each run, then score matching roles against your profile.\n"
-        f"  ({n_curated} companies: Anthropic, Figma, Stripe, Databricks and more)\n"
+        f"  LinkedIn alerts are already included. metis can also check company career pages\n"
+        f"  directly each run, then score matching roles against your profile.\n"
+        f"  ({n_pool} companies in the pool — you choose which ones to include)\n"
         f"\n"
         f"  Roles will be filtered for: [italic]{target_roles}[/italic]"
     )
     console.print()
 
     answer = _ask_confirm(
-        "Check curated company career pages too?",
+        "Pick companies to include?",
         default=True,
     )
 
     if answer:
-        profile["proactive_sources"] = {
-            "enabled": True,
-            "tiers": ["S", "A"],
-            "extra_companies": profile.get("proactive_sources", {}).get("extra_companies", []),
-            "exclude_companies": profile.get("proactive_sources", {}).get("exclude_companies", []),
-        }
+        ps   = _get_ps(profile)
+        pool = _pool_by_name()
+        _cmd_add_interactive(profile, ps, pool)
         console.print(
-            f"  [{THEME['success']}]✓[/]  Curated company sources enabled — {n_curated} companies.\n"
-            f"  [dim]Manage sources anytime with: scorerole sources list / add / remove[/dim]"
+            f"  [dim]Manage sources anytime with: metis sources list / add / remove[/dim]"
         )
     else:
-        profile["proactive_sources"] = {
-            "enabled": False,
-            "extra_companies": profile.get("proactive_sources", {}).get("extra_companies", []),
-            "exclude_companies": profile.get("proactive_sources", {}).get("exclude_companies", []),
-        }
+        ps = dict(profile.get("proactive_sources", {}))
+        ps["enabled"]   = False
+        ps.setdefault("companies", [])
+        profile["proactive_sources"] = ps
         console.print(
-            "  [dim]LinkedIn alerts only. Enable company sources anytime with: scorerole sources on[/dim]"
+            "  [dim]LinkedIn alerts only. Add companies anytime with: metis sources add[/dim]"
         )
 
 
@@ -1029,7 +1024,7 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
         console.print()
         console.print(Panel(
             _body,
-            title="[dim]scorerole profile[/dim]",
+            title="[dim]metis profile[/dim]",
             border_style=Style(color=THEME["separator"]),
             box=rich_box.ROUNDED,
             padding=(1, 3),
@@ -1069,13 +1064,13 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
         console.print()
         _panel_width = min(88, console.width)
         console.print(Panel(
-            "[bold]Let's build your scorerole profile![/bold]\n\n"
-            "The more context you provide, the better scorerole can filter and score roles against your background.\n\n"
+            "[bold]Let's build your metis profile![/bold]\n\n"
+            "The more context you provide, the better metis can filter and score roles against your background.\n\n"
             f"  [{THEME['accent']} bold]1.[/]  [bold]Resume + LinkedIn[/bold]  [{THEME['dim']}]— who you are[/]\n"
             f"  [{THEME['accent']} bold]2.[/]  [bold]Target roles + aspirations[/bold]  [{THEME['dim']}]— what you want[/]\n"
             f"  [{THEME['accent']} bold]3.[/]  [bold]Constraints + deal-breakers[/bold]  [{THEME['dim']}]— what to exclude[/]\n"
             f"  [{THEME['accent']} bold]4.[/]  [bold]Scoring preferences[/bold]  [{THEME['dim']}]— how to rank tradeoffs[/]\n\n"
-            f"[{THEME['dim']}]Takes about 5 mins.  Run `scorerole init` anytime to update.[/]",
+            f"[{THEME['dim']}]Takes about 5 mins.  Run `metis init` anytime to update.[/]",
             style=_RStyle(bgcolor=_T["accent_bg"]),
             border_style=_RStyle(color=_T["accent"]),
             box=rich_box.ROUNDED,
@@ -1088,7 +1083,7 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
         print_section("Step 1 of 4", "Resume + LinkedIn", "— who you are")
         console.print()
         print_section_intro(
-            "Upload your resume so scorerole can extract your experience, skills, and background. "
+            "Upload your resume so metis can extract your experience, skills, and background. "
             "Adding your LinkedIn profile URL supplements this with endorsements and additional context.",
             ctrl_hint=True,
         )
@@ -1452,17 +1447,17 @@ def run_init(api_key: str, resume_path_arg: str = "", supplement_path_arg: str =
             run_schedule_wizard()
     else:
         setup_schedule = _ask_confirm(
-            "Set up automated digests? scorerole can email you on a schedule without manual runs.",
+            "Set up automated digests? metis can email you on a schedule without manual runs.",
             default=True,
         )
         if setup_schedule:
             run_schedule_wizard()
         else:
             console.print(
-                "  [dim]You can set this up later with: scorerole schedule set[/dim]"
+                "  [dim]You can set this up later with: metis schedule set[/dim]"
             )
 
     console.print(
-        "\n  [dim]Run [bold]scorerole[/bold] to fetch your first digest.[/dim]\n"
-        "  [dim]Run [bold]scorerole init[/bold] any time to update your profile.[/dim]\n"
+        "\n  [dim]Run [bold]metis[/bold] to fetch your first digest.[/dim]\n"
+        "  [dim]Run [bold]metis init[/bold] any time to update your profile.[/dim]\n"
     )

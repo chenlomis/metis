@@ -1,16 +1,16 @@
-"""scorerole schedule — install, inspect, pause, resume, and remove automated OS-level digests.
+"""metis schedule — install, inspect, pause, resume, and remove automated OS-level digests.
 
 On macOS: writes a launchd plist to ~/Library/LaunchAgents/ and loads it via
 launchctl so the job runs at the configured time without manual intervention.
 
 On Linux: edits the user crontab (crontab -l / crontab -) to add a single
-tagged line that is removed cleanly by `scorerole schedule remove`.
+tagged line that is removed cleanly by `metis schedule remove`.
 
 Config is stored in ~/.job_pipeline/schedule.json alongside profile.yaml and
 seen_roles.json so the schedule is inspectable independently of the OS job.
 
-Scheduled entry point: `scorerole schedule run --lookback {X}`
-  Runs the digest pipeline then `scorerole track` in sequence.
+Scheduled entry point: `metis schedule run --lookback {X}`
+  Runs the digest pipeline then `metis track` in sequence.
   Called by launchd / cron — not intended for direct user invocation.
 """
 from __future__ import annotations
@@ -22,9 +22,9 @@ from pathlib import Path
 from .state import DATA_DIR
 
 SCHEDULE_FILE  = DATA_DIR / "schedule.json"
-LAUNCHD_LABEL  = "com.scorerole.digest"
+LAUNCHD_LABEL  = "com.metis.digest"
 LAUNCHD_PLIST  = Path.home() / "Library/LaunchAgents" / f"{LAUNCHD_LABEL}.plist"
-CRONTAB_MARKER = "# scorerole-digest"
+CRONTAB_MARKER = "# metis-digest"
 
 FREQUENCY_OPTIONS: dict[str, dict] = {
     "daily":        {"label": "Daily",         "lookback": "1d",  "cron_dow": "*"},
@@ -42,18 +42,18 @@ _DEFAULT_TWICE_WEEKLY_DAYS = [1, 4]   # Monday, Thursday
 # Discovery helpers
 # ---------------------------------------------------------------------------
 
-def _scorerole_bin() -> str:
-    """Return absolute path to the scorerole script in the current venv."""
+def _metis_bin() -> str:
+    """Return absolute path to the metis script in the current venv."""
     bin_dir   = Path(sys.executable).parent
-    candidate = bin_dir / "scorerole"
+    candidate = bin_dir / "metis"
     if candidate.exists():
         return str(candidate)
     import shutil
-    found = shutil.which("scorerole")
+    found = shutil.which("metis")
     if found:
         return found
     raise RuntimeError(
-        "Cannot find the scorerole binary. "
+        "Cannot find the metis binary. "
         "Make sure the venv is activated and `pip install -e .` has been run."
     )
 
@@ -100,17 +100,17 @@ def _schedule_label(config: dict) -> str:
 # Plist / crontab builders  (pure functions — easy to unit-test)
 # ---------------------------------------------------------------------------
 
-def build_plist(config: dict, scorerole_bin: str, working_dir: str) -> str:
+def build_plist(config: dict, metis_bin: str, working_dir: str) -> str:
     """Return the launchd plist XML string for the given schedule config.
 
-    The scheduled entry point is `scorerole schedule run --lookback {X}` which
-    chains the digest pipeline then `scorerole track` in one invocation.
+    The scheduled entry point is `metis schedule run --lookback {X}` which
+    chains the digest pipeline then `metis track` in one invocation.
     """
     freq         = config["frequency"]
     hour, minute = _parse_time(config["time"])
     lookback     = FREQUENCY_OPTIONS[freq]["lookback"]
     log_path     = str(DATA_DIR / "logs" / "scheduled.log")
-    bin_dir      = str(Path(scorerole_bin).parent)
+    bin_dir      = str(Path(metis_bin).parent)
     home         = str(Path.home())
     # Probe nvm's active node so ts-node can find it when launchd's PATH is minimal.
     nvm_node_bin = Path(home) / ".nvm" / "versions" / "node"
@@ -153,7 +153,7 @@ def build_plist(config: dict, scorerole_bin: str, working_dir: str) -> str:
     <key>Label</key><string>{LAUNCHD_LABEL}</string>
     <key>ProgramArguments</key>
     <array>
-        <string>{scorerole_bin}</string>
+        <string>{metis_bin}</string>
         <string>schedule</string>
         <string>run</string>
         <string>--lookback</string>
@@ -180,10 +180,10 @@ def build_plist(config: dict, scorerole_bin: str, working_dir: str) -> str:
 """
 
 
-def build_crontab_line(config: dict, scorerole_bin: str, working_dir: str) -> str:
+def build_crontab_line(config: dict, metis_bin: str, working_dir: str) -> str:
     """Return the crontab line for the given schedule config.
 
-    Calls `scorerole schedule run --lookback {X}` which chains digest + track.
+    Calls `metis schedule run --lookback {X}` which chains digest + track.
     """
     freq     = config["frequency"]
     hour, minute = _parse_time(config["time"])
@@ -199,7 +199,7 @@ def build_crontab_line(config: dict, scorerole_bin: str, working_dir: str) -> st
         dow = str(config.get("weekday", 1))
 
     cmd = (
-        f"cd {working_dir} && {scorerole_bin} schedule run --lookback {lookback} "
+        f"cd {working_dir} && {metis_bin} schedule run --lookback {lookback} "
         f">> {log_path} 2>&1"
     )
     return f"{minute} {hour} * * {dow} {cmd}  {CRONTAB_MARKER}"
@@ -232,33 +232,33 @@ def _save_schedule(config: dict) -> None:
 
 def install_schedule(config: dict) -> None:
     """Install the OS-level scheduled job and persist config to schedule.json."""
-    scorerole_bin = _scorerole_bin()
+    metis_bin = _metis_bin()
     working_dir   = _find_project_root()
 
     full_config = {
         **config,
         "enabled":       True,
-        "scorerole_bin": scorerole_bin,
+        "metis_bin": metis_bin,
         "working_dir":   working_dir,
         "installed_at":  datetime.datetime.now().isoformat(),
         "platform":      platform.system(),
     }
 
     if platform.system() == "Darwin":
-        _install_launchd(full_config, scorerole_bin, working_dir)
+        _install_launchd(full_config, metis_bin, working_dir)
     elif platform.system() == "Linux":
-        _install_crontab(full_config, scorerole_bin, working_dir)
+        _install_crontab(full_config, metis_bin, working_dir)
     else:
         raise SystemExit(
             "❌  Automated scheduling is supported on macOS and Linux only.\n"
-            "    On Windows, use Task Scheduler to run `scorerole schedule run --lookback 1d`."
+            "    On Windows, use Task Scheduler to run `metis schedule run --lookback 1d`."
         )
 
     _save_schedule(full_config)
 
 
-def _install_launchd(config: dict, scorerole_bin: str, working_dir: str) -> None:
-    plist_content = build_plist(config, scorerole_bin, working_dir)
+def _install_launchd(config: dict, metis_bin: str, working_dir: str) -> None:
+    plist_content = build_plist(config, metis_bin, working_dir)
     uid = os.getuid()
 
     if LAUNCHD_PLIST.exists():
@@ -282,8 +282,8 @@ def _install_launchd(config: dict, scorerole_bin: str, working_dir: str) -> None
         )
 
 
-def _install_crontab(config: dict, scorerole_bin: str, working_dir: str) -> None:
-    new_line = build_crontab_line(config, scorerole_bin, working_dir)
+def _install_crontab(config: dict, metis_bin: str, working_dir: str) -> None:
+    new_line = build_crontab_line(config, metis_bin, working_dir)
 
     current = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
     lines = current.stdout.splitlines() if current.returncode == 0 else []
@@ -364,14 +364,14 @@ def resume_schedule() -> bool:
     if config.get("enabled", True):
         return False   # already active
 
-    scorerole_bin = config.get("scorerole_bin") or _scorerole_bin()
+    metis_bin = config.get("metis_bin") or _metis_bin()
     working_dir   = config.get("working_dir") or _find_project_root()
 
     sys_platform = config.get("platform", platform.system())
     if sys_platform == "Darwin":
-        _install_launchd(config, scorerole_bin, working_dir)
+        _install_launchd(config, metis_bin, working_dir)
     elif sys_platform == "Linux":
-        _install_crontab(config, scorerole_bin, working_dir)
+        _install_crontab(config, metis_bin, working_dir)
 
     config["enabled"] = True
     _save_schedule(config)
@@ -387,7 +387,7 @@ def show_schedule() -> None:
     config = load_schedule()
     if not config:
         print("  No schedule configured.")
-        print("  Run `scorerole schedule set` to set one up.")
+        print("  Run `metis schedule set` to set one up.")
         return
 
     enabled   = config.get("enabled", True)
@@ -395,7 +395,7 @@ def show_schedule() -> None:
     label     = _schedule_label(config)
     time_s    = config.get("time", "?")
     installed = config.get("installed_at", "?")[:10]
-    bin_path  = config.get("scorerole_bin", "?")
+    bin_path  = config.get("metis_bin", "?")
 
     print(f"  Status:     {'✓' if enabled else '⏸'}  {status}")
     print(f"  Schedule:   {label} at {time_s}")
@@ -405,27 +405,27 @@ def show_schedule() -> None:
 
     if bin_path != "?" and not Path(bin_path).exists():
         print(f"\n  ⚠  Binary not found at {bin_path}")
-        print("     If the venv was recreated, run `scorerole schedule set` to reinstall.")
+        print("     If the venv was recreated, run `metis schedule set` to reinstall.")
 
     sys_platform = config.get("platform", platform.system())
     if sys_platform == "Darwin":
         plist_ok = LAUNCHD_PLIST.exists()
         if enabled:
-            os_status = "✓ launchd plist active" if plist_ok else "⚠  plist missing — run `scorerole schedule set` to reinstall"
+            os_status = "✓ launchd plist active" if plist_ok else "⚠  plist missing — run `metis schedule set` to reinstall"
         else:
-            os_status = "⏸ paused (plist present)" if plist_ok else "⏸ paused (plist missing — run `scorerole schedule resume`)"
+            os_status = "⏸ paused (plist present)" if plist_ok else "⏸ paused (plist missing — run `metis schedule resume`)"
         print(f"  OS job:     {os_status}")
     elif sys_platform == "Linux":
         current = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
         cron_ok = current.returncode == 0 and CRONTAB_MARKER in current.stdout
         if enabled:
-            os_status = "✓ crontab entry active" if cron_ok else "⚠  crontab entry missing — run `scorerole schedule set` to reinstall"
+            os_status = "✓ crontab entry active" if cron_ok else "⚠  crontab entry missing — run `metis schedule set` to reinstall"
         else:
             os_status = "⏸ paused"
         print(f"  OS job:     {os_status}")
 
     if not enabled:
-        print("\n  Run `scorerole schedule resume` to re-enable.")
+        print("\n  Run `metis schedule resume` to re-enable.")
 
 
 # ---------------------------------------------------------------------------
@@ -469,7 +469,7 @@ def run_schedule_wizard() -> None:
             return
 
     frequency = questionary.select(
-        "  How often should scorerole run?",
+        "  How often should metis run?",
         choices=[
             questionary.Choice("Daily",         value="daily"),
             questionary.Choice("Twice a week",  value="twice_weekly"),
@@ -548,14 +548,14 @@ def run_schedule_wizard() -> None:
 
     lookback = FREQUENCY_OPTIONS[frequency]["lookback"]
     print(f"\n  ✓  Schedule installed: {label} at {time_str}")
-    print(f"     scorerole will fetch the last {lookback} of alerts, email the digest, and update your tracker.")
+    print(f"     metis will fetch the last {lookback} of alerts, email the digest, and update your tracker.")
     if platform.system() == "Darwin":
         print(f"     OS job: {LAUNCHD_PLIST}")
     print(f"     Config: {SCHEDULE_FILE}")
     print()
-    print("  To pause:   scorerole schedule pause")
-    print("  To change:  scorerole schedule set")
-    print("  To remove:  scorerole schedule remove")
+    print("  To pause:   metis schedule pause")
+    print("  To change:  metis schedule set")
+    print("  To remove:  metis schedule remove")
     print()
 
 

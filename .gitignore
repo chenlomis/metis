@@ -10,8 +10,18 @@ __pycache__/
 # ...except the example template (no real values)
 !.env.example
 
-# Pipeline runtime data
-~/.job_pipeline/
+# Pipeline runtime data (lives in ~/.job_pipeline/, outside this repo)
+profile.yaml
+seen_roles.json
+runs.jsonl
+applications.xlsx
+last_run.json
+feedback.md
+feedback_log.jsonl
+schedule.json
+role_queue.json
+skipped_roles.json
+debug_email.txt
 
 # Build output
 *.html
@@ -21,7 +31,18 @@ private/
 
 # macOS
 .DS_Store
+*.DS_Store
 
 # Logs
 *.log
+logs/
+
+# Egg info / build artifacts
 scorerole.egg-info/
+metis.egg-info/
+metis_job.egg-info/
+build/
+dist/
+
+# pytest
+.pytest_cache/

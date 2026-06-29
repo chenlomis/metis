@@ -1,6 +1,6 @@
 """xlsx.py — write scored roles to the Applications xlsx tracker.
 
-Called implicitly at the end of each scorerole run (after digest delivery).
+Called implicitly at the end of each metis run (after digest delivery).
 Only Apply and Consider roles are written as new rows. Skipped roles are
 persisted separately in skipped_roles.json via state.save_skipped_roles().
 
@@ -20,7 +20,7 @@ log = logging.getLogger(__name__)
 # Config
 # ---------------------------------------------------------------------------
 
-_data_dir = Path(os.getenv("SCOREROLE_DATA_DIR", str(Path.home() / ".job_pipeline")))
+_data_dir = Path(os.getenv("METIS_DATA_DIR", str(Path.home() / ".job_pipeline")))
 _DEFAULT_TRACKER = _data_dir / "applications.xlsx"
 TRACKER_PATH = Path(os.getenv("TRACKER_PATH", str(_DEFAULT_TRACKER)))
 
@@ -52,16 +52,16 @@ _COL_NOTES             = 9
 # Colors (openpyxl PatternFill hex values — no leading #)
 # ---------------------------------------------------------------------------
 
-_GREEN  = "C6EFCE"   # suggestion_status=Apply, action_taken=Applied, app_status=Proceeding
-_YELLOW = "FFEB9C"   # suggestion_status=Consider, app_status=Pending
+_GREEN  = "C6EFCE"   # suggestion_status=Solid Match, action_taken=Applied, app_status=Proceeding
+_YELLOW = "FFEB9C"   # suggestion_status=Moderate Match, app_status=Pending
 _RED    = "FFC7CE"   # app_status=Rejected
-_GREY   = "D9D9D9"   # action_taken=Not Applied, suggestion_status=Skipped
-
+_GREY   = "D9D9D9"   # action_taken=Not Applied, suggestion_status=Limited Match
 _STATUS_FILL = {
     # suggestion_status
-    "Apply":        _GREEN,
-    "Consider":     _YELLOW,
-    "Skipped":      _GREY,
+    "Solid Match":    _GREEN,
+    "Moderate Match": _YELLOW,
+    "Limited Match":  _GREY,
+    # "External" intentionally omitted — no fill (white/blank)
     # action_taken
     "Applied":      _GREEN,
     "Not Applied":  _GREY,
@@ -199,7 +199,8 @@ def _set_hyperlink(cell, url: str, display: str) -> None:
 def _build_row_values(job: dict, run_date_str: str) -> list:
     """Return a list of 9 values in _HEADERS column order."""
     verdict = job.get("eval", {}).get("verdict", "consider")
-    suggestion_status = "Apply" if verdict == "apply" else "Consider"
+    _VERDICT_LABEL = {"apply": "Solid Match", "consider": "Moderate Match", "skipped": "Limited Match"}
+    suggestion_status = _VERDICT_LABEL.get(verdict, "Moderate Match")
     score = job.get("eval", {}).get("score")
     match_score = score / 100.0 if score is not None else None  # store as decimal for % format
 

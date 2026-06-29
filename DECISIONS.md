@@ -1,4 +1,4 @@
-# scorerole — Decisions Log
+# metis — Decisions Log
 
 Concise record of non-obvious choices. The "why" that doesn't belong in code comments.
 See ARCHITECTURE.md for deep technical detail.
@@ -26,8 +26,8 @@ They are search-criteria, not identity. Keeping them top-level (not under `prefe
 
 ## Onboarding (init / init2)
 
-**D-06 · `scorerole init` is now the conversational wizard (formerly init2); init2_cmd.py kept as reference**
-The conversational flow (freeform resume paste → Claude extract → clarification → review) proved lower-friction and higher completion rate than the structured 8-step form. As of June 2026, `scorerole init` routes to the conversational wizard. `init_cmd.py` (structured form) and `init2_cmd.py` are retained as reference implementations. They write to the same `profile.yaml` and are interchangeable.
+**D-06 · `metis init` is now the conversational wizard (formerly init2); init2_cmd.py kept as reference**
+The conversational flow (freeform resume paste → Claude extract → clarification → review) proved lower-friction and higher completion rate than the structured 8-step form. As of June 2026, `metis init` routes to the conversational wizard. `init_cmd.py` (structured form) and `init2_cmd.py` are retained as reference implementations. They write to the same `profile.yaml` and are interchangeable.
 
 **D-07 · init2 edit menu mirrors wizard steps, not profile fields**
 The review menu offers "Step 2 — What you're looking for" and "Step 3 — What you'd pass on" rather than "Roles + level", "Salary floor", etc. Users entered data through steps, so editing should mirror that mental model. Field-level edits available via "Open profile in editor" for power users.
@@ -81,15 +81,15 @@ The company list is a curated set of employers worth watching. Which roles to su
 Each stage gates on the previous. MCP server is next and requires a "config as parameters" refactor so core functions don't read from `.env` at import time. Web app is not planned speculatively — only if OSS adoption demonstrates demand.
 
 **D-20 · No auto-calibration; all feedback is explicit and user-initiated**
-Score drift signals (applied to roles scored "skip") are surfaced as digest footer nudges, not auto-adjustments. User decides whether to act via `scorerole init → Quick edits` or `scorerole feedback`. Rationale: auto-calibration on thin behavioral signals produces confident wrong answers.
+Score drift signals (applied to roles scored "skip") are surfaced as digest footer nudges, not auto-adjustments. User decides whether to act via `metis init → Quick edits` or `metis feedback`. Rationale: auto-calibration on thin behavioral signals produces confident wrong answers.
 
 **D-27 · Single shared identity in `prompts.py`; no hardcoded candidate names (OSS-safe)**
-All LLM calls share a common identity anchored in the headhunter framing: scorerole is the advisor, the candidate is the client, `profile.yaml` is the client brief. `prompts.py` is the single source of truth for identity templates and system prompt assembly — same principle as `theme.py` for colors. `SCORING_IDENTITY` and `FEEDBACK_IDENTITY` contain `{candidate_name}` format slots; no literal names are hardcoded. `build_candidate_context(profile)` synthesizes a terse brief from the profile dict that orients Claude before it reads the full `render_profile` detail. This separation (brief → detail) prevents Claude from pattern-matching keywords before it has a coherent perspective on the candidate.
+All LLM calls share a common identity anchored in the headhunter framing: metis is the advisor, the candidate is the client, `profile.yaml` is the client brief. `prompts.py` is the single source of truth for identity templates and system prompt assembly — same principle as `theme.py` for colors. `SCORING_IDENTITY` and `FEEDBACK_IDENTITY` contain `{candidate_name}` format slots; no literal names are hardcoded. `build_candidate_context(profile)` synthesizes a terse brief from the profile dict that orients Claude before it reads the full `render_profile` detail. This separation (brief → detail) prevents Claude from pattern-matching keywords before it has a coherent perspective on the candidate.
 
 **D-28 · Identity sits above profile in the system prompt; feedback parser uses system/user split**
 Scoring system prompt order: identity → candidate brief → full rendered profile → feedback → bullet rules → rubric. The identity anchors Claude's perspective before it reads data. For feedback parsing (`_claude_process`), grounding rules go in the `system=` parameter and the analysis format goes in the user turn — this prevents the analysis task from overriding the identity constraints.
 
-**D-23 · `scorerole feedback` flow: collect → Haiku parse → confirm → save; no auto-weight changes**
+**D-23 · `metis feedback` flow: collect → Haiku parse → confirm → save; no auto-weight changes**
 Free-form text input (blank line to finish). Haiku parses the text into structured metadata (roles, dims, conflicts, profile-level items). Conflicts require user resolution before saving. Confirmed entries are appended to `feedback.md` with an HTML comment header (`<!-- id:... | run:... | roles:... | dims:... -->`) for traceability. A separate `feedback_log.jsonl` records audit metadata (never injected into prompts). Consistent with D-20: no weights are modified automatically.
 
 **D-24 · `feedback.md` has no TTL — all entries injected**
@@ -99,7 +99,7 @@ Feedback represents calibrated user intent, not time-bounded state. Unlike `seen
 `_claude_process()` is instructed to populate `conflicts[]` only when an actual quoted statement in the existing `feedback.md` directly contradicts the new feedback. Empty prior feedback → empty conflicts list. This prevents hallucinated conflicts against non-existent prior state (observed bug: Claude flagging "conflict" when existing feedback was empty).
 
 **D-26 · `profile_items` detection: only explicit blanket rules, not inferred preferences**
-The Haiku processing step may detect feedback that belongs permanently in `profile.yaml` (e.g. "I never want B2C roles") and route it to `scorerole init → Quick edits`. It must only flag statements the user *explicitly wrote* as a blanket rule. Inferring preferences from company names or role titles (e.g. "Workday HCM is foreign") is prohibited — this caused spurious profile flags on first-run feedback.
+The Haiku processing step may detect feedback that belongs permanently in `profile.yaml` (e.g. "I never want B2C roles") and route it to `metis init → Quick edits`. It must only flag statements the user *explicitly wrote* as a blanket rule. Inferring preferences from company names or role titles (e.g. "Workday HCM is foreign") is prohibited — this caused spurious profile flags on first-run feedback.
 
 ---
 
@@ -116,10 +116,10 @@ No color hex values anywhere else in the codebase. Rich `style=` parameters must
 ## Traceability & observability
 
 **D-32 · `trace.py` writes append-only JSONL per job, every run**
-`~/.job_pipeline/runs.jsonl` gets one record per job regardless of verdict (prescreened, filtered, or scored). This is the raw material for `scorerole report`. Decision: write at scoring time, not at digest delivery time — traceability shouldn't depend on SMTP succeeding.
+`~/.job_pipeline/runs.jsonl` gets one record per job regardless of verdict (prescreened, filtered, or scored). This is the raw material for `metis summary`. Decision: write at scoring time, not at digest delivery time — traceability shouldn't depend on SMTP succeeding.
 
 **D-33 · Scoring traceability shown in digest, not a separate command (intent)**
-The email digest should include score breakdowns (dimension scores, leverage/friction points, gate reason if filtered). The raw data is in `runs.jsonl` and the eval dict already carries it. `scorerole report` reads `runs.jsonl` for trends; the digest surfaces per-role traceability inline.
+The email digest should include score breakdowns (dimension scores, leverage/friction points, gate reason if filtered). The raw data is in `runs.jsonl` and the eval dict already carries it. `metis summary` reads `runs.jsonl` for trends; the digest surfaces per-role traceability inline.
 
 ---
 
@@ -132,7 +132,7 @@ Current flow: regex primary, fails silently on novel LinkedIn email formats. Pla
 
 ## Reporting
 
-**D-35 · `scorerole report` reads `runs.jsonl` — no separate DB needed**
+**D-35 · `metis summary` reads `runs.jsonl` — no separate DB needed**
 Score distribution, apply rate, and score-vs-interest correlation can all be computed from `runs.jsonl` + `applications.xlsx` join on `role_hash`. No separate analytics DB. Report generates in-terminal summary + optional HTML export.
 
 ---
@@ -143,10 +143,10 @@ Score distribution, apply rate, and score-vs-interest correlation can all be com
 Several modules call `os.getenv()` at import time (score.py, extract.py, linkedin.py). A library must not do this — it hijacks the caller's environment. Fix: pass `api_key=`, `model=`, `profile_path=` explicitly into core functions. The CLI wrapper reads from `.env` and passes through. This is a prerequisite for both the MCP server (different working dir) and PyPI publish (clean importable API).
 
 **D-37 · MCP surface: 5 tools, wrapping existing functions**
-`score_jobs`, `get_last_digest`, `check_tracker`, `run_track`, `get_profile`. Thin wrapper — no rewrite. Prerequisite: D-36 + stable core functions (finish `scorerole report` and feedback loop first so the MCP surface doesn't change signatures mid-flight).
+`score_jobs`, `get_last_digest`, `check_tracker`, `run_track`, `get_profile`. Thin wrapper — no rewrite. Prerequisite: D-36 + stable core functions (finish `metis summary` and feedback loop first so the MCP surface doesn't change signatures mid-flight).
 
 **D-29 · Employer-lens scoring: deferred**
-Rejection patterns (applied to roles → got rejected) could indicate a mismatch between self-assessment and employer assessment. Adding an employer lens to scoring is a later concern — it requires enough track data to be meaningful and risks producing confident wrong signals on thin data. Address after `scorerole report` surfaces the pattern clearly.
+Rejection patterns (applied to roles → got rejected) could indicate a mismatch between self-assessment and employer assessment. Adding an employer lens to scoring is a later concern — it requires enough track data to be meaningful and risks producing confident wrong signals on thin data. Address after `metis summary` surfaces the pattern clearly.
 
 ---
 
@@ -189,13 +189,83 @@ The eval dict shape that `score.py` emits (verdict enum, 6 named dimensions, exa
 ## Interface & distribution (June 2026)
 
 **D-44 · Target persona is passive job seekers, not active ones**
-Passive seekers (biweekly/weekly cadence, selective, won't mass-apply) are the better fit for scoring-first design. Active seekers want volume tools; they churn from anything that adds friction before the application. Passive seekers value signal quality over throughput — scorerole's 2-layer AI pipeline is the right investment for that persona.
+Passive seekers (biweekly/weekly cadence, selective, won't mass-apply) are the better fit for scoring-first design. Active seekers want volume tools; they churn from anything that adds friction before the application. Passive seekers value signal quality over throughput — metis's 2-layer AI pipeline is the right investment for that persona.
 
 **D-45 · Interface roadmap: CLI → MCP server → PyPI → Docker → web app (on demand only)**
-Stage 0 (done): local CLI. Stage 1 (next): MCP server — local subprocess, no hosting, Claude Code users can `claude mcp add scorerole`. Stage 2: PyPI package after stable public API. Stage 3: Docker for users who skip the venv setup. Stage 4: web app only if demonstrated demand from non-technical users. Prereq for Stage 1: config-as-parameters refactor (no `os.getenv()` at module import time).
+Stage 0 (done): local CLI. Stage 1 (next): MCP server — local subprocess, no hosting, Claude Code users can `claude mcp add metis`. Stage 2: PyPI package after stable public API. Stage 3: Docker for users who skip the venv setup. Stage 4: web app only if demonstrated demand from non-technical users. Prereq for Stage 1: config-as-parameters refactor (no `os.getenv()` at module import time).
 
 **D-46 · prompts.py as canonical, OSS-safe identity layer**
 All LLM prompt templates live in `prompts.py`. Candidate name and profile are injected dynamically — no personal details hardcoded. This makes the repo safe to publish as OSS without scrubbing. Call sites (`score.py`, `feedback.py`) import from here; no duplicate prompt strings anywhere in the codebase.
 
 **D-47 · Scoring voice: second-person ("You/Your"), past tense for candidate actions, present for JD requirements**
 Bullet guide rule added to `score.py`: "You led" (past, candidate action) vs. "The role requires" (present, JD requirement). Third-person "{first_name}" removed — second-person reads as direct coaching, not a report about the candidate. This is a prompt constraint, not a post-processing step, so Claude enforces it at generation time.
+
+---
+
+## Naming
+
+**D-48 · Package and CLI renamed from `scorerole` to `metis` (June 2026)**
+The original name `scorerole` was functional but forgettable and described only one feature (scoring roles). `Metis` is the Greek Titaness of wisdom and counsel — fitting for a tool that acts as a discerning advisor on job fit rather than a mechanical scorer. All references updated: Python package (`metis/`), CLI entry point (`metis`), pyproject.toml, tests, and documentation. The launchd plist identifier is `com.metis.digest`. If you encounter the name `scorerole` anywhere in the codebase it is a bug — update it to `metis`.
+
+**D-49 · Title filter strips level prefix for broader recall (June 2026)**
+`_build_title_patterns()` in `proactive.py` generates two tiers per target role: level-qualified patterns (e.g. "staff product manager") and base-role patterns without the level prefix (e.g. "product manager"). This ensures companies that don't level-prefix their titles (Anthropic, OpenAI, GitHub, etc.) still surface matching roles. The level-fit evaluation happens downstream in scoring, not at the title-filter stage.
+
+**D-50 · playwright_companies section for proprietary-ATS companies (June 2026)**
+Companies that don't expose a public Greenhouse/Lever/Ashby API are scraped via Playwright headless Chromium. They live in a `playwright_companies:` block in `companies.yml` with a `careers_url` field. The same title and location filters apply; location is extracted from the JD body by the scoring layer. Initial entries: Atlassian, Apple, Netflix, Google.
+
+**D-51 · System overview diagram uses a 5-color visual language (June 2026)**
+`ARCHITECTURE.md § System Overview` Mermaid diagram uses colors semantically, not decoratively:
+- Blue (`#dbeafe`/`#1d4ed8`) — user-provided data (profile, resume)
+- Purple (`#e9d5ff`/`#7e22ce`) — external sources (LinkedIn, career pages)
+- Amber+✦ (`#fef3c7`/`#92400e`) — AI-driven steps (Haiku extraction, Sonnet scoring)
+- Gray — runtime artifacts (files written/read during a run)
+- Green (`#dcfce7`/`#166534`) — output deliverables (digest email, xlsx, runs.jsonl)
+Arrow labels (→ with short verbs) are the command names — not boxed nodes.
+
+**D-52 · System overview diagram abstracts away model names; 5-zone structure maps to 5 doc sections**
+The overview uses "AI Scorer" not "Haiku/Sonnet" — model names change, the two-layer extraction+scoring architecture doesn't. The five diagram zones (SETUP / INPUTS / PIPELINE / OUTPUTS / USER LOOP) map 1:1 to the five `### N.` subsections that follow, giving readers a navigation path from overview to detail.
+
+**D-53 · Artifact map is the canonical reference for file read/write relationships**
+`ARCHITECTURE.md § Data Files` contains a "What writes what" table mapping each runtime file to its writer and reader. Key non-obvious entries:
+- `seen_roles.json` is bidirectional with AI Scorer: read first (dedup gate), written after scoring
+- `runs.jsonl` is the data source for `metis summary` (NOT `applications.xlsx`)
+- `last_run.json` is written by AI Scorer and read by `metis feedback` (for run context display)
+- `feedback_log.jsonl` is written by `metis feedback` but never read back (audit trail only)
+- Capped roles (pre-scoring cap, staged to `role_queue.json`) are NOT written to `seen_roles.json` — they reappear next run
+- Hard-gate filtered roles (`jd_blank`, `salary_floor`, deal-breakers) ARE written to `seen_roles.json` — they will NOT reappear unless manually removed
+
+**D-54 · `jd_quality: "extraction_failed"` must NOT trigger the `jd_blank` hard gate**
+`check_hard_gates()` in `extract.py` fires `jd_blank` only when `jd_quality == "blank"`. Three distinct values:
+- `"blank"` — Haiku received empty JD text; gate fires → `verdict="filtered"`.
+- `"low"` — JD present but rated low quality. Gate does not fire; Sonnet scores with caution.
+- `"extraction_failed"` — JD present but Haiku output failed JSON parse. Gate must NOT fire — content exists and Sonnet scores from raw text without extraction grounding.
+
+Root cause (June 28): `_extract_chunk()` fell back to `dict(_BLANK_STRUCT)` on JSON parse errors. `_BLANK_STRUCT` has `jd_quality: "blank"` → gate fired on 15K-char JDs. Fix: all three fallback sites in `extract.py` now return `{**_BLANK_STRUCT, "jd_quality": "extraction_failed"}`.
+Enforced by: `TestHardGates` in `tests/test_core.py`.
+
+**D-55 · PyPI package name is `metis-job`, not `metis`**
+`metis` on PyPI is taken by a METIS ctypes wrapper (unrelated). Package name is `metis-job`; the CLI command and Python import path remain `metis` throughout. Users install with `pipx install git+.../metis.git` and run `metis`. The discrepancy (install name ≠ import name) is intentional and documented in README quickstart.
+
+**D-56 · `.env` uses a fallback chain; `~/.job_pipeline/.env` is the canonical installed path**
+`pipeline.py` tries `.env` candidates in order: (1) `<project_root>/.env` (dev: works in a clone), (2) `~/.job_pipeline/.env` (installed via pipx; no project root exists). `load_dotenv()` stops at the first file that exists. This means contributors get project-root behaviour automatically; pipx users put credentials in `~/.job_pipeline/.env` and never touch the package directory.
+
+**D-58 · `_canonical_company()` normalizes company names before hashing, not inside `_role_hash()`**
+`_role_hash()` is frozen (D-43) — changing it invalidates all historical seen_roles keys. Company name variants ("NVIDIA" vs "NVIDIA AI", "Stripe" vs "Stripe Inc.") produce different hashes under the raw function. Fix: `_canonical_company()` in `state.py` strips trailing branding/legal suffixes (AI, Labs, Technologies, Inc, Corp, Ltd, etc.) via regex before the hash is computed. `_role_hash()` itself is untouched. Iterative stripping handles stacked suffixes ("Acme Labs Inc." → "Acme Labs" → "Acme"). Applied everywhere `_role_hash()` is called.
+
+**D-59 · `domain_background` dimension scores "foreign" only for niche domain-gatekeeping, not cross-industry presence**
+Original prompt allowed Claude to score "foreign" (10) whenever a role was outside the candidate's stated `industry_targets`. This penalized legitimate AI/ML roles at companies in tangential industries (fintech, health-tech) even when `industry_avoid` was empty and the role required no domain-specific expertise. Rule: "foreign" applies only when the JD explicitly requires regulatory, compliance, or sector-specific expertise the candidate lacks. An empty `industry_avoid` means no industry is a default penalty. Candidate's AI/ML, B2B SaaS, and developer-tools strengths are noted as broadly transferable.
+
+**D-60 · Digest tier labels are display aliases; internal verdict strings are unchanged**
+Email digest sections show "Solid Match / Moderate Match / Limited Match" (in `TierSection.tsx`). Internal verdict strings remain `"apply" / "consider" / "skipped"` throughout `score.py`, `pipeline.py`, `state.py`, and `xlsx.py`. The TSX template maps verdicts to display labels at render time. This separation means: (1) the score contract is stable, (2) labels can be changed without touching business logic, (3) tests assert on internal strings, not display text.
+
+**D-61 · `suggestion_status` values renamed: "Apply" → "Solid Match", "Consider" → "Moderate Match", "Skipped" → "Limited Match", "Pre-tracker" → "External"**
+Tracker (`applications.xlsx`) column E now shows the same friendly labels as the email digest. "External" replaces "Pre-tracker" — "External" is more accurate (these roles were applied to outside the metis digest flow, not necessarily before metis existed). Cell fill: Solid Match = green, Moderate Match = yellow, Limited Match = grey, External = no fill (white).
+
+**D-62 · Claude (Haiku) fallback for role title extraction in `track.py`**
+Regex patterns in `extract_role()` only match when emails use standard phrasing ("applying for the X role at Y"). Many ATS confirmation templates (RealReal, Synopsys, Instacart) mention the title somewhere in the body without using canonical phrasing — regex returns `None`. When `llm_client` is available, `_extract_role_llm()` sends the subject + first 1,500 chars of body to Haiku and asks for the role title only. Returns `None` if Haiku responds "NONE" or the result fails `_clean_role()` validation. Only fires when regex fails — not a replacement for regex.
+
+**D-63 · `--no-limit` requires explicit confirmation; blocked silently in cron**
+`--no-limit` bypasses `MAX_JOBS_PER_RUN` and previously triggered unbounded Sonnet scoring with no guard — confirmed to exhaust API credits in production. Fix: when `--no-limit` is passed and `n_found > MAX_JOBS_PER_RUN`: (a) interactive TTY → print cost estimate + prompt `[y/N]`; only proceeds on `y`. (b) non-TTY (cron/scheduled) → log warning and cap to `MAX_JOBS_PER_RUN` automatically. The `--no-limit` flag remains useful for one-off catch-up runs; it just requires intent confirmation.
+
+**D-57 · React Email templates bundled in the Python package; `npm install` runs on first digest**
+React Email requires Node + `node_modules`, which can't be pip-installed. Resolution: ship `render.ts`, `package.json`, `tsconfig.json`, and all `.tsx` files inside `metis/email_templates/` as setuptools package-data. On first `metis` run, `render.py:_resolve_react_dir()` copies these to `~/.job_pipeline/email_templates/` and runs `npm install --prefer-offline` there (one-time, ~30s). Subsequent runs reuse the cached `node_modules`. If Node is absent the Python fallback (`build_digest_html()`) is used silently. Dev workflow unchanged: project-root `node_modules` takes priority when present.

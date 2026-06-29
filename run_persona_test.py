@@ -2,7 +2,7 @@
 Persona test runner — runs the full pipeline for each persona profile without
 touching ~/.job_pipeline/ or profile.yaml.
 
-Both SCOREROLE_PROFILE and SCOREROLE_DATA_DIR are set per persona so that
+Both METIS_PROFILE and METIS_DATA_DIR are set per persona so that
 seen_roles, last_run, runs.jsonl, and all state land in a fully isolated dir.
 Your real pipeline is never read or written.
 
@@ -62,26 +62,26 @@ def run_for_persona(
         return False
 
     # Isolate both profile and all pipeline state (seen_roles, last_run, etc.)
-    os.environ["SCOREROLE_PROFILE"]  = str(profile_path)
-    os.environ["SCOREROLE_DATA_DIR"] = str(data_dir)
+    os.environ["METIS_PROFILE"]  = str(profile_path)
+    os.environ["METIS_DATA_DIR"] = str(data_dir)
 
     from dotenv import load_dotenv
     load_dotenv(Path(__file__).parent / ".env", override=True)
     # Re-apply overrides — dotenv (override=True) won't clobber pre-existing env
     # vars, so re-set defensively to ensure isolation sticks after dotenv.
-    os.environ["SCOREROLE_PROFILE"]  = str(profile_path)
-    os.environ["SCOREROLE_DATA_DIR"] = str(data_dir)
+    os.environ["METIS_PROFILE"]  = str(profile_path)
+    os.environ["METIS_DATA_DIR"] = str(data_dir)
 
     import importlib
-    import scorerole.profile as profile_mod
+    import metis.profile as profile_mod
     importlib.reload(profile_mod)
-    import scorerole.pipeline as pipeline_mod
+    import metis.pipeline as pipeline_mod
     importlib.reload(pipeline_mod)
-    import scorerole.score as score_mod
+    import metis.score as score_mod
     importlib.reload(score_mod)
-    import scorerole.render as render_mod
+    import metis.render as render_mod
     importlib.reload(render_mod)
-    import scorerole.state as state_mod
+    import metis.state as state_mod
     importlib.reload(state_mod)
 
     _orig_send = render_mod.send_digest
@@ -115,15 +115,15 @@ def run_for_persona(
         log.warning(f"Pipeline exited: {e}")
     finally:
         render_mod.send_digest = _orig_send
-        os.environ.pop("SCOREROLE_PROFILE", None)
-        os.environ.pop("SCOREROLE_DATA_DIR", None)
+        os.environ.pop("METIS_PROFILE", None)
+        os.environ.pop("METIS_DATA_DIR", None)
 
     return True
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Run scorerole end-to-end for each persona. Real pipeline is never touched.",
+        description="Run metis end-to-end for each persona. Real pipeline is never touched.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="Groups: pm, designer, mle\n\nExample:\n  python run_persona_test.py --personas pm --dry-run",
     )

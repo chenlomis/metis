@@ -4,7 +4,14 @@ from pathlib import Path
 from dotenv import load_dotenv
 import anthropic
 
-load_dotenv(override=True)
+# Load .env from project root (dev/editable install) or ~/.job_pipeline/.env (pipx/pip install).
+_dotenv_candidates = [
+    Path(__file__).parent.parent / ".env",
+    Path(os.environ.get("METIS_DATA_DIR", Path.home() / ".job_pipeline")) / ".env",
+]
+for _dotenv_path in _dotenv_candidates:
+    if load_dotenv(_dotenv_path, override=True):
+        break
 
 # ---------------------------------------------------------------------------
 # Config
@@ -14,7 +21,7 @@ GMAIL_ADDRESS      = os.getenv("GMAIL_ADDRESS", "")
 GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
 RECIPIENT_EMAIL    = os.getenv("RECIPIENT_EMAIL", GMAIL_ADDRESS)
 MODEL              = os.getenv("MODEL", "claude-sonnet-4-6")
-MAX_JOBS_PER_RUN   = int(os.getenv("MAX_JOBS_PER_RUN", "20"))
+MAX_JOBS_PER_RUN   = int(os.getenv("MAX_JOBS_PER_RUN", "40"))
 DEFAULT_LOOKBACK   = os.getenv("DEFAULT_LOOKBACK", "3d")  # fallback only; main() uses last-run timestamp when available
 
 from .state import (
@@ -289,6 +296,21 @@ def _stage_cap(
             f"Estimated cost: ~{estimate_cost(n_found)}\n"
             f"  (Haiku pre-screen will filter obvious mismatches — actual cost typically lower.)\n"
         )
+        # Guard: require explicit confirmation in interactive mode; block in cron.
+        if n_found > MAX_JOBS_PER_RUN:
+            if not sys.stdin.isatty():
+                log.warning(
+                    "--no-limit passed in non-interactive (cron) mode with %d roles — "
+                    "capping to MAX_JOBS_PER_RUN=%d to prevent runaway spend. "
+                    "Run interactively to confirm an uncapped run.",
+                    n_found, MAX_JOBS_PER_RUN,
+                )
+                score_all = False   # fall through to normal cap logic below
+            else:
+                confirm = input(f"  Score all {n_found} roles without cap? [y/N] ").strip().lower()
+                if confirm != "y":
+                    print(f"  Capping to {MAX_JOBS_PER_RUN} (MAX_JOBS_PER_RUN). Pass --no-limit and confirm 'y' to override.")
+                    score_all = False
 
     # Determine effective cap for this run (cap_to=None means score everything).
     cap_to: int | None = None
@@ -394,7 +416,7 @@ def _stage_enrich_and_score(jobs: list[dict], client) -> list[dict]:
         except FileNotFoundError:
             raise SystemExit(
                 "\n❌  No scoring profile found.\n"
-                "   Run `scorerole init` to create one from your resume.\n"
+                "   Run `metis init` to create one from your resume.\n"
             )
 
     ranked = rank_jobs(jobs)
@@ -454,7 +476,7 @@ def _stage_deliver(
         return
 
     try:
-        send_digest(html, run_date)
+        send_digest(html, run_date, job_count=len(scored_jobs))
     except Exception:
         log.error("Pipeline finished scoring but failed to deliver digest — check SMTP settings in .env")
         raise SystemExit(1)
@@ -530,7 +552,7 @@ def run_pipeline(since_dt: datetime.datetime, score_all: bool = False, dry_run: 
         if n_filtered:
             log.info(
                 "All %d role(s) were filtered by deal-breaker rules — no digest sent.\n"
-                "If this seems wrong, run `scorerole init` → Quick edits → Deal-breakers "
+                "If this seems wrong, run `metis init` → Quick edits → Deal-breakers "
                 "to review your rules.",
                 n_filtered,
             )
@@ -586,7 +608,7 @@ def main():
     )
 
     parser = argparse.ArgumentParser(
-        prog="scorerole",
+        prog="metis",
         description="AI-powered job alert digest — filters, scores, and delivers "
                     "only what's worth your time.",
     )
@@ -608,7 +630,7 @@ def main():
 
     subparsers = parser.add_subparsers(dest="command")
 
-    # init_bak subcommand (archived — use `scorerole init` for the conversational wizard)
+    # init_bak subcommand (archived — use `metis init` for the conversational wizard)
     init_p = subparsers.add_parser(
         "init_bak",
         help="[archived] Create your scoring profile from a resume (PDF, DOCX, or TXT).",
@@ -639,9 +661,9 @@ def main():
         help="Install, inspect, or remove the automated digest schedule.",
         description=(
             "Show the current schedule when called with no action.\n\n"
-            "  scorerole schedule        show current schedule + OS job status\n"
-            "  scorerole schedule set    interactive setup (or update)\n"
-            "  scorerole schedule remove remove the scheduled job"
+            "  metis schedule        show current schedule + OS job status\n"
+            "  metis schedule set    interactive setup (or update)\n"
+            "  metis schedule remove remove the scheduled job"
         ),
     )
     schedule_sub = schedule_p.add_subparsers(dest="schedule_action")
@@ -676,9 +698,9 @@ def main():
         description=(
             "Fetches emails from Gmail, classifies them as confirmations or rejections,\n"
             "and updates the Applications xlsx tracker accordingly.\n\n"
-            "  scorerole track                   # parse last 7 days\n"
-            "  scorerole track --lookback 30d    # extend lookback\n"
-            "  scorerole track --dry-run         # preview matches, no writes"
+            "  metis track                   # parse last 7 days\n"
+            "  metis track --lookback 30d    # extend lookback\n"
+            "  metis track --dry-run         # preview matches, no writes"
         ),
     )
     track_p.add_argument(
@@ -693,24 +715,26 @@ def main():
     # sources subcommand
     sources_p = subparsers.add_parser(
         "sources",
-        help="Manage company career-page sources.",
+        help="Manage all job sources (email alerts + company career pages).",
         description=(
-            "View and manage the company career pages scorerole checks each run.\n\n"
-            "  scorerole sources              show active sources\n"
-            "  scorerole sources list         show active sources\n"
-            "  scorerole sources add Stripe   add a company by name\n"
-            "  scorerole sources remove       interactively remove companies\n"
-            "  scorerole sources on           enable company sources\n"
-            "  scorerole sources off          disable company sources"
+            "View and manage all job sources.\n\n"
+            "  metis sources                    show all active sources\n"
+            "  metis sources add                interactive picker (company or alert)\n"
+            "  metis sources add Stripe         add a specific company\n"
+            "  metis sources add --all          add every company in the pool\n"
+            "  metis sources remove             interactively remove sources\n"
+            "  metis sources on                 enable company scraping\n"
+            "  metis sources off                disable company scraping"
         ),
     )
     sources_sub = sources_p.add_subparsers(dest="sources_action")
-    sources_sub.add_parser("list",   help="Show active sources.")
-    sources_add_p = sources_sub.add_parser("add",    help="Add a company by name.")
-    sources_add_p.add_argument("company_name", nargs="+", help="Company name to add.")
-    sources_sub.add_parser("remove", help="Interactively remove companies.")
-    sources_sub.add_parser("on",     help="Enable company sources.")
-    sources_sub.add_parser("off",    help="Disable company sources.")
+    sources_sub.add_parser("list",   help="Show all active sources.")
+    sources_add_p = sources_sub.add_parser("add", help="Add a company or alert source.")
+    sources_add_p.add_argument("source_name", nargs="*", help="Company name to add (omit for interactive).")
+    sources_add_p.add_argument("--all", dest="add_all", action="store_true", help="Add all companies in the pool.")
+    sources_sub.add_parser("remove", help="Interactively remove sources.")
+    sources_sub.add_parser("on",     help="Enable company scraping.")
+    sources_sub.add_parser("off",    help="Disable company scraping.")
 
     # feedback subcommand
     feedback_p = subparsers.add_parser(
@@ -720,40 +744,41 @@ def main():
             "Collect free-form feedback on past scoring, parsed by Claude and\n"
             "appended to ~/.job_pipeline/feedback.md. Injected into the scoring\n"
             "prompt on every subsequent run.\n\n"
-            "  scorerole feedback        # interactive prompt\n"
-            "  scorerole feedback list   # show recent entries"
+            "  metis feedback add    # interactive prompt\n"
+            "  metis feedback list   # show recent entries"
         ),
     )
     feedback_sub = feedback_p.add_subparsers(dest="feedback_action")
+    feedback_sub.add_parser("add",  help="Add a calibration note interactively.")
     feedback_sub.add_parser("list", help="Show recent feedback entries.")
 
     # debug subcommand
     subparsers.add_parser("debug", help="Dump the most recent LinkedIn alert email for inspection.")
 
-    # report subcommand
-    report_p = subparsers.add_parser(
-        "report",
-        help="Generate and send the Scorerole market report.",
+    # summary subcommand
+    summary_p = subparsers.add_parser(
+        "summary",
+        help="Generate and send the Metis market summary.",
         description=(
             "Compiles cumulative pipeline metrics from the tracker and sends\n"
-            "the report to your email address.\n\n"
-            "  scorerole report                       # send to email\n"
-            "  scorerole report --output report.html  # save as HTML\n"
-            "  scorerole report --output report.pdf   # save as PDF\n"
-            "  scorerole report --lookback 60d        # scope market intel to 60 days"
+            "the summary to your email address.\n\n"
+            "  metis summary                        # send to email\n"
+            "  metis summary --output summary.html  # save as HTML\n"
+            "  metis summary --output summary.pdf   # save as PDF\n"
+            "  metis summary --lookback 60d         # scope market intel to 60 days"
         ),
     )
-    report_p.add_argument(
+    summary_p.add_argument(
         "--output", default=None, metavar="FILE",
-        help="Save report to FILE (.html or .pdf) instead of sending by email.",
+        help="Save summary to FILE (.html or .pdf) instead of sending by email.",
     )
-    report_p.add_argument(
+    summary_p.add_argument(
         "--lookback", default="30d", metavar="DURATION",
         help="How far back to scope market intelligence sections. Default: 30d",
     )
-    report_p.add_argument(
+    summary_p.add_argument(
         "--send", action="store_true",
-        help="Send as a real report email (no [DRAFT PREVIEW] prefix).",
+        help="Send as a real summary email (no [DRAFT PREVIEW] prefix).",
     )
 
 
@@ -762,7 +787,7 @@ def main():
 
     if args.command == "init_bak":
         _validate_env(require_gmail=False)   # only needs API key to parse resume
-        from .init_cmd import run_init
+        from .init_bak_cmd import run_init
         run_init(
             api_key=ANTHROPIC_API_KEY,
             resume_path_arg=getattr(args, "resume", "") or "",
@@ -771,8 +796,8 @@ def main():
 
     elif args.command == "init":
         _validate_env(require_gmail=False)
-        from .init2_cmd import run_init2
-        run_init2(api_key=ANTHROPIC_API_KEY)
+        from .init_cmd import run_init
+        run_init(api_key=ANTHROPIC_API_KEY)
 
     elif args.command == "reset":
         targets = [SEEN_FILE]
@@ -796,7 +821,7 @@ def main():
             p.unlink(missing_ok=True)
         print(f"Cleared: {names}")
         if args.profile and (DATA_DIR / "profile.yaml") in existing:
-            print("Run `scorerole init` to rebuild your scoring profile.")
+            print("Run `metis init` to rebuild your scoring profile.")
 
     elif args.command == "schedule":
         from .schedule_cmd import (
@@ -809,7 +834,7 @@ def main():
         elif action == "pause":
             paused = pause_schedule()
             if paused:
-                print("  Schedule paused. Run `scorerole schedule resume` to re-enable.")
+                print("  Schedule paused. Run `metis schedule resume` to re-enable.")
             else:
                 print("  Nothing to pause — schedule is already paused or not configured.")
         elif action == "resume":
@@ -858,10 +883,11 @@ def main():
 
     elif args.command == "sources":
         from .sources_cmd import run_sources
-        action = getattr(args, "sources_action", None)
-        name_parts = getattr(args, "company_name", None)
-        name = " ".join(name_parts) if name_parts else None
-        run_sources(action, name)
+        action     = getattr(args, "sources_action", None)
+        name_parts = getattr(args, "source_name", None)
+        name       = " ".join(name_parts) if name_parts else None
+        add_all    = getattr(args, "add_all", False)
+        run_sources(action, name or None, add_all=add_all)
 
     elif args.command == "feedback":
         _validate_env(require_gmail=False)
@@ -877,16 +903,19 @@ def main():
         _validate_env()
         debug_emails()
 
-    elif args.command == "report":
+    elif args.command == "summary":
         _validate_env()
         from .report_cmd import run_report
         from .xlsx import TRACKER_PATH
+        lookback_str = getattr(args, "lookback", "30d") or "30d"
+        _lb_days = int(re.sub(r"[^\d]", "", lookback_str) or 30)
         run_report(
             tracker_path=TRACKER_PATH,
             gmail_address=GMAIL_ADDRESS,
             app_password=GMAIL_APP_PASSWORD,
             output=getattr(args, "output", None),
             preview=not getattr(args, "send", False),
+            lookback_days=_lb_days,
         )
 
     else:

@@ -4,7 +4,7 @@ Regression tests for the three changes landed 2026-06-19:
   1. render.py + score.py — frictionPoints/leveragePoints bare-string bug
      (_coerce_list, _normalize_list_fields)
   2. track.py — recruiter_screen classification (4th email class)
-  3. init2_cmd.py + profile.template.yaml — schema alignment
+  3. init_cmd.py + profile.template.yaml — schema alignment
 
 Each section is labelled with the commit it covers.
 """
@@ -22,7 +22,7 @@ class TestCoerceList:
     """_coerce_list must never let a bare string reach '; '.join()."""
 
     def _coerce(self, val):
-        from scorerole.render import _coerce_list
+        from metis.render import _coerce_list
         return _coerce_list(val)
 
     def test_list_passthrough(self):
@@ -53,7 +53,7 @@ class TestNormalizeListFields:
     """_normalize_list_fields must coerce at the score.py layer before render sees data."""
 
     def _normalize(self, evals):
-        from scorerole.score import _normalize_list_fields
+        from metis.score import _normalize_list_fields
         _normalize_list_fields(evals)
         return evals
 
@@ -107,7 +107,7 @@ class TestLeverageFrictionRender:
     """_leverage_friction must produce well-formed HTML, never character iteration."""
 
     def _render(self, leverage, friction):
-        from scorerole.render import _leverage_friction
+        from metis.render import _leverage_friction
         return _leverage_friction(leverage, friction)
 
     def test_bare_string_leverage_renders_single_bullet(self):
@@ -149,7 +149,7 @@ class TestClassifyEmailRecruiterScreen:
     """classify_email must return 'recruiter_screen' for scheduling / phone-screen emails."""
 
     def _classify(self, body, subject=""):
-        from scorerole.track import classify_email
+        from metis.track import classify_email
         return classify_email(body, subject, llm_client=None)
 
     # --- Positive: should return recruiter_screen ---
@@ -210,7 +210,7 @@ class TestClassifyEmailReturnType:
     """classify_email return value must always be one of the 4 valid classes."""
 
     def test_return_is_always_valid_class(self):
-        from scorerole.track import classify_email, _LLM_VALID_CLASSES
+        from metis.track import classify_email, _LLM_VALID_CLASSES
         test_cases = [
             ("We will not be moving forward.", "Rejection"),
             ("Congratulations on your offer!", "Your Offer Letter"),
@@ -226,7 +226,7 @@ class TestRecruiterScreenTrackerUpdate:
     """update_recruiter_screen must set the correct status and fill color."""
 
     def test_sets_recruiter_screen_status(self):
-        from scorerole.track import update_recruiter_screen
+        from metis.track import update_recruiter_screen
         ws = mock.MagicMock()
         # Simulate a cell at row 5
         ws.cell.return_value = mock.MagicMock()
@@ -236,7 +236,7 @@ class TestRecruiterScreenTrackerUpdate:
 
     def test_no_downgrade_from_rejected(self):
         """run_track must not call update_recruiter_screen if status is already Rejected."""
-        from scorerole.track import classify_email
+        from metis.track import classify_email
         # This is a logic test: the guard is in run_track(), verified via classify
         # returning recruiter_screen (the guard then checks current_status)
         result = classify_email("Let's schedule a call.", "Next Steps with Klaviyo")
@@ -252,10 +252,10 @@ class TestRecruiterScreenTrackerUpdate:
 # ---------------------------------------------------------------------------
 
 class TestInit2SchemaAlignment:
-    """After the schema refactor, init2_cmd must still extract all required top-level keys."""
+    """After the schema refactor, init_cmd must still extract all required top-level keys."""
 
     def test_extract_system_v2_contains_required_fields(self):
-        from scorerole.prompts import init_extract_system_prompt
+        from metis.prompts import init_extract_system_prompt
         prompt = init_extract_system_prompt()
         required = [
             "candidate:", "target:", "aspirations:", "preferences:",
@@ -267,7 +267,7 @@ class TestInit2SchemaAlignment:
 
     def test_extract_system_v2_has_scoring_block(self):
         """scoring block with solid_match_threshold/moderate_match_threshold must be present."""
-        from scorerole.prompts import init_extract_system_prompt
+        from metis.prompts import init_extract_system_prompt
         import re
         prompt = init_extract_system_prompt()
         assert re.search(r"^scoring:", prompt, re.MULTILINE), \
@@ -277,7 +277,7 @@ class TestInit2SchemaAlignment:
 
     def test_guardrails_still_work_after_refactor(self):
         """_apply_guardrails must be importable and handle the new schema shape."""
-        from scorerole.init2_cmd import _apply_guardrails
+        from metis.init_cmd import _apply_guardrails
         # New schema: candidate may have company_environment; scoring block absent
         profile = {
             "candidate": {"name": "Test", "open_to_remote": True},
@@ -301,10 +301,10 @@ class TestInit2SchemaAlignment:
             assert isinstance(data, dict)
             assert "candidate" in data
 
-    def test_init2_cmd_still_importable(self):
-        import scorerole.init2_cmd  # noqa: F401
+    def test_init_cmd_still_importable(self):
+        import metis.init_cmd  # noqa: F401
 
-    def test_init_cmd_unaffected_by_schema_refactor(self):
-        """Original scorerole init must still be importable and have run_init."""
-        from scorerole.init_cmd import run_init
+    def test_init_bak_cmd_still_importable(self):
+        """init_bak_cmd must still be importable and have run_init."""
+        from metis.init_bak_cmd import run_init
         assert callable(run_init)

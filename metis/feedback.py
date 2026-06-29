@@ -1,12 +1,12 @@
-"""scorerole feedback — interactive calibration feedback capture.
+"""metis feedback — interactive calibration feedback capture.
 
 Each confirmed entry is appended to ~/.job_pipeline/feedback.md and logged to
 feedback_log.jsonl. The .md file is injected verbatim into the Layer 2 Sonnet
 system prompt on every subsequent run (score.py → build_score_system).
 
 Subcommands (routed by pipeline.py):
-  scorerole feedback        — collect → Claude parse → confirm → save
-  scorerole feedback list   — show recent entries
+  metis feedback        — collect → Claude parse → confirm → save
+  metis feedback list   — show recent entries
 """
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ log = logging.getLogger(__name__)
 _FEEDBACK_HEADER = (
     "# Scoring Feedback\n\n"
     "Free-form calibration notes — injected into every scoring run.\n"
-    "Add entries via `scorerole feedback` or edit this file directly.\n"
+    "Add entries via `metis feedback` or edit this file directly.\n"
 )
 
 
@@ -162,19 +162,25 @@ def write_feedback_log(
     raw_text: str,
     roles: list[str],
     dims: list[str],
+    action_taken: str = "saved",
+    conflict_count: int = 0,
 ) -> None:
     """Append one audit record to feedback_log.jsonl.
 
     This file is for regression tracking and history display only — it is
     never injected into scoring prompts.
+
+    action_taken values: "saved" | "cancelled" | "discard" | "profile_only" | "empty_input"
     """
     record = {
-        "feedback_id": feedback_id,
-        "run_id":      run_id,
-        "timestamp":   datetime.datetime.now().isoformat(),
-        "roles":       roles,
-        "dims":        dims,
-        "text_length": len(raw_text),
+        "feedback_id":   feedback_id,
+        "run_id":        run_id,
+        "timestamp":     datetime.datetime.now().isoformat(),
+        "action_taken":  action_taken,
+        "conflict_count": conflict_count,
+        "roles":         roles,
+        "dims":          dims,
+        "text_length":   len(raw_text),
     }
     DATA_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
     with FEEDBACK_LOG_FILE.open("a") as fh:
@@ -183,7 +189,7 @@ def write_feedback_log(
 
 
 # ---------------------------------------------------------------------------
-# Entry parser — for `scorerole feedback list`
+# Entry parser — for `metis feedback list`
 # ---------------------------------------------------------------------------
 
 _COMMENT_RE = re.compile(r"<!--\s*id:(\S+?)\s*\|.*?-->")
@@ -224,7 +230,7 @@ def _parse_entries(content: str) -> list[dict]:
         body_lines = [
             l.strip() for l in body_text.splitlines()[1:]
             if l.strip() and not l.strip().startswith("<!--")
-        ]
+            ]
         first_line = body_lines[0] if body_lines else ""
 
         entries.append({
@@ -322,7 +328,7 @@ def _show_last_run_summary(run: dict) -> None:
 
     t = Text()
     t.append("  Last run: ", style=Style(color=THEME["muted"]))
-    t.append(run.get("run_date", "unknown"), style=Style(color=THEME["label"]))
+    t.append(run.get("run_date", "unknown"), style=Style(color=THEME["bright"]))
     t.append(
         f"  ·  {run.get('total_evaluated', 0)} evaluated"
         f"  ·  {run.get('apply_count', 0)} apply"
@@ -350,25 +356,39 @@ def _print_parsed(parsed: dict) -> None:
     print_section("→", "Understood", "what I extracted from your feedback")
     console.print()
 
+    import textwrap as _tw
+    prefix2 = "  "
+    prefix5 = "     "
+    avail2 = max(40, console.width - len(prefix2))
+
     for r in parsed.get("roles", []):
         direction = r.get("direction", "unclear")
         arrow = "↑" if direction == "too_low" else ("↓" if direction == "too_high" else "·")
         color = (THEME["success"] if direction == "too_low"
                  else (THEME["warning"] if direction == "too_high" else THEME["muted"]))
-        note_part = f"  [{THEME['muted']}]— {_escape(r['note'])}[/]" if r.get("note") else ""
-        line = (
-            f"[{color}]{arrow}[/]  "
-            f"[{THEME['label']}]{_escape(r.get('company', ''))} /[/] "
-            f"[{THEME['accent']}]{_escape(r.get('dim', 'general'))}[/]"
-            f"{note_part}"
-        )
-        console.print(Padding(line, (0, 0, 0, 2)))
+        note_part = f"  — {r['note']}" if r.get("note") else ""
+        first_line = f"{arrow}  {r.get('company', '')} / {r.get('dim', 'general')}{note_part}"
+        wrapped = _tw.wrap(first_line, width=avail2) or [first_line]
+        for i, wl in enumerate(wrapped):
+            if i == 0:
+                company = _escape(r.get('company', ''))
+                dim     = _escape(r.get('dim', 'general'))
+                note    = f"  [{THEME['muted']}]— {_escape(r['note'])}[/]" if r.get("note") else ""
+                console.print(
+                    f"{prefix2}[{color}]{arrow}[/]  "
+                    f"[{THEME['bright']}]{company} /[/] "
+                    f"[{THEME['accent']}]{dim}[/]{note}"
+                )
+            else:
+                console.print(f"{prefix5}[{THEME['muted']}]{_escape(wl)}[/]")
 
     for note in parsed.get("general_notes", []):
-        console.print(Padding(
-            f"[{THEME['dim']}]·[/]  [{THEME['muted']}]{_escape(note)}[/]",
-            (0, 0, 0, 2),
-        ))
+        lines = _tw.wrap(note, width=avail2 - 3) or [note]
+        for i, wl in enumerate(lines):
+            if i == 0:
+                console.print(f"{prefix2}[{THEME['dim']}]·[/]  [{THEME['muted']}]{_escape(wl)}[/]")
+            else:
+                console.print(f"{prefix5}[{THEME['muted']}]{_escape(wl)}[/]")
 
 
 def _collect_input() -> str:
@@ -419,13 +439,10 @@ def run_feedback(api_key: Optional[str] = None) -> None:
             " — all injected into future runs)",
             style=Style(color=THEME["dim"], italic=True),
         )
-        console.print()
+    console.print()
 
-    console.print(Padding(
-        f"[{THEME['muted']}]Mention the role and what feels off. "
-        "You can address multiple roles in one entry.[/]",
-        (0, 0, 0, 2),
-    ))
+    from .theme import print_section_intro
+    print_section_intro("Mention the role and what feels off. You can address multiple roles in one entry.")
     print_eg(
         '"GitLab 86% feels right but cultural fit caution is wrong — I\'m comfortable '
         "in large orgs. Workday 58% too low; MCP/SDK work is core to my LLM background.\""
@@ -435,6 +452,25 @@ def run_feedback(api_key: Optional[str] = None) -> None:
     if not raw_text:
         console.print("  (skipped — no changes made)\n", style=Style(color=THEME["dim"]))
         return
+
+    # Shared log helper — called on every exit path so all outcomes are recorded.
+    feedback_id = _feedback_id()
+    run_data    = load_last_run()
+    run_id      = (
+        run_data.get("run_date", "").replace(" ", "_").replace(",", "")
+        if run_data else None
+    )
+
+    def _log(action: str, roles: list[str] = [], dims: list[str] = [], conflicts: int = 0) -> None:
+        write_feedback_log(
+            feedback_id=feedback_id,
+            run_id=run_id,
+            raw_text=raw_text,
+            roles=roles,
+            dims=dims,
+            action_taken=action,
+            conflict_count=conflicts,
+        )
 
     # Claude processing — optional, degrades gracefully
     parsed: Optional[dict] = None
@@ -447,30 +483,34 @@ def run_feedback(api_key: Optional[str] = None) -> None:
 
     roles_meta: list[str] = []
     dims_meta:  list[str] = []
+    conflict_count: int   = 0
 
     if parsed:
         _print_parsed(parsed)
-        roles_meta = [r.get("company", "").lower() for r in parsed.get("roles", []) if r.get("company")]
-        dims_meta  = parsed.get("dims", [])
+        roles_meta     = [r.get("company", "").lower() for r in parsed.get("roles", []) if r.get("company")]
+        dims_meta      = parsed.get("dims", [])
+        conflict_count = len(parsed.get("conflicts", []))
 
         # Conflict resolution
         conflicts = parsed.get("conflicts", [])
         if conflicts:
             console.print()
+            import textwrap as _tw
+            _avail = max(40, console.width - 2)
             for c in conflicts:
-                console.print(Padding(
-                    f"[{THEME['warning']}]⚠  Conflict[/]  "
-                    f"[{THEME['muted']}]{_escape(c.get('description', ''))}[/]",
-                    (0, 0, 0, 2),
-                ))
-                console.print(Padding(
-                    f"[{THEME['dim']}]new:  {_escape(c.get('new_statement', ''))}[/]",
-                    (0, 0, 0, 5),
-                ))
-                console.print(Padding(
-                    f"[{THEME['dim']}]prev: {_escape(c.get('existing_statement', ''))}[/]",
-                    (0, 0, 0, 5),
-                ))
+                desc = c.get('description', '')
+                for i, wl in enumerate(_tw.wrap(desc, width=_avail - 12) or [desc]):
+                    if i == 0:
+                        console.print(f"  [{THEME['warning']}]⚠  Conflict[/]  [{THEME['muted']}]{_escape(wl)}[/]")
+                    else:
+                        console.print(f"       [{THEME['muted']}]{_escape(wl)}[/]")
+                for label, key in (("new: ", "new_statement"), ("prev:", "existing_statement")):
+                    val = c.get(key, '')
+                    for i, wl in enumerate(_tw.wrap(val, width=_avail - 7) or [val]):
+                        if i == 0:
+                            console.print(f"     [{THEME['dim']}]{label}  {_escape(wl)}[/]")
+                        else:
+                            console.print(f"           [{THEME['dim']}]{_escape(wl)}[/]")
             console.print()
             resolution = inquirer.select(
                 message="How to handle?",
@@ -484,23 +524,20 @@ def run_feedback(api_key: Optional[str] = None) -> None:
             ).execute()
             if resolution == "discard":
                 console.print("  (discarded — no changes made)\n", style=Style(color=THEME["dim"]))
+                _log("discard", roles_meta, dims_meta, conflict_count)
                 return
 
         # Profile-level routing
         profile_items = parsed.get("profile_items", [])
         if profile_items:
             console.print()
-            console.print(Padding(
-                f"[{THEME['accent']}]Profile flag[/]  "
+            console.print(
+                f"  [{THEME['accent']}]Profile flag[/]  "
                 f"[{THEME['muted']}]These look like permanent preferences — "
-                "they belong in your profile:[/]",
-                (0, 0, 0, 2),
-            ))
+                "they belong in your profile:[/]"
+            )
             for item in profile_items:
-                console.print(Padding(
-                    f"[{THEME['dim']}]· {_escape(item)}[/]",
-                    (0, 0, 0, 4),
-                ))
+                console.print(f"    [{THEME['dim']}]· {_escape(item)}[/]")
             console.print()
             routing = inquirer.select(
                 message="Where should these go?",
@@ -514,13 +551,14 @@ def run_feedback(api_key: Optional[str] = None) -> None:
             ).execute()
             if routing == "profile":
                 console.print(
-                    "  Run `scorerole init` → Quick edits to update your profile.\n",
+                    "  Run `metis init` → Quick edits to update your profile.\n",
                     style=Style(color=THEME["dim"]),
                 )
+                _log("profile_only", roles_meta, dims_meta, conflict_count)
                 return
             if routing == "both":
                 console.print(
-                    "  Reminder: update your profile via `scorerole init` → Quick edits.",
+                    "  Reminder: update your profile via `metis init` → Quick edits.",
                     style=Style(color=THEME["warning"]),
                 )
                 console.print()
@@ -535,14 +573,8 @@ def run_feedback(api_key: Optional[str] = None) -> None:
 
     if not confirmed:
         console.print("  (cancelled)\n", style=Style(color=THEME["dim"]))
+        _log("cancelled", roles_meta, dims_meta, conflict_count)
         return
-
-    feedback_id = _feedback_id()
-    run_data    = load_last_run()
-    run_id      = (
-        run_data.get("run_date", "").replace(" ", "_").replace(",", "")
-        if run_data else None
-    )
 
     append_feedback_entry(
         text=raw_text,
@@ -550,13 +582,7 @@ def run_feedback(api_key: Optional[str] = None) -> None:
         run_id=run_id,
         meta={"roles": roles_meta, "dims": dims_meta},
     )
-    write_feedback_log(
-        feedback_id=feedback_id,
-        run_id=run_id,
-        raw_text=raw_text,
-        roles=roles_meta,
-        dims=dims_meta,
-    )
+    _log("saved", roles_meta, dims_meta, conflict_count)
 
     console.print()
     t = Text()
@@ -574,7 +600,7 @@ def run_feedback_list(n: int = 5) -> None:
     if not existing:
         console.print()
         console.print(
-            "  No feedback saved yet. Run `scorerole feedback` to add some.",
+            "  No feedback saved yet. Run `metis feedback` to add some.",
             style=Style(color=THEME["dim"]),
         )
         console.print()
@@ -607,9 +633,8 @@ def run_feedback_list(n: int = 5) -> None:
         console.print(t)
 
     console.print()
-    if len(entries) > n:
-        console.print(
-            f"  Full history: {FEEDBACK_FILE}",
-            style=Style(color=THEME["dim"], italic=True),
-        )
+    console.print(
+        f"  View or edit all entries: {FEEDBACK_FILE}",
+        style=Style(color=THEME["dim"], italic=True),
+    )
     console.print()

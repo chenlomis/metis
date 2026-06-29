@@ -1,6 +1,6 @@
-"""scorerole init2 — conversational profile setup wizard (beta).
+"""metis init2 — conversational profile setup wizard (beta).
 
-Conversational alternative to `scorerole init`. Two freeform prompts replace
+Conversational alternative to `metis init`. Two freeform prompts replace
 the structured Step 2/3 form. Claude extracts the profile, then asks at most
 2–3 targeted clarifications for genuinely ambiguous fields before review.
 
@@ -13,7 +13,7 @@ Flow:
   5. Review + save            (reuses init_cmd _show_profile + edit menu)
   6. Proactive sources + schedule (reuses init_cmd wizards)
 
-Writes to the same ~/.job_pipeline/profile.yaml as `scorerole init`.
+Writes to the same ~/.job_pipeline/profile.yaml as `metis init`.
 """
 import os, re, sys, shutil, logging
 from pathlib import Path
@@ -66,7 +66,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("anthropic").setLevel(logging.WARNING)
 
 from .state import DATA_DIR
-PROFILE_PATH = Path(os.environ["SCOREROLE_PROFILE"]) if "SCOREROLE_PROFILE" in os.environ else DATA_DIR / "profile.yaml"
+PROFILE_PATH = Path(os.environ["METIS_PROFILE"]) if "METIS_PROFILE" in os.environ else DATA_DIR / "profile.yaml"
 
 from .prompts import init_extract_system_prompt
 
@@ -138,15 +138,15 @@ def _print_welcome(console, THEME, rich_box):
     pad    = (1, 1) if narrow else (1, 2)
 
     console.print(Panel(
-        "[bold]Let's build your scorerole profile![/bold]\n\n"
-        "The more context you provide, the better scorerole\n"
+        "[bold]Let's build your metis profile![/bold]\n\n"
+        "The more context you provide, the better metis\n"
         "can filter and score roles against your background.\n\n"
         f"  [{THEME['accent']} bold]1.[/]  [bold]Resume + LinkedIn[/bold]  [{THEME['dim']}]— who you are[/]\n"
         f"  [{THEME['accent']} bold]2.[/]  [bold]What you're looking for[/bold]  [{THEME['dim']}]— what you want[/]\n"
         f"  [{THEME['accent']} bold]3.[/]  [bold]What you'd pass on[/bold]  [{THEME['dim']}]— what to exclude[/]\n"
         f"  [{THEME['accent']} bold]4.[/]  [bold]Review + save[/bold]  [{THEME['dim']}]— confirm and calibrate[/]\n\n"
         f"[{THEME['dim']}]~5 mins · Enter to skip · "
-        f"`scorerole init2` to update anytime[/]",
+        f"`metis init2` to update anytime[/]",
         style=Style(bgcolor=THEME["accent_bg"]),
         border_style=Style(color=THEME["accent"]),
         box=rich_box.ROUNDED,
@@ -201,12 +201,12 @@ def _step_resume(console, THEME, INQUIRER_STYLE, print_section, print_section_in
     console.print()
     print_section("Step 1 of 4", "Resume + LinkedIn", "— who you are")
     console.print()
-    print_section_intro("Add your resume so scorerole can understand your experience, skills, and background.")
+    print_section_intro("Add your resume so metis can understand your experience, skills, and background.")
     console.print("  [dim italic]Tip — drag the file into this window to paste its path[/dim italic]", soft_wrap=True)
     print_eg("~/resume_2026.pdf")
     console.print()
 
-    from .init_cmd import _parse_file
+    from .init_bak_cmd import _parse_file
 
     resume_path = None
     while not resume_path:
@@ -247,7 +247,7 @@ def _step_resume(console, THEME, INQUIRER_STYLE, print_section, print_section_in
     if li_raw and li_raw.startswith("http"):
         with console.status("  [dim]Fetching LinkedIn profile…[/dim]"):
             try:
-                from .init_cmd import _scrape_linkedin_url
+                from .init_bak_cmd import _scrape_linkedin_url
                 linkedin_text = _scrape_linkedin_url(li_raw, console)
                 if linkedin_text:
                     console.print("  [bold]✓[/bold]  LinkedIn profile loaded", style=Style(color=THEME["success"]))
@@ -443,7 +443,7 @@ def _run_clarifications(followups, profile, console, THEME, INQUIRER_STYLE):
     console.print()
     from rich.style import Style as _S
     console.print(
-        "scorerole needs to clear up a few ambiguities before calibrating.",
+        "metis needs to clear up a few ambiguities before calibrating.",
         style=_S(color=THEME["muted"]),
     )
     console.print(
@@ -531,7 +531,7 @@ def _run_review(profile, console, THEME, INQUIRER_STYLE, api_key=None,
     from InquirerPy import inquirer
     from InquirerPy.base.control import Choice
     from rich.style import Style as _RS
-    from .init_cmd import _show_profile, open_in_editor
+    from .init_bak_cmd import _show_profile, open_in_editor
     import yaml as _yaml
 
     # Determine editor label: prefer $VISUAL/$EDITOR name, then check installed GUI editors
@@ -655,14 +655,14 @@ def _run_review(profile, console, THEME, INQUIRER_STYLE, api_key=None,
 # Main entry point
 # ---------------------------------------------------------------------------
 
-def run_init2(api_key):
+def run_init(api_key):
     import yaml
     from rich import box as rich_box
 
     # Fail fast in non-interactive environments (CI, pipes, scripts)
     if not sys.stdin.isatty():
         console.print(
-            "[bold]scorerole init2[/bold] requires an interactive terminal.\n"
+            "[bold]metis init2[/bold] requires an interactive terminal.\n"
             f"  [dim]For non-interactive setup, edit [{THEME['accent']}]{PROFILE_PATH}[/] directly.[/dim]"
         )
         sys.exit(1)
@@ -676,7 +676,7 @@ def run_init2(api_key):
     mode = _handle_existing_profile(console, INQUIRER_STYLE)
 
     if mode == "editor":
-        from .init_cmd import open_in_editor
+        from .init_bak_cmd import open_in_editor
         open_in_editor(PROFILE_PATH)
         return
 
@@ -752,7 +752,7 @@ def run_init2(api_key):
     console.print(f"\n  [{THEME['success']}]✓[/]  Saved to [dim]{PROFILE_PATH}[/dim]\n")
 
     # ── Proactive sources ─────────────────────────────────────────────────────
-    from .init_cmd import _run_proactive_sources_wizard
+    from .init_bak_cmd import _run_proactive_sources_wizard
     _run_proactive_sources_wizard(profile, Q_STYLE=INQUIRER_STYLE)
 
     # Re-save after proactive sources may have updated profile
@@ -781,14 +781,14 @@ def run_init2(api_key):
         console.print()
         from InquirerPy import inquirer as _iq
         setup = _iq.confirm(
-            message="  › Set up automated digests? scorerole can email you on a schedule.",
+            message="  › Set up automated digests? metis can email you on a schedule.",
             default=True,
             style=INQUIRER_STYLE,
         ).execute()
         if setup:
             run_schedule_wizard()
         else:
-            console.print("  [dim]You can set this up later with: scorerole schedule set[/dim]")
+            console.print("  [dim]You can set this up later with: metis schedule set[/dim]")
 
     # ── What next ─────────────────────────────────────────────────────────────
     from InquirerPy import inquirer as _iq
@@ -805,9 +805,9 @@ def run_init2(api_key):
     ).execute()
 
     if next_action == "profile":
-        from .init_cmd import open_in_editor
+        from .init_bak_cmd import open_in_editor
         open_in_editor(PROFILE_PATH)
 
     console.print(
-        "\n  [dim]Run `scorerole init2` any time to update your profile.[/dim]\n"
+        "\n  [dim]Run `metis init2` any time to update your profile.[/dim]\n"
     )

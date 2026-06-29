@@ -1,4 +1,4 @@
-"""Tests for scorerole/schedule_cmd.py.
+"""Tests for metis/schedule_cmd.py.
 
 No OS calls are made here — launchctl and crontab are mocked throughout.
 Tests cover: plist/crontab generation, schedule.json persistence, status
@@ -11,10 +11,10 @@ from unittest import mock
 
 import pytest
 
-# Make scorerole importable from project root
+# Make metis importable from project root
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from scorerole.schedule_cmd import (
+from metis.schedule_cmd import (
     FREQUENCY_OPTIONS,
     LAUNCHD_LABEL,
     LAUNCHD_PLIST,
@@ -37,7 +37,7 @@ from scorerole.schedule_cmd import (
 # ---------------------------------------------------------------------------
 
 def _fake_config(freq="daily", time="08:00", **extra) -> dict:
-    cfg = {"frequency": freq, "time": time, "scorerole_bin": "/venv/bin/scorerole",
+    cfg = {"frequency": freq, "time": time, "metis_bin": "/venv/bin/metis",
            "working_dir": "/project", "platform": "Darwin", **extra}
     return cfg
 
@@ -107,13 +107,13 @@ class TestBuildPlist:
         cfg = {"frequency": freq, "time": time}
         if weekday is not None:
             cfg["weekday"] = weekday
-        return build_plist(cfg, "/venv/bin/scorerole", "/project")
+        return build_plist(cfg, "/venv/bin/metis", "/project")
 
     def test_label_present(self):
         assert LAUNCHD_LABEL in self._plist("daily")
 
     def test_binary_path_present(self):
-        assert "/venv/bin/scorerole" in self._plist("daily")
+        assert "/venv/bin/metis" in self._plist("daily")
 
     def test_working_dir_present(self):
         assert "/project" in self._plist("daily")
@@ -185,7 +185,7 @@ class TestBuildCrontabLine:
         cfg = {"frequency": freq, "time": time}
         if weekday is not None:
             cfg["weekday"] = weekday
-        return build_crontab_line(cfg, "/venv/bin/scorerole", "/project")
+        return build_crontab_line(cfg, "/venv/bin/metis", "/project")
 
     def test_daily_cron_fields(self):
         line = self._line("daily")
@@ -222,7 +222,7 @@ class TestBuildCrontabLine:
         assert "--lookback 7d" in self._line("weekly")
 
     def test_marker_present(self):
-        from scorerole.schedule_cmd import CRONTAB_MARKER
+        from metis.schedule_cmd import CRONTAB_MARKER
         assert CRONTAB_MARKER in self._line("daily")
 
     def test_custom_time(self):
@@ -238,13 +238,13 @@ class TestBuildCrontabLine:
 
 class TestSchedulePersistence:
     def test_load_returns_none_when_missing(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("scorerole.schedule_cmd.SCHEDULE_FILE", tmp_path / "schedule.json")
+        monkeypatch.setattr("metis.schedule_cmd.SCHEDULE_FILE", tmp_path / "schedule.json")
         assert load_schedule() is None
 
     def test_load_returns_config_when_present(self, tmp_path, monkeypatch):
         sf = tmp_path / "schedule.json"
         sf.write_text(json.dumps({"frequency": "daily", "time": "09:00"}))
-        monkeypatch.setattr("scorerole.schedule_cmd.SCHEDULE_FILE", sf)
+        monkeypatch.setattr("metis.schedule_cmd.SCHEDULE_FILE", sf)
         result = load_schedule()
         assert result["frequency"] == "daily"
         assert result["time"] == "09:00"
@@ -252,13 +252,13 @@ class TestSchedulePersistence:
     def test_load_returns_none_on_corrupt_json(self, tmp_path, monkeypatch):
         sf = tmp_path / "schedule.json"
         sf.write_text("not json {{")
-        monkeypatch.setattr("scorerole.schedule_cmd.SCHEDULE_FILE", sf)
+        monkeypatch.setattr("metis.schedule_cmd.SCHEDULE_FILE", sf)
         assert load_schedule() is None
 
     def test_load_returns_none_when_not_dict(self, tmp_path, monkeypatch):
         sf = tmp_path / "schedule.json"
         sf.write_text("[1, 2, 3]")
-        monkeypatch.setattr("scorerole.schedule_cmd.SCHEDULE_FILE", sf)
+        monkeypatch.setattr("metis.schedule_cmd.SCHEDULE_FILE", sf)
         assert load_schedule() is None
 
 
@@ -269,14 +269,14 @@ class TestSchedulePersistence:
 class TestRemoveSchedule:
     @pytest.mark.skipif(platform.system() != "Darwin", reason="macOS only")
     def test_remove_clears_plist_and_json(self, tmp_path, monkeypatch):
-        plist_path   = tmp_path / "com.scorerole.digest.plist"
+        plist_path   = tmp_path / "com.metis.digest.plist"
         schedule_path = tmp_path / "schedule.json"
 
         plist_path.write_text("<plist/>")
         schedule_path.write_text("{}")
 
-        monkeypatch.setattr("scorerole.schedule_cmd.LAUNCHD_PLIST",  plist_path)
-        monkeypatch.setattr("scorerole.schedule_cmd.SCHEDULE_FILE", schedule_path)
+        monkeypatch.setattr("metis.schedule_cmd.LAUNCHD_PLIST",  plist_path)
+        monkeypatch.setattr("metis.schedule_cmd.SCHEDULE_FILE", schedule_path)
 
         with mock.patch("subprocess.run") as mock_run:
             mock_run.return_value = mock.MagicMock(returncode=0)
@@ -287,8 +287,8 @@ class TestRemoveSchedule:
         assert not schedule_path.exists()
 
     def test_remove_returns_false_when_nothing_to_remove(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("scorerole.schedule_cmd.LAUNCHD_PLIST",  tmp_path / "nonexistent.plist")
-        monkeypatch.setattr("scorerole.schedule_cmd.SCHEDULE_FILE", tmp_path / "nonexistent.json")
+        monkeypatch.setattr("metis.schedule_cmd.LAUNCHD_PLIST",  tmp_path / "nonexistent.plist")
+        monkeypatch.setattr("metis.schedule_cmd.SCHEDULE_FILE", tmp_path / "nonexistent.json")
         with mock.patch("subprocess.run"):
             removed = remove_schedule()
         assert removed is False
@@ -300,7 +300,7 @@ class TestRemoveSchedule:
 
 class TestShowSchedule:
     def test_no_schedule_message(self, tmp_path, monkeypatch, capsys):
-        monkeypatch.setattr("scorerole.schedule_cmd.SCHEDULE_FILE", tmp_path / "schedule.json")
+        monkeypatch.setattr("metis.schedule_cmd.SCHEDULE_FILE", tmp_path / "schedule.json")
         show_schedule()
         out = capsys.readouterr().out
         assert "No schedule configured" in out
@@ -308,8 +308,8 @@ class TestShowSchedule:
     def test_shows_frequency_and_time(self, tmp_path, monkeypatch, capsys):
         sf = tmp_path / "schedule.json"
         sf.write_text(json.dumps(_fake_config("twice_weekly", "07:30")))
-        monkeypatch.setattr("scorerole.schedule_cmd.SCHEDULE_FILE", sf)
-        monkeypatch.setattr("scorerole.schedule_cmd.LAUNCHD_PLIST", tmp_path / "plist")
+        monkeypatch.setattr("metis.schedule_cmd.SCHEDULE_FILE", sf)
+        monkeypatch.setattr("metis.schedule_cmd.LAUNCHD_PLIST", tmp_path / "plist")
         show_schedule()
         out = capsys.readouterr().out
         assert "Twice a week" in out
@@ -317,9 +317,9 @@ class TestShowSchedule:
 
     def test_warns_when_binary_missing(self, tmp_path, monkeypatch, capsys):
         sf = tmp_path / "schedule.json"
-        sf.write_text(json.dumps({**_fake_config(), "scorerole_bin": "/nonexistent/scorerole"}))
-        monkeypatch.setattr("scorerole.schedule_cmd.SCHEDULE_FILE", sf)
-        monkeypatch.setattr("scorerole.schedule_cmd.LAUNCHD_PLIST", tmp_path / "plist")
+        sf.write_text(json.dumps({**_fake_config(), "metis_bin": "/nonexistent/metis"}))
+        monkeypatch.setattr("metis.schedule_cmd.SCHEDULE_FILE", sf)
+        monkeypatch.setattr("metis.schedule_cmd.LAUNCHD_PLIST", tmp_path / "plist")
         show_schedule()
         out = capsys.readouterr().out
         assert "Binary not found" in out or "venv" in out.lower()
@@ -329,32 +329,32 @@ class TestShowSchedule:
         plist_path.write_text("<plist/>")
         sf = tmp_path / "schedule.json"
         sf.write_text(json.dumps(_fake_config()))
-        monkeypatch.setattr("scorerole.schedule_cmd.SCHEDULE_FILE", sf)
-        monkeypatch.setattr("scorerole.schedule_cmd.LAUNCHD_PLIST", plist_path)
+        monkeypatch.setattr("metis.schedule_cmd.SCHEDULE_FILE", sf)
+        monkeypatch.setattr("metis.schedule_cmd.LAUNCHD_PLIST", plist_path)
         show_schedule()
         out = capsys.readouterr().out
         assert "active" in out
 
 
 # ---------------------------------------------------------------------------
-# build_plist — scheduled entry point is `scorerole schedule run`
+# build_plist — scheduled entry point is `metis schedule run`
 # ---------------------------------------------------------------------------
 
 class TestBuildPlistScheduledEntryPoint:
     def test_plist_calls_schedule_run(self):
-        plist = build_plist({"frequency": "daily", "time": "08:00"}, "/venv/bin/scorerole", "/project")
+        plist = build_plist({"frequency": "daily", "time": "08:00"}, "/venv/bin/metis", "/project")
         assert "<string>schedule</string>" in plist
         assert "<string>run</string>" in plist
 
     def test_twice_weekly_custom_days(self):
         cfg = {"frequency": "twice_weekly", "time": "08:00", "weekdays": [2, 5]}  # Tue, Fri
-        plist = build_plist(cfg, "/venv/bin/scorerole", "/project")
+        plist = build_plist(cfg, "/venv/bin/metis", "/project")
         weekday_ints = re.findall(r"<key>Weekday</key><integer>(\d+)</integer>", plist)
         assert set(weekday_ints) == {"2", "5"}
 
     def test_twice_weekly_defaults_to_mon_thu_when_no_weekdays(self):
         cfg = {"frequency": "twice_weekly", "time": "08:00"}
-        plist = build_plist(cfg, "/venv/bin/scorerole", "/project")
+        plist = build_plist(cfg, "/venv/bin/metis", "/project")
         weekday_ints = re.findall(r"<key>Weekday</key><integer>(\d+)</integer>", plist)
         assert set(weekday_ints) == {"1", "4"}
 
@@ -366,13 +366,13 @@ class TestBuildPlistScheduledEntryPoint:
 class TestBuildCrontabCustomDays:
     def test_twice_weekly_custom_days(self):
         cfg = {"frequency": "twice_weekly", "time": "08:00", "weekdays": [2, 5]}  # Tue, Fri
-        line = build_crontab_line(cfg, "/venv/bin/scorerole", "/project")
+        line = build_crontab_line(cfg, "/venv/bin/metis", "/project")
         parts = line.split()
         assert parts[4] == "2,5"
 
     def test_crontab_calls_schedule_run(self):
         cfg = {"frequency": "daily", "time": "08:00"}
-        line = build_crontab_line(cfg, "/venv/bin/scorerole", "/project")
+        line = build_crontab_line(cfg, "/venv/bin/metis", "/project")
         assert "schedule run" in line
 
 
@@ -391,8 +391,8 @@ class TestPauseResume:
 
     def test_pause_sets_enabled_false(self, tmp_path, monkeypatch):
         sf = self._write_schedule(tmp_path, enabled=True)
-        monkeypatch.setattr("scorerole.schedule_cmd.SCHEDULE_FILE", sf)
-        monkeypatch.setattr("scorerole.schedule_cmd.LAUNCHD_PLIST", tmp_path / "plist")
+        monkeypatch.setattr("metis.schedule_cmd.SCHEDULE_FILE", sf)
+        monkeypatch.setattr("metis.schedule_cmd.LAUNCHD_PLIST", tmp_path / "plist")
         with mock.patch("subprocess.run") as mock_run:
             mock_run.return_value = mock.MagicMock(returncode=0)
             result = pause_schedule()
@@ -401,18 +401,18 @@ class TestPauseResume:
 
     def test_pause_returns_false_when_already_paused(self, tmp_path, monkeypatch):
         sf = self._write_schedule(tmp_path, enabled=False)
-        monkeypatch.setattr("scorerole.schedule_cmd.SCHEDULE_FILE", sf)
+        monkeypatch.setattr("metis.schedule_cmd.SCHEDULE_FILE", sf)
         result = pause_schedule()
         assert result is False
 
     def test_pause_returns_false_when_no_schedule(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("scorerole.schedule_cmd.SCHEDULE_FILE", tmp_path / "no.json")
+        monkeypatch.setattr("metis.schedule_cmd.SCHEDULE_FILE", tmp_path / "no.json")
         assert pause_schedule() is False
 
     def test_resume_sets_enabled_true(self, tmp_path, monkeypatch):
         sf = self._write_schedule(tmp_path, enabled=False)
-        monkeypatch.setattr("scorerole.schedule_cmd.SCHEDULE_FILE", sf)
-        monkeypatch.setattr("scorerole.schedule_cmd.LAUNCHD_PLIST", tmp_path / "plist")
+        monkeypatch.setattr("metis.schedule_cmd.SCHEDULE_FILE", sf)
+        monkeypatch.setattr("metis.schedule_cmd.LAUNCHD_PLIST", tmp_path / "plist")
         with mock.patch("subprocess.run") as mock_run:
             mock_run.return_value = mock.MagicMock(returncode=0)
             result = resume_schedule()
@@ -421,12 +421,12 @@ class TestPauseResume:
 
     def test_resume_returns_false_when_already_active(self, tmp_path, monkeypatch):
         sf = self._write_schedule(tmp_path, enabled=True)
-        monkeypatch.setattr("scorerole.schedule_cmd.SCHEDULE_FILE", sf)
+        monkeypatch.setattr("metis.schedule_cmd.SCHEDULE_FILE", sf)
         result = resume_schedule()
         assert result is False
 
     def test_resume_returns_false_when_no_schedule(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("scorerole.schedule_cmd.SCHEDULE_FILE", tmp_path / "no.json")
+        monkeypatch.setattr("metis.schedule_cmd.SCHEDULE_FILE", tmp_path / "no.json")
         assert resume_schedule() is False
 
 
@@ -438,8 +438,8 @@ class TestShowSchedulePaused:
     def test_shows_paused_status(self, tmp_path, monkeypatch, capsys):
         sf = tmp_path / "schedule.json"
         sf.write_text(json.dumps({**_fake_config(), "enabled": False}))
-        monkeypatch.setattr("scorerole.schedule_cmd.SCHEDULE_FILE", sf)
-        monkeypatch.setattr("scorerole.schedule_cmd.LAUNCHD_PLIST", tmp_path / "plist")
+        monkeypatch.setattr("metis.schedule_cmd.SCHEDULE_FILE", sf)
+        monkeypatch.setattr("metis.schedule_cmd.LAUNCHD_PLIST", tmp_path / "plist")
         show_schedule()
         out = capsys.readouterr().out
         assert "Paused" in out
@@ -448,8 +448,8 @@ class TestShowSchedulePaused:
     def test_shows_runs_digest_and_track(self, tmp_path, monkeypatch, capsys):
         sf = tmp_path / "schedule.json"
         sf.write_text(json.dumps(_fake_config()))
-        monkeypatch.setattr("scorerole.schedule_cmd.SCHEDULE_FILE", sf)
-        monkeypatch.setattr("scorerole.schedule_cmd.LAUNCHD_PLIST", tmp_path / "plist")
+        monkeypatch.setattr("metis.schedule_cmd.SCHEDULE_FILE", sf)
+        monkeypatch.setattr("metis.schedule_cmd.LAUNCHD_PLIST", tmp_path / "plist")
         show_schedule()
         out = capsys.readouterr().out
         assert "track" in out.lower()
@@ -464,9 +464,9 @@ class TestPipelineScheduleRegression:
 
     def _run_with_no_emails(self, tmp_path, monkeypatch):
         """Run pipeline in a state where fetch_alerts returns no threads."""
-        monkeypatch.setattr("scorerole.schedule_cmd.SCHEDULE_FILE", tmp_path / "schedule.json")
+        monkeypatch.setattr("metis.schedule_cmd.SCHEDULE_FILE", tmp_path / "schedule.json")
 
-        from scorerole import pipeline
+        from metis import pipeline
         monkeypatch.setattr(pipeline, "fetch_alerts", lambda since_dt, **kwargs: [])
         monkeypatch.setattr(pipeline, "load_seen_roles", lambda: set())
         monkeypatch.setattr(pipeline, "ANTHROPIC_API_KEY", "sk-fake")

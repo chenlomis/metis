@@ -1,6 +1,6 @@
-# scorerole — QA Framework
+# metis — QA Framework
 
-> This document defines *how* scorerole is tested — the test strategy, pass definitions,
+> This document defines *how* metis is tested — the test strategy, pass definitions,
 > and the checklist to run for new features. It is generic: project-specific flows and
 > exit criteria live in `SPEC.md`; open issues live in the `Known Issues & Tech Debt`
 > section of `ARCHITECTURE.md`.
@@ -66,7 +66,7 @@ Each pass has:
 ### Engineer pass
 **Who:** A developer reading the codebase cold — no prior context.
 **Checks:**
-- Can they run `scorerole init` and get a working profile without reading docs?
+- Can they run `metis init` and get a working profile without reading docs?
 - Do log messages make sense without knowing internal terminology?
 - Are component boundaries (IMAP → parser → pre-screen → scorer → renderer → SMTP) clearly logged?
 - Are error messages actionable (tell you what to do, not just what failed)?
@@ -80,13 +80,13 @@ Each pass has:
 - Is `profile.yaml` and `seen_roles.json` created at 0o600? `~/.job_pipeline/` at 0o700?
 - Are temp files created with `mkstemp` (not `NamedTemporaryFile`) and chmod'd before write?
 - Are `.env` secrets never logged, even at DEBUG level?
-- Does `scorerole debug` output redact email addresses and credential fields?
+- Does `metis debug` output redact email addresses and credential fields?
 - Are there any `os.system()` or `subprocess` calls that could be injected via profile fields?
 
 **Signs of failure:** Credential appears in any log line; temp file visible world-readable during write; `profile.yaml` created at 0o644.
 
 ### User pass
-**Who:** The actual intended user (Lomis) running a real weekly digest.
+**Who:** The actual intended user running a real weekly digest.
 **Checks:**
 - Does the digest surface roles that feel relevant to the stated profile?
 - Are verdict reasons (leverage/friction points) specific to *this* role — not generic filler?
@@ -95,7 +95,7 @@ Each pass has:
 - Would the top 3 "apply" roles be ones the user would actually apply to?
 
 **Synthesis prompt (run at end of User pass):**
-> "What are the 3 things most likely to make a real user give up on scorerole in the first 10 minutes?"
+> "What are the 3 things most likely to make a real user give up on metis in the first 10 minutes?"
 
 **Signs of failure:** Generic rationale ("good cultural fit"); deal-breaker is over-broad and filters legitimate roles; top-scored roles are obviously wrong.
 
@@ -104,7 +104,7 @@ Each pass has:
 ### Documentation pass
 **Who:** A new user following README.md from scratch.
 **Checks:**
-- Does the Quickstart produce a working `scorerole run` without any undocumented steps?
+- Does the Quickstart produce a working `metis run` without any undocumented steps?
 - Are all three LinkedIn sender addresses documented?
 - Is the privacy / data-flow table accurate with current code?
 - Are all env variables in `.env.example` documented in the README?
@@ -134,7 +134,7 @@ When adding a feature, work through this in order:
 4. **Integration test:** If a new component boundary exists, add an integration test covering the contract.
 5. **Regression:** Run `python -m pytest tests/ -q`. All tests must pass.
 6. **Engineer pass:** Read the new log output cold. Is it interpretable?
-7. **User pass:** Run `scorerole run` (or `run_persona_test.py` for cross-profile validation). Is the digest correct?
+7. **User pass:** Run `metis run` (or `run_persona_test.py` for cross-profile validation). Is the digest correct?
 8. **Triage:** Classify any findings (below).
 9. **Spec sync:** Commit any SPEC.md / ARCHITECTURE.md updates.
 
@@ -175,9 +175,9 @@ Not all tests need to run on every change:
 python run_persona_test.py
 ```
 
-It sets `SCOREROLE_PROFILE` env var per persona so **`~/.job_pipeline/profile.yaml` is never modified**. Safe to Ctrl-C at any point — no cleanup needed. Then for each persona it:
+It sets `METIS_PROFILE` env var per persona so **`~/.job_pipeline/profile.yaml` is never modified**. Safe to Ctrl-C at any point — no cleanup needed. Then for each persona it:
 1. Runs `pipeline.run_pipeline()` with `score_all=True` and configurable lookback
-2. Sends a labelled digest: `[Persona Name] Personalized Job Alert Digest — <date>`
+2. Sends a labelled digest: `[Persona Name] Metis Digest — N new roles for you — <date>`
 
 Add new personas to the `personas` list in `run_persona_test.py`. Persona profiles live at
 `~/.job_pipeline/profile_<slug>.yaml` (outside the repo — never commit real profiles).

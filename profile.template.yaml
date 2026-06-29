@@ -1,8 +1,8 @@
-# scorerole candidate profile template
+# metis candidate profile template
 # ─────────────────────────────────────────────────────────────────────────────
 # Copy to ~/.job_pipeline/profile.yaml and fill in, OR run:
-#   scorerole init   (structured wizard)
-#   scorerole init2  (conversational, beta)
+#   metis init   (structured wizard)
+#   metis init2  (conversational, beta)
 #
 # Mental model:
 #   candidate.*   — who you are  (from resume + LinkedIn)
@@ -11,7 +11,7 @@
 #   preferences.* — soft signals (affect ranking, not hard filters)
 #   deal_breakers — hard no's (hard filter)
 #   salary_floor_usd — hard comp floor (hard filter)
-#   inferred.*    — derived by scorerole init, rarely edited manually
+#   inferred.*    — derived by metis init, rarely edited manually
 #   notes         — free-text calibration injected into scoring prompt
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -81,7 +81,7 @@ deal_breakers:                      # absolute no's — hard filter, will not ap
 
 salary_floor_usd: 150000            # hard comp floor; set to null if not applicable
 
-inferred:                           # set by scorerole init from resume; rarely edited manually
+inferred:                           # set by metis init from resume; rarely edited manually
   customer_types:                   # b2b / b2c / b2b2c / marketplace / developer / internal
     - "b2b"
   degree_level: "bs"                # none / bs / ms_phd
@@ -95,4 +95,4 @@ track:
 notes: |
   Free-text calibration notes. Appended to the scoring system prompt verbatim.
   Use for: level rules, domain caveats, anything Claude should weigh specially.
-  Also updated by: scorerole feedback
+  Also updated by: metis feedback

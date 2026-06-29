@@ -2,21 +2,42 @@ from __future__ import annotations
 import os, re, json, datetime, hashlib
 from pathlib import Path
 
-DATA_DIR      = Path(os.environ["SCOREROLE_DATA_DIR"]) if "SCOREROLE_DATA_DIR" in os.environ else Path.home() / ".job_pipeline"
+DATA_DIR      = Path(os.environ["METIS_DATA_DIR"]) if "METIS_DATA_DIR" in os.environ else Path.home() / ".job_pipeline"
 LOG_DIR       = DATA_DIR / "logs"
 SEEN_FILE     = DATA_DIR / "seen_roles.json"     # canonical dedup store
 SKIPPED_FILE  = DATA_DIR / "skipped_roles.json"  # metadata for skipped roles (backport store)
 LAST_RUN_FILE = DATA_DIR / "last_run.json"        # summary of most recent pipeline run
 QUEUE_FILE    = DATA_DIR / "role_queue.json"      # roles capped out of prior runs, awaiting scoring
-FEEDBACK_FILE     = DATA_DIR / "feedback.md"          # user calibration notes (appended via `scorerole feedback`)
+FEEDBACK_FILE     = DATA_DIR / "feedback.md"          # user calibration notes (appended via `metis feedback`)
 FEEDBACK_LOG_FILE = DATA_DIR / "feedback_log.jsonl"   # structured audit log of parsed feedback entries
 RUNS_PATH         = DATA_DIR / "runs.jsonl"            # per-job trace records written by trace.py
 SKIPPED_TTL_DAYS = 90
 
 
+_CO_VARIANT_SUFFIX = re.compile(
+    r"\s+(?:AI|Labs?|Technologies|Tech|Software|Systems|Solutions|Platforms?|"
+    r"Inc\.?|LLC|Corp\.?|Ltd\.?|Co\.?)$",
+    re.IGNORECASE,
+)
+
+def _canonical_company(name: str) -> str:
+    """Strip branding/legal suffixes so variant names hash identically.
+
+    'NVIDIA AI' → 'NVIDIA', 'Anthropic Labs' → 'Anthropic', 'Acme Corp.' → 'Acme'.
+    Applied before _role_hash so seen_roles dedup is stable across name variants.
+    _role_hash itself is frozen (CLAUDE.md #6); normalization happens at the call site.
+    """
+    prev = None
+    result = name.strip()
+    while result != prev:
+        prev = result
+        result = _CO_VARIANT_SUFFIX.sub("", result).strip()
+    return result
+
+
 def _role_hash(title: str, company: str) -> str:
     """Stable 12-char hash from normalized title + company."""
-    key = re.sub(r"[^a-z0-9]", "", (title + company).lower())
+    key = re.sub(r"[^a-z0-9]", "", (title + _canonical_company(company)).lower())
     return hashlib.md5(key.encode()).hexdigest()[:12]
 
 
@@ -36,7 +57,7 @@ def _read_seen_json(p: Path) -> dict:
         return {}
     except (json.JSONDecodeError, OSError) as exc:
         _log.warning("seen_roles.json is corrupted (%s) — starting fresh. "
-                     "Run `scorerole reset` to clear it manually if this persists.", exc)
+                     "Run `metis reset` to clear it manually if this persists.", exc)
         return {}
 
 
