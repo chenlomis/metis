@@ -4,7 +4,7 @@
 
 **Spend your time and energy on roles that matter.**
 
-metis is an AI-powered career agent that automates the first round of job discovery: it screens and ranks new opportunities against your profile, experience, career goals, and deal-breakers. It consolidates roles from LinkedIn job alerts and company career pages, semantically compares them to your background, and delivers a personalized scored digest on a schedule you control. Beyond the digest, it automatically tracks applications and recruiter responses in a spreadsheet and generates summaries to help you understand how your search is progressing over time.
+Metis is an AI-powered career agent that automates the first round of job discovery by screening and ranking new opportunities against your profile, experience, career goals, and deal breakers. It does so by consolidating roles from job alerts and company career pages, semantically compares them to your background, and delivers a personalized scored digest on a schedule you control. Beyond that, it also automatically track applications and recruiter responses in a spreadsheet and generate summaries to help you understand how your search is progressing over time 
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
@@ -18,7 +18,7 @@ metis is an AI-powered career agent that automates the first round of job discov
 [Prerequisites](#prerequisites) •
 [Quick start](#quick-start) •
 [Commands](#commands) •
-[Architecture](#architecture) •
+[Project files](#project-files) •
 [Roadmap](#roadmap) •
 [Contributing](#contributing)
 
@@ -26,25 +26,34 @@ metis is an AI-powered career agent that automates the first round of job discov
 
 ## What it does
 
-**Profile setup (`metis init`).** An interactive wizard that reads your resume and LinkedIn profile and asks what you are targeting, what you want to exclude, and any other criteria. Claude uses your answers to build `profile.yaml`, which every future scoring run is evaluated against. You can re-run it or edit the file directly at any time. As part of setup you can also add company career-page sources (`metis companies add`) and configure automated scheduling (`metis schedule`).
+**Profile setup (`metis init`).** This is an interactive wizard that builds your profile by (1) reading your resume & linked in profile, and (2) understanding relevant info on your aspirations, preferences, and deal breakers. Claude uses the info to build a `profile.yaml`, which every future scoring run is evaluated against. You can rerun it or edit the file directly at any time. 
 
-**Scored digest (`metis`).** Each run ingests new roles from all configured sources, deduplicates across runs, scores each role through a multi-stage Claude pipeline, and emails you a ranked HTML digest. Every JD gets a categorical verdict and a 0-100 score:
+ As part of the set up, you can also add company career-page sources with (`metis sources add`) and enable automated scheduling with (`metis schedule`). Both can be edited and reconfigured later 
+
+
+**Email digest (`metis`).** Each run ingests new roles from all configured sources, deduplicates across runs, extract relevant info, and scores each role through a multi-stage Claude pipeline. The end result is a HTML email digest with scored roles. Every JD gets a categorical verdict and a 0-100 score:
 
 - Solid Match (75+): roles worth prioritizing
 - Moderate Match (55-74): roles worth a closer look
 - Limited Match (below 55): roles that do not clear the bar
 
-Each evaluation surfaces two strengths and one potential friction point, plus normalized tags for a quick scan. Roles in the Solid Match and Moderate Match tiers are automatically written to `applications.xlsx` to start your tracking.
+Each evaluation surfaces two strengths and one potential friction point, alongside normalized tags for a quick scan. Roles in the Solid Match and Moderate Match tiers are automatically written to `applications.xlsx` to kickstart application tracking.
 
-**Application tracking (`metis track`).** After you apply, metis scans your inbox for confirmation, rejection, and recruiter emails and updates `applications.xlsx` automatically.
+**Application tracking (`metis track`).** After you apply, this command scans your inbox for confirmation, rejection, and recruiter emails and updates the `applications.xlsx` correspondingly
 
 **Progress reporting (`metis summary`).** High-level insights across score distribution, verdict trends, and application rates. Useful both for tracking how your search has evolved and for spotting patterns that help calibrate your profile over time.
 
-**Feedback tuning (`metis feedback`).** After reviewing a digest or summary, you can write plain-English feedback ("seed-stage roles keep scoring high but I always skip them"). The system parses it, asks you to confirm the signal, and injects it into all future scoring runs as a high-priority calibration note. Conflicting signals are handled gracefully.
+**Feedback tuning (`metis feedback`).** After reviewing the digest, app tracker, or the overall summary, you can provide generic or specific feedback via this command (i.e "seed-stage roles keep scoring high but I always skip them"). The system parses it, asks you to confirm the signal, and injects the signals into all future scoring runs as a high-priority calibration note. Feedback currently has a 30day TTL and conflicting signals are handled gracefully.
 
 ---
 
 ## How it works
+
+Metis is designed as a modular, stateful pipeline composed of loosely coupled subsystems connected through persistent artifacts rather than in-memory state. Instead of a single monolithic prompt, each stage has a focused responsibility—from profile construction and source ingestion to lightweight pre-screening, structured extraction, deep semantic evaluation, reporting, and feedback incorporation. This separation keeps the system observable, debuggable, and easily extensible.
+
+The runtime operates as a closed-loop agentic workflow. New roles are continuously discovered, deduplicated, evaluated against a structured user profile, surfaced through personalized digests, tracked through recruiting outcomes, and refined using explicit user feedback. Every run persists metadata and intermediate artifacts (profile.yaml, sources.yaml, runs.jsonl, feedback.md, etc.), enabling reproducibility, debugging, and future iteration without relying on opaque prompt state.
+
+The overall architecture prioritizes modularity, cost-aware inference, privacy-first local state, and continuous learning, allowing individual components to evolve independently as better models, data sources, or evaluation strategies become available.
 
 ```
 LinkedIn job alert emails          Company career pages
@@ -55,7 +64,7 @@ LinkedIn job alert emails          Company career pages
                   Gmail (IMAP)
                        |
               sources/linkedin.py
-              sources/companies.py
+              sources/proactive.py
                        |
                3-layer dedup
           (job_id / title+company / 30-day hash)
@@ -71,124 +80,65 @@ LinkedIn job alert emails          Company career pages
                  Gmail (SMTP)
 ```
 
-The pipeline has three stages: **ingest**, **score**, and **render**. Every job at every stage writes to `runs.jsonl` for full traceability. See [ARCHITECTURE.md](./ARCHITECTURE.md) for data flow diagrams and notes on extending each layer.
+See [ARCHITECTURE.md](./ARCHITECTURE.md) for data flow diagrams and notes on extending each layer.
 
-### Setup: `metis init`
-
-`metis init` runs a conversational wizard. You paste your resume (PDF, DOCX, or TXT), answer a few questions about what you are looking for, and Claude builds `~/.job_pipeline/profile.yaml` from your answers. You can edit this file directly at any time:
-
-```yaml
-candidate:
-  name: "Your Name"
-  location: "San Francisco, CA"
-  open_to_remote: true
-
-target:
-  roles: ["Staff PM", "Director of Product"]
-  level: staff
-
-strengths:
-  - "0-to-1 product builds"
-  - "ML/data background"
-
-deal_breakers:
-  - "no equity"
-  - "on-site 5 days/week"
-```
-
-See [profile.template.yaml](./profile.template.yaml) for the full schema with comments.
-
-Pass `--resume path/to/file` to skip the file prompt. Pass `--supplement path/to/linkedin-export.pdf` to augment with your LinkedIn profile export (see [Ingesting your LinkedIn profile](#ingesting-your-linkedin-profile)).
-
-### Email digest: `metis`
-
-Runs the full pipeline: ingest from all sources, deduplicate, score, render, send. Each role in the digest gets:
-
-- **Score (0-100)** weighted by your priorities
-- **Verdict**: Solid Match, Moderate Match, or Limited Match
-- **Lever and friction points** explaining the score
-- **Tags**: remote, equity, stage, team size, etc.
-
-Roles are deduplicated across runs. You will not see the same listing twice within 30 days.
-
-**Two-model pipeline.** When you are over the per-run cap, Haiku handles fast title/company pre-screening; Sonnet does full structured scoring across 27 fields. This keeps costs low without sacrificing quality on roles that make it through.
-
-Here is what a Solid Match card looks like in the digest:
+### Project files
 
 ```
-SOLID MATCH   91 / 100
-Staff PM, Data Platform — Stripe
-Remote (US)  •  Series B+  •  $175-225k + equity
+metis/
+  cli.py           # CLI parsing and command routing
+  pipeline.py      # Digest pipeline orchestration
+  score.py         # Claude scoring logic
+  extract.py       # Structured JD extraction
+  profile.py       # Profile loader
+  prompts.py       # Canonical prompt templates
+  init_cmd.py      # metis init profile setup wizard
+  render.py        # HTML digest renderer
+  report_cmd.py    # metis summary report
+  feedback.py      # Feedback log and calibration parser
+  sources_cmd.py   # metis sources command
+  track.py         # metis track email parsing
+  xlsx.py          # applications.xlsx read/write
+  trace.py         # runs.jsonl telemetry
+  schedule_cmd.py  # metis schedule wizard
+  state.py         # Dedup state
+  theme.py         # Rich and InquirerPy theme
+  sources/         # Email and career-page ingestion
 
-Strengths
-  Your 0-to-1 ML infrastructure work maps directly to their data platform roadmap
-  Three prior data-adjacent PM roles show domain depth the JD explicitly asks for
-
-Watch out for
-  JD mentions 5-day onsite preference for the first 90 days, which may conflict
-  with your location flexibility requirement
-
-Tags: remote-flexible  fintech  infra-pm  equity-confirmed  201-1000
-
-[View role]  [Already applied]
+emails/            # React Email digest templates
+tests/             # pytest suite
+profile.template.yaml
+.env.example
+Makefile
 ```
 
-### Company sourcing: `metis companies`
-
-metis can pull roles directly from company ATSs without needing a LinkedIn alert. You manage a list of target companies:
-
-```bash
-metis companies              # show active sources
-metis companies add Stripe   # add by name; metis probes Greenhouse, Lever, and Ashby automatically
-metis companies remove       # interactive removal
-metis companies off          # disable without losing your list
-```
-
-### Application tracking: `metis track`
-
-`metis track` reads your inbox for confirmation and rejection emails and writes the status to `applications.xlsx`. Run it after a batch of applications to keep your tracker current without touching a spreadsheet.
-
-```bash
-metis track                  # default 7-day lookback
-metis track --lookback 30d   # wider window
-metis track --dry-run        # print matches without writing
-```
-
-### Reporting: `metis summary`
-
-Score distribution, verdict breakdown, and run history pulled from `~/.job_pipeline/runs.jsonl`.
-
-```bash
-metis summary
-metis summary --lookback 90d
-```
-
-### Feedback loop: `metis feedback`
-
-Write plain-English calibration notes after reviewing a digest. Claude parses each note into structured metadata, you confirm before anything saves, and all future scoring runs inject your feedback as a high-priority section in the Sonnet prompt.
-
-```bash
-metis feedback               # add a calibration note
-metis feedback list          # show recent entries
-```
-
-Notes accumulate permanently with no TTL. If a note is no longer accurate, add a correction; contradictions are flagged before saving.
+The CLI surface is listed in [Commands](#commands).
 
 ---
 
 ## Prerequisites
 
-| What | Why | How to get it |
-|------|-----|---------------|
-| Python 3.11+ | Runtime | [python.org/downloads](https://www.python.org/downloads/). macOS ships with 3.9, which is too old. Install via Homebrew: `brew install python@3.11` |
-| Node.js 18+ | Email rendering | [nodejs.org](https://nodejs.org). Required for the React Email digest renderer. Install via Homebrew: `brew install node` |
-| Anthropic API key | Powers role scoring | [console.anthropic.com](https://console.anthropic.com). Separate from your Claude.ai subscription. Scoring a 10-job batch costs roughly $0.05-0.15. |
-| Gmail with IMAP | Source of job alert emails | Settings > See all settings > Forwarding and POP/IMAP > Enable IMAP |
-| Gmail App Password | Lets metis read your inbox without your main password | Requires 2FA. [Generate one here](https://myaccount.google.com/apppasswords), choose Mail + your device. Never use your main account password. |
-| LinkedIn job alerts | Source of job listings | Set up daily email alerts for your target roles on LinkedIn (see below) |
-| Your resume (PDF, DOCX, or TXT) | Used by `metis init` to build your scoring profile | Your existing file |
+Plan for about **5-10 minutes** to get the required prerequisites in place, plus up to 24 hours for the first LinkedIn alert email to arrive if you just created a new alert.
 
-**Platform support:** macOS and Linux. Windows via WSL2 should work but is untested.
+| What | Status | Why | How to get it |
+|------|--------|-----|---------------|
+| Python 3.11+ | **Required** | metis will not install or run on older Python versions, including the Python 3.9 that ships with macOS. | [python.org/downloads](https://www.python.org/downloads/) or Homebrew: `brew install python@3.11` |
+| Node.js 18+ | **Optional** | Enables the React Email digest, which is the polished email layout. Without Node, metis falls back to a simpler Python HTML digest. | [nodejs.org](https://nodejs.org) or Homebrew: `brew install node` |
+| Anthropic API key | **Required, save for [`.env`](#env-configuration)** | Claude reads your profile, compares each role against it, and writes the scoring explanations. Without this key, the pipeline cannot score jobs. | [console.anthropic.com](https://console.anthropic.com). Requires an Anthropic developer account, not a regular Claude.ai chat subscription. Keys usually start with `sk-ant-...`. |
+| Gmail with IMAP enabled | **Required** | Lets metis scan your Gmail inbox for job alert messages. | Gmail > Settings > See all settings > Forwarding and POP/IMAP > Enable IMAP |
+| Gmail App Password | **Required, save for [`.env`](#env-configuration)** | Lets metis log in via IMAP without storing your main Google password. | Requires 2-Step Verification. [Generate one here](https://myaccount.google.com/apppasswords), choose Mail + your device. Google shows this as a 16-character password, often grouped like `abcd efgh ijkl mnop`; save it for `.env` without spaces. |
+| LinkedIn job alerts | **Required** | Main listing source today. The source layer is extensible, but other alert providers are not wired up yet. | Set up daily email alerts for your target roles on LinkedIn. See [Setting up LinkedIn alerts](#linkedin-alerts). |
+| Your Gmail address | **Required, save for [`.env`](#env-configuration)** | Tells metis which Gmail inbox to scan for LinkedIn alerts. | Use the Gmail address where your LinkedIn job alerts arrive. |
+| Your resume (PDF, DOCX, or TXT) | **Required** | The premise for scoring. Use the most complete, detailed version you have. | Any existing file on your machine. During setup, you can paste a path, tab-complete to it, or drag the file into the terminal. |
+
+**Notes**
+
+- **Platform support:** macOS and Linux. Windows via WSL2 should work but is untested.
+- **Python versions:** Python 3.11 and 3.12 are tested in CI. Python 3.13 and 3.14 should work if the dependencies support them, but they are not part of the current test matrix yet.
+- **Node.js install issues:** Node.js is the only optional prerequisite above. If `brew install node` gives you trouble, you can skip it and still run metis; the digest will use the Python fallback renderer.
+- **Anthropic only for now:** OpenAI keys will not work until metis adds an LLM wrapper or provider abstraction. Scoring a 10-job batch usually costs roughly $0.05-0.15.
+
+<a id="linkedin-alerts"></a>
 
 ### Setting up LinkedIn alerts
 
@@ -208,9 +158,36 @@ metis reads emails from these three LinkedIn senders:
 
 Both multi-job digests and single-role notifications are supported.
 
+<a id="env-configuration"></a>
+
 ### `.env` configuration
 
-Copy `.env.example` to `~/.job_pipeline/.env` and fill in your values. metis looks for credentials there first, then falls back to a `.env` file in the project root (for contributors running from a clone).
+The Quick start creates your personal config file here:
+
+```bash
+~/.job_pipeline/.env
+```
+
+You should not need to create folders or copy templates by hand. Follow the **Configure credentials** step in [Quick start](#quick-start), then open this file and replace the placeholder strings.
+
+On macOS, `~` means your home folder, usually `/Users/<your-mac-username>`. To open the config folder in Finder:
+
+1. Click **Go > Go to Folder...**
+2. Paste `~/.job_pipeline`
+3. Open `.env`
+
+If `.env` is missing, rerun the **Configure credentials** command in [Quick start](#quick-start). If you cloned the repo and want the original template, it lives at `.env.example` in the project root.
+
+These prerequisite values become `.env` entries:
+
+| `.env` value | Required? | Comes from |
+|--------------|-----------|------------|
+| `ANTHROPIC_API_KEY` | Yes | Your Anthropic developer console API key |
+| `GMAIL_ADDRESS` | Yes | The Gmail address that receives LinkedIn job alerts |
+| `GMAIL_APP_PASSWORD` | Yes | The 16-character Google App Password generated for Mail |
+| `RECIPIENT_EMAIL` | No | Where to send the digest. Defaults to `GMAIL_ADDRESS` if omitted. |
+
+Python, Node.js, LinkedIn alerts, and your resume do not go into `.env`. Python and Node are installed on your machine, LinkedIn alerts arrive in Gmail, and your resume is selected during `metis init`.
 
 ```env
 # Required
@@ -254,7 +231,7 @@ metis
 > **Optional — Playwright-powered company sourcing:** metis can also pull roles directly from company career pages (Greenhouse, Lever, Ashby). This requires Playwright and is disabled by default. To enable:
 > ```bash
 > uv tool run "metis-job[browser]" -- playwright install chromium
-> # Then: metis companies add Stripe
+> # Then: metis sources add Stripe
 > ```
 
 **Expected output:** metis fetches LinkedIn alert emails from the last 3 days, scores each role, and emails you a ranked digest. On first run this takes 30-90 seconds depending on how many roles it finds.
@@ -265,119 +242,70 @@ metis
 
 ## Commands
 
-### Digest
+### Core workflow
 
-| Command                         | What it does                                                                 |
-|---------------------------------|------------------------------------------------------------------------------|
-| `metis`                         | Fetch from all sources, score, send digest (default: last 3 days)           |
-| `metis --lookback 7d`           | Same, wider window. Accepts `7d`, `14d`, `yesterday`, or `2025-01-15`       |
-| `metis --no-limit`              | Score everything in the window, bypassing the per-run cap (prompts for confirmation) |
-| `metis --no-limit --lookback 14d` | Catch-up run after a gap (prompts for confirmation)                       |
+| Command                              | What it does                                                                            |
+|--------------------------------------|-----------------------------------------------------------------------------------------|
+| `metis`                              | Run full pipeline: ingest, dedupe, score, and email digest. Default: last run or 3d.    |
+| `metis --lookback 7d`                | Same pipeline with a wider window. Accepts `7d`, `14d`, or ISO date like `2026-05-10`.  |
+| `metis --dry-run`                    | Preview a full fetch + score run without sending email or writing state.                |
+| `metis --no-limit`                   | Score everything in the window, bypassing the per-run cap. Haiku pre-screens first.     |
+| `metis --no-limit --lookback 14d`    | Catch up after a gap by scoring everything from a wider window.                         |
+| `metis init`                         | Build your scoring profile from your resume and preferences.                            |
 
-### Profile setup
+Each digest role gets a 0-100 score, a Solid Match / Moderate Match / Limited Match verdict, two leverage points, one friction point, and scan-friendly tags. Roles are deduplicated across runs, so the same listing should not reappear within 30 days.
 
-| Command                                  | What it does                                                        |
-|------------------------------------------|---------------------------------------------------------------------|
-| `metis init`                             | Conversational wizard: paste resume, answer questions, build profile |
-| `metis init --resume path/to/resume.pdf` | Skip the file path prompt                                           |
-| `metis init --supplement file.pdf`       | Augment with LinkedIn profile export                                |
+`profile.yaml` is the scoring profile used by every future digest. See [profile.template.yaml](./profile.template.yaml) for the full schema with comments.
 
-### Company sourcing
+### Sources and scheduling
 
-| Command                      | What it does                                               |
-|------------------------------|------------------------------------------------------------|
-| `metis companies`            | Show active sources                                        |
-| `metis companies add NAME`   | Add a company; auto-detects Greenhouse / Lever / Ashby ATS |
-| `metis companies remove`     | Interactive removal                                        |
-| `metis companies on`         | Enable curated sources                                     |
-| `metis companies off`        | Disable without losing your list                           |
+| Command                              | What it does                                                                            |
+|--------------------------------------|-----------------------------------------------------------------------------------------|
+| `metis sources [list]`               | Show active email alerts and company career pages.                                      |
+| `metis sources add`                  | Pick an alert source or company source interactively.                                   |
+| `metis sources add NAME`             | Add a company for proactive scraping. Auto-detects Greenhouse, Lever, or Ashby.         |
+| `metis sources add --all`            | Add every company in the built-in pool.                                                 |
+| `metis sources remove`               | Remove company sources interactively.                                                   |
+| `metis sources on`                   | Turn company career-page scraping on.                                                   |
+| `metis sources off`                  | Turn company scraping off without losing your company list.                             |
+| `metis sources email`                | Show built-in LinkedIn alerts and any extra email alert sources.                        |
+| `metis sources email add`            | Add a non-LinkedIn email alert source interactively.                                    |
+| `metis sources email remove`         | Remove a non-LinkedIn email alert source interactively.                                 |
+| `metis schedule`                     | Show current digest schedule and OS job status.                                         |
+| `metis schedule set`                 | Set up automated daily or weekly digest delivery.                                       |
+| `metis schedule pause`               | Pause the schedule without deleting it.                                                 |
+| `metis schedule resume`              | Resume a paused schedule.                                                               |
+| `metis schedule remove`              | Remove the scheduled job.                                                               |
 
-### Tracking
+LinkedIn alert senders are built in. Company sourcing can pull roles directly from Greenhouse, Lever, and Ashby career pages without waiting for a LinkedIn alert email.
 
-| Command                          | What it does                                            |
-|----------------------------------|---------------------------------------------------------|
-| `metis track`                    | Parse inbox for confirmations and rejections, update `applications.xlsx` |
-| `metis track --lookback 30d`     | Wider lookback window                                   |
-| `metis track --dry-run`          | Print matches without writing                           |
+### Tracking, reporting, and feedback
 
-### Reporting
+| Command                              | What it does                                                                            |
+|--------------------------------------|-----------------------------------------------------------------------------------------|
+| `metis track`                        | Parse inbox for application outcomes and update `applications.xlsx`.                    |
+| `metis track --lookback 30d`         | Scan a wider email window.                                                              |
+| `metis track --dry-run`              | Print matches without writing to the tracker.                                           |
+| `metis summary`                      | Generate and email progress report with score trends and search insights.               |
+| `metis summary --lookback 60d`       | Scope market intel to a 60-day window. Default is 30d.                                  |
+| `metis summary --output report.html` | Save the report as HTML instead of sending it.                                          |
+| `metis summary --output report.pdf`  | Save the report as PDF instead of sending it.                                           |
+| `metis summary --send`               | Send the report as a real email, without the draft preview prefix.                      |
+| `metis feedback`                     | Add calibration notes that improve future scoring runs.                                 |
+| `metis feedback add`                 | Same as `metis feedback`.                                                               |
+| `metis feedback list`                | Show recent feedback entries.                                                           |
 
-| Command                            | What it does                                                          |
-|------------------------------------|-----------------------------------------------------------------------|
-| `metis summary`                    | Generate and email the progress report (DRAFT PREVIEW prefix)         |
-| `metis summary --lookback 60d`     | Scope all market intel to 60-day window (default: 30d)                |
-| `metis summary --output report.html` | Save as HTML instead of sending                                     |
-| `metis summary --output report.pdf`  | Save as PDF instead of sending                                      |
-| `metis summary --send`             | Send as real email (removes [DRAFT PREVIEW] prefix)                   |
-
-### Feedback
-
-| Command                | What it does                                            |
-|------------------------|---------------------------------------------------------|
-| `metis feedback`       | Add a calibration note that shapes future scoring       |
-| `metis feedback list`  | Show recent calibration entries                         |
-
-### Scheduling
-
-| Command                 | What it does                                               |
-|-------------------------|------------------------------------------------------------|
-| `metis schedule`        | Show current schedule and OS job status                    |
-| `metis schedule set`    | Interactive wizard: choose frequency and time              |
-| `metis schedule remove` | Remove the scheduled job                                   |
+`metis track` recognizes confirmations, rejections, and recruiter-screen emails. Feedback is parsed by Claude, confirmed before saving, and injected into future scoring runs.
 
 ### State and debugging
 
-| Command                   | What it does                                                            |
-|---------------------------|-------------------------------------------------------------------------|
-| `metis reset`             | Clear dedup state so all roles reprocess next run (profile kept)        |
-| `metis reset --force`     | Same, no confirmation                                                   |
-| `metis reset --profile`   | Also delete your scoring profile (requires `metis init` before next run) |
-| `metis debug`             | Dump the most recent LinkedIn alert email to `~/.job_pipeline/debug_email.txt` |
-
----
-
-## Architecture
-
-```
-metis/
-  pipeline.py      # CLI entry point and orchestration
-  score.py         # Claude scoring logic (Layer 2 - Sonnet, 27 fields)
-  extract.py       # Structured extraction (Layer 1 - Haiku)
-  profile.py       # Profile loader (YAML to scoring prompt)
-  prompts.py       # Canonical prompt templates
-  init_cmd.py      # metis init - conversational profile setup wizard
-  render.py        # HTML digest renderer (React Email / Python fallback)
-  report_cmd.py    # metis summary - score distribution and run history
-  feedback.py      # Feedback log: JSONL store and calibration parser
-  sources_cmd.py   # metis companies - manage proactive company list
-  track.py         # metis track - confirmation and rejection email parsing
-  xlsx.py          # applications.xlsx read/write
-  trace.py         # runs.jsonl telemetry (every job at every pipeline stage)
-  schedule_cmd.py  # metis schedule - launchd/cron wizard
-  state.py         # Dedup state (seen_roles.json, 30-day TTL)
-  theme.py         # Rich and InquirerPy theme (single source of truth)
-  sources/         # Email ingestion (IMAP, LinkedIn parser, proactive ATS)
-
-emails/            # React Email digest templates (TypeScript)
-tests/             # pytest suite
-profile.template.yaml
-.env.example
-Makefile           # make test, make lint
-```
-
-See [ARCHITECTURE.md](./ARCHITECTURE.md) for data flow diagrams and notes on extending each layer.
-
-### Data stores
-
-Three separate stores power different parts of the system. Do not conflate them — they have different write paths and power different report sections:
-
-| Store | Written by | Contents | Powers |
-|---|---|---|---|
-| `~/.job_pipeline/applications.xlsx` | Digest delivery (apply+consider only) + `metis track` | Apply and Consider rows; application status updates | §2 ROI banner, §3 Solid/Moderate tiles, §4 Pipeline, Alignment |
-| `~/.job_pipeline/runs.jsonl` | Scorer — every verdict | All verdicts with full extraction + eval JSON | §5 Core Strengths, §6 Market Landscape, §7 Level Distribution, §8 Comp Snapshot |
-| `~/.job_pipeline/skipped_roles.json` | Scoring pipeline, pre-delivery | Skipped role metadata; written before SMTP so it survives send failures | §3 Partial Match tile |
-
-**Critical:** `Partial Match` must always be read from `skipped_roles.json`, never from xlsx. Skipped roles are never written to xlsx — reading xlsx for Partial always returns 0.
+| Command                              | What it does                                                                            |
+|--------------------------------------|-----------------------------------------------------------------------------------------|
+| `metis reset`                        | Clear dedup state so old roles can appear again. Keeps your profile.                    |
+| `metis reset --force`                | Clear dedup state without asking for confirmation.                                      |
+| `metis reset --profile`              | Also delete your scoring profile. Run `metis init` before the next digest.              |
+| `metis reset --profile --force`      | Delete dedup state and profile without asking for confirmation.                         |
+| `metis debug`                        | Save the most recent LinkedIn alert email to `~/.job_pipeline/debug_email.txt`.         |
 
 ---
 
@@ -417,10 +345,15 @@ Set `MAX_JOBS_PER_RUN=0` in `.env` to remove the cap.
 
 ## Roadmap
 
-- [ ] MCP server wrapper so metis is queryable from Claude Code directly
-- [ ] Web UI for digest review and feedback (local, no server required)
+- [ ] MCP server so metis can be queried from Claude Code and other local agents
+- [ ] Importable core API, with config passed as parameters instead of read at import time
+- [ ] PyPI publish (`pip install metis-job`) for a cleaner install path
 - [ ] Outlook / Microsoft 365 support
-- [ ] PyPI publish (`pip install metis-job`) for one-command install without cloning
+- [ ] More alert sources and smarter parsing for new job-alert formats
+- [ ] LLM provider abstraction so Anthropic is not the only scoring backend
+- [ ] Resume tailoring and application-assist workflows, with human approval before anything is submitted
+- [ ] Docker packaging for users who want to avoid local Python setup
+- [ ] Web UI only if there is clear demand from non-CLI users
 
 See [open issues](https://github.com/chenlomis/metis/issues) for the full list.
 
@@ -428,97 +361,86 @@ See [open issues](https://github.com/chenlomis/metis/issues) for the full list.
 
 ## Troubleshooting
 
-**"No emails in lookback window. Done." on first run**
+Start with the earliest step that matches what you are seeing. Most issues are setup, Gmail access, alert delivery, or local state.
 
-metis connected to Gmail but found no LinkedIn alert emails in the last 3 days. Try:
-- `metis --lookback 14d` to widen the window
-- Check that alerts deliver to INBOX. Gmail filters that archive or label emails skip the INBOX search. Temporarily remove the "Skip Inbox" action from any LinkedIn filter.
-- Run `metis debug` to see the raw email body and confirm the format is parseable.
+**`metis: command not found` after install**
+
+Run `pipx ensurepath`, open a new terminal, and try `metis --help`. If that works, your shell can find the CLI.
 
 **`Gmail login failed` / IMAP auth error**
 
-Two things must both be true: 2-Step Verification is on, and you are using a Gmail App Password, not your account password. Generate one at [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords). Also confirm IMAP is enabled: Gmail > Settings > See all settings > Forwarding and POP/IMAP > Enable IMAP.
+Two things must both be true: 2-Step Verification is on, and `GMAIL_APP_PASSWORD` is a Google App Password, not your normal Google password.
 
-**"No roles to evaluate" despite having alert emails**
-
-Run `metis debug`. It writes the raw email body to `~/.job_pipeline/debug_email.txt`. If it looks like a promotional email rather than a job alert, metis cannot parse it. Make sure your LinkedIn alert type is "Your job alert for X" or "Job recommendations."
+Generate one at [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords). Also confirm IMAP is enabled: Gmail > Settings > See all settings > Forwarding and POP/IMAP > Enable IMAP.
 
 **`No scoring profile found. Run metis init`**
 
-Run `metis init` to create your profile before running the digest.
+This happens when metis reaches scoring but cannot find your profile file. Run `metis init` first, then run `metis` again.
 
-**`ERROR: Invalid requirement: '#'` during `pip install -e .`**
+If you already ran setup, confirm that `~/.job_pipeline/profile.yaml` exists. If you are using persona testing, also check whether `METIS_PROFILE` points somewhere else.
 
-A stale `metis.egg-info/` directory from a previous install. Delete it and reinstall:
+**"No emails in lookback window. Done." on first run**
+
+metis connected to Gmail, but did not find LinkedIn alert emails in the lookback window. Try:
+
+- Run `metis --lookback 14d` to check a wider window.
+- Make sure at least one LinkedIn alert email has arrived. New alerts can take up to 24 hours.
+- Check that alerts land in INBOX. Gmail filters that archive or "Skip Inbox" will hide them from metis.
+- Run `metis debug` to dump the most recent LinkedIn alert email and inspect what metis is seeing.
+
+`metis debug` writes `~/.job_pipeline/debug_email.txt` and prints the first chunk in the terminal. It is useful when you want to confirm whether Gmail contains a real job-alert email or just a promotional/recommendation email that metis cannot parse.
+
+**"No roles to evaluate" despite having alert emails**
+
+Run `metis debug` and open `~/.job_pipeline/debug_email.txt`. If the email is not a job alert with role links, metis may not be able to parse it.
+
+Good signs: subject lines like "Your job alert for X" or "Job recommendations," with a list of roles in the body.
+
+Less useful signs: promotional emails, in-app notification summaries, or generic "Company is hiring" messages without role links.
+
+**A company appeared in my LinkedIn notifications but not in my digest**
+
+LinkedIn has two separate channels: **email job alerts** (what metis reads) and **in-app push notifications** (what you see in the LinkedIn app's notification bell). These are different systems. Push notification types that do NOT produce emails:
+- "Company X is hiring. Apply today.", which is a company page hiring announcement
+- "Results from the new AI-powered job search," which is LinkedIn's in-app AI recommender
+- "Jobs similar to one you recently viewed," which comes from LinkedIn's recommendation engine
+
+Only saved job search alerts (set to Daily frequency from a search results page) reliably produce emails. If a company you care about isn't generating email alerts, add it to proactive sources: `metis sources add <name>`.
+
+**A specific role is missing, but I know it exists**
+
+Roles that were processed (even if filtered or skipped) are recorded in `~/.job_pipeline/seen_roles.json` with a 30-day TTL. Once a role is in that file it won't reappear regardless of verdict. Common causes:
+- The role is outside your lookback window. Try `metis --lookback 14d --dry-run`.
+- The role was already processed in the last 30 days.
+- The role was filtered by a hard gate (`jd_blank` means the ATS returned an empty job description; `salary_floor` means the disclosed salary was below your floor).
+- Your deal-breaker list had a mismatch when the role was first processed.
+
+If you want metis to reconsider everything, run `metis reset`. That clears dedup state, so previously seen roles can appear again.
+
+**`metis summary` is empty or less useful than expected**
+
+`metis summary` reads your tracker and run history. It gets better after you have at least one digest and a few tracker updates.
+
+Try:
+- Run `metis` first so there is scored-role history.
+- Run `metis track` after applying so `applications.xlsx` has outcomes.
+- Use `metis summary --lookback 60d` if your recent window is too quiet.
+
+**Contributor-only install issue: `ERROR: Invalid requirement: '#'` during `pip install -e .`**
+
+This usually means a stale `metis.egg-info/` directory is confusing editable install. From a local clone, delete it and reinstall:
 
 ```bash
 rm -rf metis.egg-info && pip install -e .
 ```
 
-**A company appeared in my LinkedIn notifications but not in my digest**
-
-LinkedIn has two separate channels: **email job alerts** (what metis reads) and **in-app push notifications** (what you see in the LinkedIn app's notification bell). These are different systems. Push notification types that do NOT produce emails:
-- "Company X is hiring. Apply today." — company page hiring announcements
-- "Results from the new AI-powered job search" — LinkedIn's in-app AI recommender
-- "Jobs similar to one you recently viewed" — recommendation engine
-
-Only saved job search alerts (set to Daily frequency from a search results page) reliably produce emails. If a company you care about isn't generating email alerts, add it to proactive sources: `metis companies add <name>`.
-
-**A specific role seems to be missing — I know it exists**
-
-Roles that were processed (even if filtered or skipped) are recorded in `~/.job_pipeline/seen_roles.json` with a 30-day TTL. Once a role is in that file it won't reappear regardless of verdict. Common causes:
-- The role was filtered by a hard gate (`jd_blank` — empty job description from the ATS API; `salary_floor` — disclosed salary below your floor). Run `metis --lookback 14d --dry-run` and check logs for `Gate filtered:` lines.
-- Your deal-breaker list had a mismatch when the role was first processed.
-
-To re-evaluate a specific role without resetting everything, remove its hash from `seen_roles.json`:
-
-```python
-import re, hashlib, json
-from pathlib import Path
-
-_CO_VARIANT = re.compile(
-    r"\s+(?:AI|Labs?|Technologies|Tech|Software|Systems|Solutions|Platforms?|"
-    r"Inc\.?|LLC|Corp\.?|Ltd\.?|Co\.?)$", re.IGNORECASE,
-)
-
-def _canonical_company(name):
-    prev, result = None, name.strip()
-    while result != prev:
-        prev = result
-        result = _CO_VARIANT.sub("", result).strip()
-    return result
-
-def role_hash(title, company):
-    key = re.sub(r"[^a-z0-9]", "", (title + _canonical_company(company)).lower())
-    return hashlib.md5(key.encode()).hexdigest()[:12]
-
-p = Path.home() / ".job_pipeline/seen_roles.json"
-data = json.loads(p.read_text())
-data.pop(role_hash("Staff Product Manager", "Acme"), None)
-p.write_text(json.dumps(data, indent=2))
-```
-
-The role will reappear on the next run if it's within the lookback window or in a proactive source company.
-
-**`metis: command not found` after pipx install**
-
-Run `pipx ensurepath` and open a new terminal to add `~/.local/bin` to your PATH.
-
----
-
-## Ingesting your LinkedIn profile
-
-The `--supplement` flag in `metis init` accepts any file that adds context about you. To export your LinkedIn profile:
-
-1. LinkedIn > Me > Settings & Privacy > Data Privacy > **Get a copy of your data**
-2. Select **Profile** only and request the archive
-3. Download, unzip, and pass the file to: `metis init --supplement ~/Downloads/Profile.pdf`
-
 ---
 
 ## Contributing
 
-Bug reports and PRs welcome. Open an issue before large changes so we can align on approach. Small fixes and documentation improvements can go straight to PR.
+Issues, ideas, docs fixes, and PRs are welcome. Small improvements can go straight to PR; for larger changes, open an issue first so we can align before you spend time building.
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for development setup and PR guidance. For private vulnerability reports, see [SECURITY.md](./SECURITY.md).
 
 **Dev setup:**
 
@@ -540,46 +462,16 @@ npm run email:dev     # live preview at localhost:3000
 ```
 
 **Good areas to contribute:**
-- Additional email providers (Outlook / IMAP beyond Gmail)
-- Job board sources beyond LinkedIn alerts
-- Alternative digest render targets (Slack DM, Telegram)
-- Expanded test coverage for email parsing edge cases
-- Translations for non-English alert emails
+- Email parsing edge cases and new alert formats
+- Outlook / Microsoft 365 support
+- New job sources and company/ATS adapters
+- Output targets beyond email, such as chat or local agent surfaces
+- LLM provider abstraction
+- Resume tailoring and application-assist workflows with human approval
+- Globalization: non-English alerts, international salary/location handling, and regional job boards
+- Tests around state safety, dry-run behavior, scoring contracts, and scheduling
 
-**Touching `metis summary` or `report_cmd.py`:**
-
-The canonical spec for every section's layout, data source, column widths, and color rules lives in `~/.job_pipeline/report_identity.md`. Update that file first — it is the single source of truth and the only persistent record of what each section is supposed to look like. Changes to render code without updating the spec will cause regressions.
-
-All colors are defined as constants at the top of `report_cmd.py`. Do not hardcode hex values elsewhere:
-
-```python
-APPLY_BG  = "#eef2ee";  APPLY_NUM  = "#2d5a2d"  # green  — Solid Match
-CONSID_BG = "#faeeda";  CONSID_NUM = "#854f0b"  # amber  — Moderate Match, Pending
-TOTAL_BG  = "#f5f5f3";  TOTAL_NUM  = "#1f2118"  # neutral — totals, bar chart bars
-RED_BG    = "#f2eeee";  RED_NUM    = "#8b2e2e"  # red    — Rejections
-```
-
-Bar chart bars use `TOTAL_NUM` (#1f2118), not green. Trend pills in §6 have three distinct styles: **Trending ↑** = green · **Established** = blue (#e8f0f8 / #185FA5) · **Niche** = gray. Do not collapse Established and Niche to the same style.
-
-Sections §6A, §6B, and §7 all share the `_COLGROUP_4` constant (40/15/25/20%). §5 uses 28/44/28. Use `table-layout:fixed` on all data tables. Changing one table's widths without updating the others causes visual misalignment that is easy to miss in preview.
-
-**Market intel extension point:**
-
-`load_market_intel()` in `report_cmd.py` accepts a `normalize_fn` parameter:
-
-```python
-def load_market_intel(
-    runs_path: Path | None = None,
-    lookback_days: int = 30,
-    normalize_fn=None,  # Callable[[list[str]], list[str]] | None
-) -> dict:
-```
-
-When `None`, leveragePoints are bucketed via keyword matching. Pass a callable to add LLM normalization — it receives a list of raw leveragePoint strings and returns canonical labels. No other code changes required. The intended first use is proper industry vertical classification (FinTech, HealthTech, DevInfra, GovTech) from company names in `runs.jsonl`; the current `company_tier × customer_type` proxy in Table B is a stopgap until that is implemented.
-
-**Digest vs. report templates:**
-
-These are two separate rendering pipelines — do not expect them to match visually. The digest (`metis` / `metis schedule`) uses React Email via `render.ts` / `ts-node`, with a Python `build_digest_html()` fallback. The report (`metis summary`) is pure Python HTML in `report_cmd.py`. Different format, different purpose — the visual difference is intentional.
+For deeper roadmap context, see [Roadmap](#roadmap). For engineering boundaries and privacy rules, see [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ---
 
