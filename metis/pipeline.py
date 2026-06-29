@@ -33,7 +33,8 @@ from .feedback import save_last_run
 from .sources import fetch_alerts
 from .sources.linkedin import extract_jobs, extract_jobs_html, _extract_text
 from .score import score_jobs_batch, rank_jobs, build_score_system
-from .render import render_html, send_digest
+from .render import render_html
+from .deliver import send_digest
 
 # ---------------------------------------------------------------------------
 # Startup validation — fail fast with a clear message if config is missing
@@ -735,6 +736,11 @@ def main():
     sources_sub.add_parser("remove", help="Interactively remove sources.")
     sources_sub.add_parser("on",     help="Enable company scraping.")
     sources_sub.add_parser("off",    help="Disable company scraping.")
+    email_p   = sources_sub.add_parser("email", help="Manage email alert sources.")
+    email_sub = email_p.add_subparsers(dest="email_action")
+    email_sub.add_parser("list",   help="List email alert sources.")
+    email_sub.add_parser("add",    help="Add an email alert source (interactive).")
+    email_sub.add_parser("remove", help="Remove an email alert source (interactive).")
 
     # feedback subcommand
     feedback_p = subparsers.add_parser(
@@ -883,11 +889,12 @@ def main():
 
     elif args.command == "sources":
         from .sources_cmd import run_sources
-        action     = getattr(args, "sources_action", None)
-        name_parts = getattr(args, "source_name", None)
-        name       = " ".join(name_parts) if name_parts else None
-        add_all    = getattr(args, "add_all", False)
-        run_sources(action, name or None, add_all=add_all)
+        action       = getattr(args, "sources_action", None)
+        email_action = getattr(args, "email_action", None)
+        name_parts   = getattr(args, "source_name", None)
+        name         = " ".join(name_parts) if name_parts else None
+        add_all      = getattr(args, "add_all", False)
+        run_sources(action, name or None, add_all=add_all, email_action=email_action)
 
     elif args.command == "feedback":
         _validate_env(require_gmail=False)

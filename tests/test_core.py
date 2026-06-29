@@ -1161,6 +1161,48 @@ class TestWriteToTracker:
 # --no-limit flag renamed from --all
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Hard gate: jd_quality semantics — D-54
+# ---------------------------------------------------------------------------
+
+class TestHardGates:
+    """check_hard_gates must distinguish blank JD from extraction failure.
+
+    "extraction_failed" means Haiku's JSON output couldn't be parsed — the JD
+    content IS present and scoring should proceed.  Only "blank" (Haiku saw an
+    empty JD) should trigger the jd_blank gate.  Conflating the two silently
+    drops real roles.  See DECISIONS.md D-54.
+    """
+
+    def _gate(self, jd_quality, profile=None):
+        from scorerole.extract import check_hard_gates
+        struct = {"jd_quality": jd_quality}
+        return check_hard_gates(struct, profile or {})
+
+    def test_blank_jd_fires_gate(self):
+        passes, gate = self._gate("blank")
+        assert not passes
+        assert gate == "jd_blank"
+
+    def test_extraction_failed_does_not_fire_gate(self):
+        passes, gate = self._gate("extraction_failed")
+        assert passes, "extraction_failed must not trigger jd_blank — JD content exists"
+        assert gate == ""
+
+    def test_low_quality_does_not_fire_gate(self):
+        passes, gate = self._gate("low")
+        assert passes
+
+    def test_unknown_quality_does_not_fire_gate(self):
+        passes, gate = self._gate("unknown")
+        assert passes
+
+    def test_missing_jd_quality_does_not_fire_gate(self):
+        from scorerole.extract import check_hard_gates
+        passes, gate = check_hard_gates({}, {})
+        assert passes
+
+
 class TestNoLimitFlag:
     """--all was renamed --no-limit; score_all internal param unchanged."""
 

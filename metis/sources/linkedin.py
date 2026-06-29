@@ -6,9 +6,9 @@ from bs4 import BeautifulSoup
 log = logging.getLogger(__name__)
 
 # Credentials read from env — set via .env (see .env.example)
-import os
-GMAIL_ADDRESS      = os.getenv("GMAIL_ADDRESS", "")
-GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
+import os as _os
+_GMAIL_ADDRESS_ENV      = _os.getenv("GMAIL_ADDRESS", "")
+_GMAIL_APP_PASSWORD_ENV = _os.getenv("GMAIL_APP_PASSWORD", "")
 
 # All three LinkedIn alert senders, nested OR for IMAP:
 #   jobalerts-noreply@ → standard "Your job alert for X" digests
@@ -422,22 +422,30 @@ _IMAP_MAX_RETRIES = 3
 _IMAP_RETRY_DELAY = 30   # seconds between retries on transient network errors
 
 
-def fetch_linkedin_alerts_since(since_dt: datetime.datetime) -> list[dict]:
+def fetch_linkedin_alerts_since(
+    since_dt: datetime.datetime,
+    *,
+    gmail_address: str = "",
+    gmail_app_password: str = "",
+) -> list[dict]:
     """Fetch all LinkedIn emails on or after since_dt. Read-only — ignores seen_ids."""
     date_str = since_dt.strftime("%d-%b-%Y")
     criteria = f'{_LINKEDIN_SENDER_SEARCH} SINCE "{date_str}"'
     threads: list[dict] = []
 
+    _addr = gmail_address or _GMAIL_ADDRESS_ENV
+    _pwd  = gmail_app_password or _GMAIL_APP_PASSWORD_ENV
+
     for attempt in range(1, _IMAP_MAX_RETRIES + 1):
         try:
             with imaplib.IMAP4_SSL("imap.gmail.com") as imap:
                 try:
-                    imap.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
+                    imap.login(_addr, _pwd)
                 except imaplib.IMAP4.error as e:
                     raise SystemExit(
                         f"\n❌  Gmail login failed: {e}\n\n"
-                        f"   GMAIL_ADDRESS:      {GMAIL_ADDRESS or '(not set)'}\n"
-                        f"   GMAIL_APP_PASSWORD: {'(set)' if GMAIL_APP_PASSWORD else '(not set)'}\n\n"
+                        f"   GMAIL_ADDRESS:      {_addr or '(not set)'}\n"
+                        f"   GMAIL_APP_PASSWORD: {'(set)' if _pwd else '(not set)'}\n\n"
                         f"   Make sure GMAIL_APP_PASSWORD is a Gmail App Password (not your account password).\n"
                         f"   Generate one at: https://myaccount.google.com/apppasswords\n"
                         f"   Requires 2-Step Verification to be enabled on your Google account.\n"

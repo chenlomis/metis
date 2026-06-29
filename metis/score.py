@@ -1,15 +1,15 @@
 from __future__ import annotations
 import re, json, logging, time
 from pathlib import Path
+from typing import List
 import anthropic
+
+from .types import EvalResult, JobDict
 
 log = logging.getLogger(__name__)
 
-# MODEL is read from pipeline.py at call time — passed in via the client object.
-# Keep a local reference for the score_jobs_batch call.
-import os
-MODEL           = os.getenv("MODEL",           "claude-sonnet-4-6")
-PRESCREEN_MODEL = os.getenv("PRESCREEN_MODEL", "claude-haiku-4-5")
+_DEFAULT_MODEL           = "claude-sonnet-4-6"
+_DEFAULT_PRESCREEN_MODEL = "claude-haiku-4-5"
 
 WEIGHTS: dict[str, float] = {
     "seniority_scope":      0.25,
@@ -143,7 +143,8 @@ def _recover_partial_json(raw: str) -> list[dict]:
     return objects
 
 
-def prescreen_jobs_batch(client: anthropic.Anthropic, jobs: list[dict]) -> list[dict]:
+def prescreen_jobs_batch(client: anthropic.Anthropic, jobs: list[dict],
+                         *, model: str = _DEFAULT_PRESCREEN_MODEL) -> list[dict]:
     """Fast Haiku pre-screen on title+company only — filters obvious mismatches before
     JD enrichment and full Sonnet scoring.
 
@@ -165,7 +166,7 @@ def prescreen_jobs_batch(client: anthropic.Anthropic, jobs: list[dict]) -> list[
 
     try:
         response = client.messages.create(
-            model=PRESCREEN_MODEL,
+            model=model,
             max_tokens=max(256, len(jobs) * 12),  # ~12 tok/job: "1. Y\n" with headroom
             system=(
                 f"{context}\n\n"
@@ -191,7 +192,7 @@ def prescreen_jobs_batch(client: anthropic.Anthropic, jobs: list[dict]) -> list[
     raw   = response.content[0].text.strip()
     usage = response.usage
     log.info(
-        f"Pre-screen ({PRESCREEN_MODEL}) — "
+        f"Pre-screen ({model}) — "
         f"input: {usage.input_tokens} tok, output: {usage.output_tokens} tok"
     )
 
@@ -336,18 +337,21 @@ def _build_score_suffix(name: str, apply_t: int, consider_t: int, salary_is_hard
                                Default each to 50 when absent (neutral, no penalty).
                                Compare against the candidate's stated company_types and aspirations.
 
-  domain_background   (0.15)  How well does the candidate's background translate to this domain?
-                               native(100) → adjacent(70) → tangential(40) → foreign(10).
+  domain_background   (0.15)  Does this role require niche domain expertise the candidate demonstrably lacks?
+                               Score by how much the DOMAIN BARRIER (not just industry preference) costs real effectiveness:
+                               100 — native domain (AI infra, dev tools, enterprise SaaS, platform/infra PM); or any domain
+                                     where general PM skills transfer without meaningful loss.
+                               70  — adjacent domain (B2C consumer, fintech, productivity, marketplace); PM fundamentals
+                                     apply, domain knowledge is learnable on the job. This is the DEFAULT when domain
+                                     is ambiguous — do NOT penalize the absence of industry_targets match alone.
+                               40  — regulated/compliance domain requiring specific credential knowledge the candidate
+                                     doesn't hold: healthcare (HIPAA/FDA clearance), financial regulation (SEC/FINRA),
+                                     automotive safety (ISO 26262), defense/GovTech (clearance, ITAR).
+                               10  — hard technical niche with mandatory domain credentials clearly absent
+                                     (e.g., clinical pharmacology, nuclear safety, air traffic control).
                                Use extracted customer_type, product_surface, industry as signal.
-                               IMPORTANT: score "foreign" ONLY when the role explicitly requires
-                               domain-specific expertise the candidate clearly lacks — e.g. healthcare
-                               regulatory, financial compliance, defense/gov clearance. A role in a
-                               different industry than the candidate's target is NOT a reason to score
-                               "foreign" by default. If industry_avoid is empty and the role has no
-                               niche domain gatekeeping requirement, score adjacent(70) or above.
-                               The candidate's strengths in AI/ML, developer tools, and B2B SaaS are
-                               broadly transferable — presence of those strengths does NOT imply
-                               "foreign" for roles outside their exact target industry.
+                               Positive industry_targets (AI infra, dev tools) signal what the candidate PREFERS —
+                               they do NOT make all other domains a penalty. Only regulate compliance barriers score low.
 
   company_stage       (0.10)  Does the company stage match the candidate's stated preference?
                                Use extracted company_stage and company_tier.
@@ -508,7 +512,8 @@ _SCORE_CHUNK_SIZE = 15   # max jobs per Sonnet call (~15 × 300 tok ≈ 4,500 ou
 _MAX_OUTPUT_TOKENS = 8192
 
 
-def _score_chunk(client: anthropic.Anthropic, jobs: list[dict], system_prompt: str) -> list[dict]:
+def _score_chunk(client: anthropic.Anthropic, jobs: list[dict], system_prompt: str,
+                 *, model: str = _DEFAULT_MODEL) -> list[dict]:
     """Score one chunk of jobs. Returns evals list (may be shorter than jobs on truncation)."""
     from .extract import format_extraction_for_scoring
 
@@ -540,7 +545,7 @@ def _score_chunk(client: anthropic.Anthropic, jobs: list[dict], system_prompt: s
     for attempt in range(_MAX_ATTEMPTS):
         try:
             response = client.messages.create(
-                model=MODEL,
+                model=model,
                 max_tokens=_MAX_OUTPUT_TOKENS,
                 system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
                 messages=[{
@@ -623,9 +628,11 @@ def _inject_weights(evals: list[dict]) -> None:
 
 def score_jobs_batch(
     client: anthropic.Anthropic,
-    jobs: list[dict],
+    jobs: List[JobDict],
     profile: dict | None = None,
-) -> list[dict]:
+    *,
+    model: str = _DEFAULT_MODEL,
+) -> List[JobDict]:
     """Score all jobs, chunking into batches of _SCORE_CHUNK_SIZE to avoid output truncation.
 
     Pass `profile` (already loaded dict) to avoid a redundant disk read. Falls back to
@@ -643,7 +650,7 @@ def score_jobs_batch(
 
     all_evals: list[dict] = []
     for chunk in chunks:
-        evals = _score_chunk(client, chunk, system_prompt)
+        evals = _score_chunk(client, chunk, system_prompt, model=model)
         for i in range(len(chunk)):
             all_evals.append(evals[i] if i < len(evals) else _error_eval)
 
@@ -652,7 +659,7 @@ def score_jobs_batch(
     return jobs
 
 
-def rank_jobs(jobs: list[dict]) -> list[dict]:
+def rank_jobs(jobs: List[JobDict]) -> List[JobDict]:
     """Sort jobs by verdict + score, re-deriving verdicts from thresholds first.
 
     Claude is instructed on thresholds but doesn't guarantee compliance —

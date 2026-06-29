@@ -1,147 +1,46 @@
-"""track.py — parse confirmation and rejection emails, update the Applications tracker.
+"""scorerole/track.py — thin orchestrator for the track pipeline stage.
 
 Usage:
     metis track                   # parse emails from last 7 days
     metis track --lookback 30d    # extend lookback
     metis track --no-excel        # print matches to stdout, no xlsx write or open
 
-Pipeline:
-    1. Fetch emails from Gmail matching broad subject-line patterns
-    2. Classify each as confirmation / rejection / unknown via body text
-    3. Match to an existing tracker row (fuzzy company+title)
-    4. Update the row: action_taken, date_applied, application_status
-       For skipped-role confirmations: create a new row from skipped_roles.json
+Sub-modules own the actual logic:
+  track_imap.py   — IMAP fetch + email decode helpers
+  track_parse.py  — email classification + entity extraction
+  track_write.py  — tracker fuzzy match + xlsx write operations
+
+This module wires them together and exposes run_track() and backfill_from_digests().
 """
 from __future__ import annotations
 
-import re, sys, datetime, logging, imaplib, email as email_lib, time
-from email.header import decode_header
-
-_IMAP_MAX_RETRIES = 3
-_IMAP_RETRY_DELAY = 30   # seconds between retries on transient network errors
-from pathlib import Path
+import datetime
+import email as email_lib
+import imaplib
+import logging
+import sys
+import time
 
 log = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Body-text signals — order matters: rejection check runs first
-# ---------------------------------------------------------------------------
+# Re-exports for backward-compat (tests import from scorerole.track)
+from .track_parse import classify_email, _LLM_VALID_CLASSES  # noqa: F401
+from .track_write import update_recruiter_screen              # noqa: F401
 
-_REJECTION_PHRASES = [
-    "decided not to move forward",
-    "won't be moving forward",
-    "will not be moving forward",
-    "we're unable to move forward",
-    "unable to move forward",
-    "move forward with other candidates",
-    "decided to move forward with other candidates",
-    "not move ahead",
-    "not to move ahead",                            # Hightouch
-    "not to proceed with your application",
-    "decided not to proceed",                       # Google recruiter
-    "not an ideal fit",
-    "there isn't an ideal fit",
-    "we regret to inform you",
-    "regret to inform",
-    "won't be progressing",
-    "not be progressing with your application",
-    "have decided not to move forward",
-    "decision to not move forward",                 # Anduril
-    "90-day waiting period before reconsidering",   # Scale AI duplicate-apply
-    "we will not be moving forward",
-    "we are not able to move forward",
-    "not able to move forward",
-    "decided not to pursue",
-    "not moving forward with your application",
-    "we're moving forward with other",              # Workato / generic
-    "moving forward with other candidates",
-]
-
-_RECRUITER_SCREEN_PHRASES = [
-    # Scheduling language — primary signal, mutually exclusive with rejection
-    "let me know your availability",              # Klaviyo
-    "please let us know your availability",       # SeekOut
-    "please feel free to find time",              # Datadog
-    "please select a time through",               # Descript (Calendly)
-    "select a time that will work for you",       # Microsoft (eightfold)
-    "set up time for a phone screen",             # Microsoft (eightfold)
-    "schedule some time for us to",               # generic recruiter
-    "i'd like to schedule some time",             # Klaviyo variant
-    "we'd like to invite you for a virtual",      # SeekOut
-    # Forward-moving framing — next-step context
-    "we're excited to move forward with the interview",  # Descript
-    "interested in speaking with you about our",         # NVIDIA
-    "complete the availability questionnaire",           # NVIDIA (Workday)
-]
-
-_CONFIRMATION_PHRASES = [
-    "your application has been received",
-    "we have received your application",
-    "received your application",
-    "application and we will review",
-    "will review your application",
-    "we'll review your application",                # Google: curly apostrophe normalized
-    "we’ll review your application",           # curly apostrophe variant
-    "reviewing your application",
-    "we will review it",
-    "will be in touch if",
-    "will be in touch with you",                    # Gen Digital
-    "reach out if",
-    "will reach out if",
-    "will contact you",
-    "submit an application",                        # Anthropic
-    "completed the application",                    # Amazon
-    "check the application status",                 # Amazon
-    "look forward to reviewing your application",   # Workday / Google DeepMind
-    "look forward to learning more about you",
-    "application is under review",
-    "your application is being reviewed",
-    "we're reviewing your application",
-    "we are reviewing your application",
-    "thank you for submitting your application",    # Binti / generic
-    "we’ve received your application",              # curly-apostrophe variant
-    "we’ve received your application",
-    "we will review it shortly",                    # Databricks / Greenhouse
-    "we will review your application",
-    "we will begin reviewing it",                   # Carta / Greenhouse
-    "thanks for applying to",                       # Google, Scale AI, Databricks body
-    "thank you for applying to",                    # CoreWeave, Mux body
-    "thank you for taking the time to apply",       # Harvey / Ashby
-    "thank you for applying for the",               # Headstart / Ashby
-    "wanted to confirm that we have received",      # GitLab / Greenhouse
-]
-
-# ---------------------------------------------------------------------------
-# Subject-line patterns for pre-filtering (broad — body decides classification)
-# ---------------------------------------------------------------------------
-
-_SUBJECT_CANDIDATES = re.compile(
-    r"thank you (for (apply|applying|your application|your interest)|from )|"
-    r"thanks (for (apply|applying|your interest)|for your application|for completing)|"
-    r"your application (to |for |at )|"
-    r"following up on your (application|recent application)|"
-    r"application (status )?update|"
-    r"important information about your application|"
-    r"keep track of your application|"
-    r"we have received your application|"
-    r"we('ve| have) received your application|"
-    r"we got it",
-    re.IGNORECASE,
+from .track_imap  import (
+    fetch_candidate_emails,
+    _safe_decode,
+    _IMAP_MAX_RETRIES,
+    _IMAP_RETRY_DELAY,
 )
-
-# Subject patterns that strongly imply confirmation (used as body tiebreaker)
-_SUBJECT_IMPLIES_CONFIRMATION = re.compile(
-    r"thank(?:s| you) for (applying|your application|your interest|submitting)|"
-    r"thanks for (applying|your application|completing your application|submitting)|"
-    r"your application for .+ at |"
-    r"we('ve| have) received your application|"
-    r"we have received your application|"
-    r"thank you for your application to|"
-    r"your application to \w|"
-    r"we got it|"              # "Gen Digital | We Got It!"
-    r"welcome to .+ careers|"
-    r"we look forward to",
-    re.IGNORECASE,
+from .track_parse import parse_email
+from .track_write import (
+    find_tracker_row,
+    update_confirmation,
+    update_rejection,
+    create_skipped_row,
+    create_backfill_row,
+    _parse_digest_html,
 )
 
 # Subject patterns that strongly imply recruiter screen (used as body tiebreaker)
@@ -1240,6 +1139,98 @@ def _build_llm_client(api_key: str | None):
 
 
 # ---------------------------------------------------------------------------
+# Digest backfill
+# ---------------------------------------------------------------------------
+
+def backfill_from_digests(
+    gmail_address: str,
+    app_password: str,
+    since_dt: datetime.datetime,
+) -> int:
+    """Fetch past digest emails from Gmail and write any new rows to the tracker.
+
+    Only writes Apply/Consider roles not already in the tracker (dedup by
+    normalized title+company). Returns the number of new rows added.
+    """
+    from email.utils import parsedate_to_datetime
+    from .xlsx import write_to_tracker
+
+    since_str    = since_dt.strftime("%d-%b-%Y")
+    added_total  = 0
+    n_digests    = 0
+
+    for attempt in range(1, _IMAP_MAX_RETRIES + 1):
+        try:
+            with imaplib.IMAP4_SSL("imap.gmail.com") as imap:
+                imap.login(gmail_address, app_password)
+                imap.select("INBOX")
+
+                _, data = imap.search(None, f'SINCE {since_str} SUBJECT "Personalized Job Alert Digest"')
+                if not data or not data[0]:
+                    log.info("track: no digest emails found since %s", since_str)
+                    return 0
+
+                digest_ids = data[0].split()
+                n_digests  = len(digest_ids)
+                log.info("track: found %d digest email(s) to backfill from", n_digests)
+
+                for msg_id in digest_ids:
+                    _, raw = imap.fetch(msg_id, "(RFC822)")
+                    if not raw or not raw[0]:
+                        continue
+                    raw_bytes = raw[0][1] if isinstance(raw[0], tuple) else raw[0]
+                    msg = email_lib.message_from_bytes(raw_bytes)
+
+                    date_header = msg.get("Date", "")
+                    try:
+                        email_date = parsedate_to_datetime(date_header).date().isoformat()
+                    except Exception:
+                        email_date = datetime.date.today().isoformat()
+
+                    html_body = ""
+                    if msg.is_multipart():
+                        for part in msg.walk():
+                            if part.get_content_type() == "text/html":
+                                payload = part.get_payload(decode=True)
+                                if payload:
+                                    html_body = _safe_decode(payload, part.get_content_charset())
+                                    break
+                    else:
+                        if msg.get_content_type() == "text/html":
+                            payload = msg.get_payload(decode=True)
+                            if payload:
+                                html_body = _safe_decode(payload, msg.get_content_charset())
+
+                    if not html_body:
+                        log.debug("track: digest %s has no HTML body — skipping", email_date)
+                        continue
+
+                    jobs = _parse_digest_html(html_body, email_date)
+                    if jobs:
+                        log.info("track: digest %s → %d role(s) parsed", email_date, len(jobs))
+                        write_to_tracker(jobs, run_date=email_date)
+                        added_total += len(jobs)
+                    else:
+                        log.warning("track: digest %s → 0 roles parsed (HTML structure mismatch?)", email_date)
+            break
+        except OSError as e:
+            if attempt < _IMAP_MAX_RETRIES:
+                log.warning(
+                    "track: IMAP connect failed (attempt %d/%d): %s — retrying in %ds…",
+                    attempt, _IMAP_MAX_RETRIES, e, _IMAP_RETRY_DELAY,
+                )
+                time.sleep(_IMAP_RETRY_DELAY)
+            else:
+                log.error("track: IMAP connect failed after %d attempts: %s — skipping backfill",
+                          _IMAP_MAX_RETRIES, e)
+                return 0
+
+    log.info("track: digest backfill complete — %d role(s) eligible across %d digest(s)",
+             added_total, n_digests)
+    return added_total
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -1256,20 +1247,14 @@ def run_track(
     except ImportError:
         raise SystemExit("openpyxl is required: pip install openpyxl")
 
-    from .xlsx import TRACKER_PATH
-    from .state   import lookup_skipped_role, promote_skipped_role
+    from .xlsx  import TRACKER_PATH
+    from .state import lookup_skipped_role, promote_skipped_role
 
-    # Build LLM client if the profile has llm_fallback enabled
     llm_client = _build_llm_client(api_key)
 
-    # Step 1: backfill tracker from past digest emails FIRST so every suggested
-    # role has a proper row (with score, URL, suggestion_status) before we try
-    # to match confirmation/rejection emails against tracker rows.
     log.info("track: step 1 — backfilling tracker from digest emails…")
     backfill_from_digests(gmail_address, app_password, since_dt)
 
-    # Step 2: parse confirmation / rejection emails and update tracker rows
-    # Build applied-company set for Tier 3 (direct recruiter outreach) search.
     applied_companies: set[str] = set()
     if TRACKER_PATH.exists():
         _wb = openpyxl.load_workbook(TRACKER_PATH, read_only=True, data_only=True)
@@ -1334,7 +1319,6 @@ def run_track(
 
         if row_idx is None:
             if kind == "confirmation":
-                # Check skipped sidecar first (has match_score + date_suggested)
                 skipped_meta = lookup_skipped_role(company, role or "")
                 if skipped_meta:
                     log.info("track: backfill (skipped) — %s / %s", company, role)
@@ -1348,8 +1332,8 @@ def run_track(
                 log.info("track: skip rejection (no tracker row) — %s", company)
             continue
 
-        current_action = ws.cell(row_idx, 6).value   # action_taken
-        current_status = ws.cell(row_idx, 8).value   # application_status
+        current_action = ws.cell(row_idx, 6).value
+        current_status = ws.cell(row_idx, 8).value
 
         if kind == "confirmation" and current_action != "Applied":
             log.info("track: ✓ confirmation — %s / %s → Applied + Pending", company, role or "?")
@@ -1371,7 +1355,7 @@ def run_track(
             log.info("track: skip recruiter screen (already %s) — %s", current_status, company)
 
     from .xlsx import _sort_rows_by_date
-    _sort_rows_by_date(ws)   # always re-sort so date order is maintained
+    _sort_rows_by_date(ws)
 
     if changed:
         wb.save(TRACKER_PATH)
@@ -1382,6 +1366,6 @@ def run_track(
             import subprocess
             subprocess.Popen(["open", str(TRACKER_PATH)])
     else:
-        wb.save(TRACKER_PATH)   # save even if no updates — sort may have reordered rows
+        wb.save(TRACKER_PATH)
         TRACKER_PATH.chmod(0o600)
         log.info("track: no updates needed.")
