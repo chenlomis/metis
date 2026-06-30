@@ -192,24 +192,38 @@ PRESCREEN_MODEL=claude-haiku-4-5    # model for quick title/company pre-screenin
 
 ## Quick start
 
+**Step 1 — Install**
+
 ```bash
-# 1. Install (no clone needed)
 brew install pipx && pipx ensurepath
 pipx install git+https://github.com/chenlomis/metis.git
+```
 
-# Or clone if you want to contribute or edit locally
-# git clone https://github.com/chenlomis/metis && cd metis && pipx install -e ".[dev]"
+> Already installed? Run `pipx upgrade metis-job` instead.
 
-# 2. Configure credentials
+**Step 2 — Configure credentials**
+
+```bash
 mkdir -p ~/.job_pipeline
-curl -fsSL https://raw.githubusercontent.com/chenlomis/metis/main/.env.example \
-  -o ~/.job_pipeline/.env
-# Edit ~/.job_pipeline/.env — fill in ANTHROPIC_API_KEY, GMAIL_ADDRESS, GMAIL_APP_PASSWORD
+cat > ~/.job_pipeline/.env << 'EOF'
+ANTHROPIC_API_KEY=sk-ant-...
+GMAIL_ADDRESS=you@gmail.com
+GMAIL_APP_PASSWORD=xxxx-xxxx-xxxx-xxxx
+RECIPIENT_EMAIL=you@gmail.com
+EOF
+```
 
-# 3. Build your scoring profile from your resume
+Then open `~/.job_pipeline/.env` and replace the placeholder values. See [`.env` configuration](#env-configuration) for field-by-field guidance.
+
+**Step 3 — Build your scoring profile**
+
+```bash
 metis init
+```
 
-# 4. Run
+**Step 4 — Run**
+
+```bash
 metis
 ```
 
