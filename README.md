@@ -59,7 +59,7 @@ Each evaluation surfaces two strengths and one potential friction point, alongsi
 
 Metis is designed as a modular, stateful pipeline composed of loosely coupled subsystems connected through persistent artifacts rather than in-memory state. Instead of a single monolithic prompt, each stage has a focused responsibility—from profile construction and source ingestion to lightweight pre-screening, structured extraction, deep semantic evaluation, reporting, and feedback incorporation. This separation keeps the system observable, debuggable, and easily extensible.
 
-The runtime operates as a closed-loop agentic workflow. New roles are continuously discovered, deduplicated, evaluated against a structured user profile, surfaced through personalized digests, tracked through recruiting outcomes, and refined using explicit user feedback. Every run persists metadata and intermediate artifacts (profile.yaml, sources.yaml, runs.jsonl, feedback.md, etc.), enabling reproducibility, debugging, and future iteration without relying on opaque prompt state.
+The runtime operates as a closed-loop agentic workflow. New roles are continuously discovered, deduplicated, evaluated against a structured user profile, surfaced through personalized digests, tracked through recruiting outcomes, and refined using explicit user feedback. Every run persists metadata and intermediate artifacts (`profile.yaml`, `email_sources.yaml`, `runs.jsonl`, `feedback.md`, etc.), enabling reproducibility, debugging, and future iteration without relying on opaque prompt state.
 
 The overall architecture prioritizes modularity, cost-aware inference, privacy-first local state, and continuous learning, allowing individual components to evolve independently as better models, data sources, or evaluation strategies become available.
 
@@ -112,8 +112,8 @@ Plan for about **5-10 minutes** to get the required prerequisites in place, plus
 | Anthropic API key | **Required, save for [`.env`](#env-configuration)** | Claude reads your profile, compares each role against it, and writes the scoring explanations. Without this key, the pipeline cannot score jobs. | [console.anthropic.com](https://console.anthropic.com). Requires an Anthropic developer account, not a regular Claude.ai chat subscription. Keys usually start with `sk-ant-...`. |
 | Gmail with IMAP enabled | **Required** | Lets metis scan your Gmail inbox for job alert messages. | Gmail > Settings > See all settings > Forwarding and POP/IMAP > Enable IMAP |
 | Gmail App Password | **Required, save for [`.env`](#env-configuration)** | Lets metis log in via IMAP without storing your main Google password. | Requires 2-Step Verification. [Generate one here](https://myaccount.google.com/apppasswords), choose Mail + your device. Google shows this as a 16-character password, often grouped like `abcd efgh ijkl mnop`; save it for `.env` without spaces. |
-| LinkedIn job alerts | **Required** | Main listing source today. The source layer is extensible, but other alert providers are not wired up yet. | Set up daily email alerts for your target roles on LinkedIn. See [Setting up LinkedIn alerts](#linkedin-alerts). |
-| Your Gmail address | **Required, save for [`.env`](#env-configuration)** | Tells metis which Gmail inbox to scan for LinkedIn alerts. | Use the Gmail address where your LinkedIn job alerts arrive. |
+| LinkedIn job alerts | **Recommended first source** | The most tested source today. metis can also watch other job-alert senders and company career pages, but LinkedIn saved alerts are the quickest path to a useful first digest. | Set up daily email alerts for your target roles on LinkedIn. See [Setting up LinkedIn alerts](#linkedin-alerts). |
+| Your Gmail address | **Required, save for [`.env`](#env-configuration)** | Tells metis which Gmail inbox to scan for job alerts. | Use the Gmail address where your job-alert emails arrive. |
 | Your resume (PDF, DOCX, or TXT) | **Required** | The premise for scoring. Use the most complete, detailed version you have. | Any existing file on your machine. During setup, you can paste a path, tab-complete to it, or drag the file into the terminal. |
 
 **Notes**
@@ -121,7 +121,7 @@ Plan for about **5-10 minutes** to get the required prerequisites in place, plus
 - **Platform support:** macOS and Linux. Windows via WSL2 should work but is untested.
 - **Python versions:** Python 3.11 and 3.12 are tested in CI. Python 3.13 and 3.14 should work if the dependencies support them, but they are not part of the current test matrix yet.
 - **Node.js install issues:** Node.js is the only optional prerequisite above. If `brew install node` gives you trouble, you can skip it and still run metis; the digest will use the Python fallback renderer.
-- **Anthropic only for now:** OpenAI keys will not work until metis adds an LLM wrapper or provider abstraction. Scoring a 10-job batch usually costs roughly $0.05-0.15.
+- **Anthropic only for now:** OpenAI keys will not work until metis adds an LLM wrapper or provider abstraction. The scoring boundary is already isolated enough that this is a good OSS contribution, just not something I have built yet. Scoring a 10-job batch usually costs roughly $0.05-0.15.
 
 <a id="linkedin-alerts"></a>
 
@@ -168,11 +168,11 @@ These prerequisite values become `.env` entries:
 | `.env` value | Required? | Comes from |
 |--------------|-----------|------------|
 | `ANTHROPIC_API_KEY` | Yes | Your Anthropic developer console API key |
-| `GMAIL_ADDRESS` | Yes | The Gmail address that receives LinkedIn job alerts |
+| `GMAIL_ADDRESS` | Yes | The Gmail address that receives job-alert emails |
 | `GMAIL_APP_PASSWORD` | Yes | The 16-character Google App Password generated for Mail |
 | `RECIPIENT_EMAIL` | No | Where to send the digest. Defaults to `GMAIL_ADDRESS` if omitted. |
 
-Python, Node.js, LinkedIn alerts, and your resume do not go into `.env`. Python and Node are installed on your machine, LinkedIn alerts arrive in Gmail, and your resume is selected during `metis init`.
+Python, Node.js, job alerts, and your resume do not go into `.env`. Python and Node are installed on your machine, alerts arrive in Gmail, and your resume is selected during `metis init`.
 
 ```env
 # Required
@@ -307,6 +307,8 @@ LinkedIn alert senders are built in. Company sourcing can pull roles directly fr
 | `metis reset --profile --force`      | Delete dedup state and profile without asking for confirmation.                         |
 | `metis debug`                        | Save the most recent LinkedIn alert email to `~/.job_pipeline/debug_email.txt`.         |
 
+For explainability, metis keeps more detail locally than it shows in the email. The digest stays intentionally compact, but `~/.job_pipeline/runs.jsonl` records each scored role with model inputs, verdict, dimension scores, tags, leverage points, friction points, and gate/filter reasons. If a score feels off, inspect `runs.jsonl`, then use `metis feedback` to calibrate future runs.
+
 ---
 
 ## Privacy
@@ -330,6 +332,9 @@ Local data stored in `~/.job_pipeline/` (outside the repo, never committed):
 | `profile.yaml`        | Your extracted profile                           | 600 (owner-readable)    |
 | `seen_roles.json`     | MD5 hashes of scored roles and timestamps, 30-day TTL | 600 (owner-readable) |
 | `role_queue.json`     | Pre-screened roles waiting for the next capped scoring run | 600 (owner-readable) |
+| `runs.jsonl`          | Append-only scoring trace for debugging and summaries | 600 (owner-readable) |
+| `feedback.md`         | Confirmed calibration notes injected into future scoring | 600 (owner-readable) |
+| `email_sources.yaml`  | Extra non-LinkedIn alert sender rules                 | 600 (owner-readable) |
 | `logs/YYYY-MM-DD.log` | Pipeline run logs (may contain job titles)       | default                 |
 
 ---
@@ -346,17 +351,26 @@ Set `MAX_JOBS_PER_RUN=0` in `.env` to remove the cap.
 
 ---
 
-## Roadmap
+<a id="roadmap"></a>
 
-- [ ] MCP server so metis can be queried from Claude Code and other local agents
-- [ ] Importable core API, with config passed as parameters instead of read at import time
-- [ ] PyPI publish (`pip install metis-job`) for a cleaner install path
-- [ ] Outlook / Microsoft 365 support
-- [ ] More alert sources and smarter parsing for new job-alert formats
+## Current limits and roadmap
+
+metis is intentionally a local, CLI-first v0. It works best today if you use Gmail, receive job-alert emails there, and are comfortable using an Anthropic API key. Those are real constraints, not things the project tries to hide. The tradeoff is that the first version stays cheap, inspectable, and easy to run without hosting your career data somewhere else.
+
+The source layer is broader than LinkedIn-only: LinkedIn saved alerts are the best-tested default, but `metis sources email add` can watch other job-alert senders, and `metis sources add` can pull directly from company career pages on Greenhouse, Lever, Ashby, and selected Playwright-backed sites. Job alerts from places like Waymo and GitHub can work when their emails include parseable role links. More adapters are very welcome.
+
+- [ ] More alert sources: Indeed, Wellfound/AngelList, Otta, RSS feeds, regional boards, and more non-LinkedIn email formats
+- [ ] More company/ATS adapters and stronger browser-based scraping where APIs are unavailable
+- [ ] Outlook / Microsoft 365 support so Gmail is not the only inbox
 - [ ] LLM provider abstraction so Anthropic is not the only scoring backend
+- [ ] Importable core API, with config passed as parameters instead of read at import time
+- [ ] MCP server so metis can be queried from Claude Code and other local agents
+- [ ] PyPI publish (`pip install metis-job`) for a cleaner install path
+- [ ] Output targets beyond email, such as Markdown, Slack, Notion, or webhooks
+- [ ] Deeper analytics over `runs.jsonl`, tracker outcomes, score trends, and market signals
 - [ ] Resume tailoring and application-assist workflows, with human approval before anything is submitted
 - [ ] Docker packaging for users who want to avoid local Python setup
-- [ ] Web UI only if there is clear demand from non-CLI users
+- [ ] Web UI or local dashboard only if there is clear demand from non-CLI users
 
 See [open issues](https://github.com/chenlomis/metis/issues) for the full list.
 
