@@ -103,7 +103,7 @@ The CLI surface is listed in [Commands](#commands).
 
 ## Prerequisites
 
-Plan for about **5-10 minutes** to get the required prerequisites in place, plus up to 24 hours for the first LinkedIn alert email to arrive if you just created a new alert.
+Plan for about **10-15 minutes** to get the required prerequisites in place, plus up to 24 hours for the first LinkedIn alert email to arrive if you just created a new alert.
 
 | What | Status | Why | How to get it |
 |------|--------|-----|---------------|
