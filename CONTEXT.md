@@ -1,32 +1,35 @@
-# metis — Project Context (lean chat starter)
+# metis — Project Context
 
-Feed this file to new Claude sessions instead of the full repo.
-Then ask for specific files on demand.
+Short version of the repo for new agent sessions. Read this first, then pull specific
+files only when needed.
 
 ---
 
-## What it is
-Personal CLI tool: pull LinkedIn job alerts → score against candidate profile → email ranked digest.
-Also scrapes company career pages proactively (Greenhouse/Lever APIs + Playwright fallback).
+## What It Is
+metis is a privacy-first CLI for job search triage. It pulls saved job alerts, optionally
+checks company career pages, scores roles against a local profile with Claude, emails a
+ranked digest, and keeps an application tracker up to date.
 
-## Current state (as of 2026-06-21)
-- **Done:** Full pipeline (fetch → dedup → extract → score → digest email → tracker write), `metis init`, proactive sources (S/A/B tier company scraping), scheduling (launchd/cron with retry), `metis track`, `metis feedback`, `metis companies`, scoring traceability (`trace.py` → `~/.job_pipeline/runs.jsonl`), format regression tests (`tests/test_render_format.py`), LinkedIn 3-case positional shift detection, tracker input validation (`_is_plausible_job_row`)
-- **In progress:** email parsing reliability (regex primary, LLM fallback planned)
-- **Near-term backlog:** `metis summary` (score distribution + apply-rate trends), config-as-parameters refactor (MCP prerequisite), one-command install, cross-platform scheduling (Windows Task Scheduler)
-- **Later:** MCP server wrapper, PyPI publish, employer-lens scoring, evaluation harness
+## Current State (as of 2026-06-30)
+- **Done:** Full pipeline (fetch → dedup → extract → score → digest email → tracker write), `metis init`, proactive sources, non-LinkedIn email alert sources, scheduling (launchd/cron with retry), `metis track`, `metis feedback`, `metis summary`, scoring traceability (`trace.py` → `~/.job_pipeline/runs.jsonl`), React Email digest templates with Python fallback, format regression tests, tracker input validation, and role queueing for capped runs.
+- **In progress:** config-as-parameters cleanup for cleaner library/MCP use, more reliable tracker parsing across ATS templates, and public-launch documentation polish.
+- **Near-term backlog:** one-command install, PyPI packaging as `metis-job`, MCP server wrapper, Outlook/Microsoft 365 support, and broader source adapters.
+- **Later:** Docker, employer-lens scoring, evaluation harness, and web/app surfaces only if OSS usage proves demand.
 
 ## Mental model: config boundary
 
 | File | Owns |
 |---|---|
 | `~/.job_pipeline/profile.yaml` | Candidate identity + search preferences |
-| `~/.job_pipeline/sources.yaml` *(planned)* | Job sources config (proactive tiers, custom companies) |
+| `~/.job_pipeline/email_sources.yaml` | Extra non-LinkedIn alert email senders |
 | `~/.job_pipeline/config.yaml` *(planned)* | Thresholds, schedule, system knobs |
 | `~/.job_pipeline/feedback.md` | Free-text calibration notes injected into scoring prompt |
 
-Currently `profile.yaml` holds everything. The boundary above is the target mental model for v2 — they may stay in one file for v1 but should be treated as separate concerns in code.
+`profile.yaml` still holds most user preferences. Extra alert senders now live in
+`email_sources.yaml`; the remaining split is the target mental model for v2 and should
+guide new code even before the files are fully separated.
 
-## Profile schema (simplified, as of 2026-06-21)
+## Profile Schema (simplified)
 
 ```yaml
 candidate:
@@ -64,37 +67,41 @@ inferred:
   customer_types: []
   degree_level:
 
+track:
+  llm_fallback:
+
 notes:
 ```
 
 Note: `experience`, `education`, `strengths` live under `candidate` (come from resume/LinkedIn only).
 `deal_breakers` and `salary_floor_usd` are top-level (come from Steps 2–3 freeform input).
-Removed: `scoring` block, `green_flags`, `yellow_flags`, `red_flags` (scoring-internal, not user-facing).
+Removed from the user-facing profile: `green_flags`, `yellow_flags`, `red_flags` (scoring-internal, not preferences).
 
 ## File map
 
 ```
 metis/
-  pipeline.py       — CLI entry point, all subcommand routing
-  init_cmd.py       — metis init (structured 4-step wizard, InquirerPy + Rich)
-  init_cmd.py       — metis init (conversational profile setup)
+  cli.py            — CLI entry point and subcommand routing
+  pipeline.py       — digest orchestration and cap/queue logic
+  init_cmd.py       — metis init profile wizard (InquirerPy + Rich)
   theme.py          — ALL colors, styles, print helpers (single source of truth; never inline colors elsewhere)
   profile.py        — load/save ~/.job_pipeline/profile.yaml
   extract.py        — Haiku Layer 1: extracts 27 structured fields from JD text
   score.py          — Haiku pre-screen + Sonnet Layer 2 scoring; rank_jobs()
-  render.py         — HTML digest builder + SMTP delivery
+  render.py         — React Email/Python HTML digest rendering
+  deliver.py        — SMTP delivery
   schedule_cmd.py   — launchd (macOS) / cron (Linux) scheduling wizard
   state.py          — seen_roles.json TTL store; _role_hash()
   trace.py          — write_trace() → ~/.job_pipeline/runs.jsonl (one record/job, every run)
   track.py          — parse confirmation/rejection emails → Applications.xlsx
   tracker.py        — Applications.xlsx write helpers (called by track.py)
-  feedback_cmd.py   — metis feedback: collect notes → append to feedback.md → injected into scoring
-  sources_cmd.py    — metis companies: list/add/remove/on/off company career-page sources
+  feedback.py       — metis feedback: collect notes → append to feedback.md → injected into scoring
+  sources_cmd.py    — metis sources: list/add/remove/on/off email and company sources
   sources/
     __init__.py     — fetch_alerts() router (LinkedIn + proactive)
     linkedin.py     — IMAP fetch, email parse, JD enrichment
     proactive.py    — Greenhouse/Lever API scraping + Playwright fallback
-    companies.yml   — curated S/A/B/C tier company list
+    companies.yml   — curated company pool
 ```
 
 ## Data files (runtime, live outside repo at ~/.job_pipeline/)
@@ -105,6 +112,9 @@ runs.jsonl            — append-only scoring trace (one JSON line per job per r
 applications.xlsx     — job tracker (written by metis track)
 feedback.md           — calibration notes injected into every scoring prompt
 schedule.json         — active schedule config (written by metis schedule set)
+role_queue.json       — pre-screen survivors deferred by MAX_JOBS_PER_RUN cap
+skipped_roles.json    — Limited Match metadata for summary/reporting
+email_sources.yaml    — extra alert email sources
 logs/                 — daily run logs + scheduled.log
 ```
 
@@ -124,13 +134,13 @@ logs/                 — daily run logs + scheduled.log
 
 ## Scoring pipeline summary
 ```
-Gmail IMAP → email parse (3-case shift detection) → 3-layer dedup
-→ [cap / Haiku pre-screen] → JD fetch (LinkedIn HTTP, 3x retry)
+Gmail IMAP → email parse (3-case shift detection) → dedup
+→ [cap / Haiku pre-screen / role queue] → JD fetch (LinkedIn HTTP, 3x retry)
 → Haiku Layer 1 extract (27 fields) → hard gates (jd_blank, salary_floor)
 → Sonnet Layer 2 score (6-dim rubric, prompt-cached system prompt)
 → rank_jobs() → deal-breaker split → write_trace()
-→ HTML digest (Python fallback; format locked) → Gmail SMTP
-→ save_seen_roles() → tracker.py (_is_plausible_job_row gate) → applications.xlsx
+→ React Email digest (Python fallback; format locked) → Gmail SMTP
+→ save_seen_roles() → tracker write gate → applications.xlsx
 ```
 
 ## Where to look for more

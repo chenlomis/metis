@@ -88,18 +88,18 @@ metis feedback
     │ load last_run.json → display last digest summary
     │ collect free-form text (blank line to finish)
     ▼
-feedback_cmd.py — _claude_process()
+feedback.py — _claude_process()
     │ Haiku call: parse roles/dims mentioned, detect real conflicts with
     │   existing feedback.md, flag explicit permanent preferences
     │ conflict resolution: user picks new/both/discard
     │ profile-item routing: save to feedback.md / profile / both
     ▼
-feedback_cmd.py — append_feedback_entry()
+feedback.py — append_feedback_entry()
     │ appends tagged entry to ~/.job_pipeline/feedback.md
     │ comment header: <!-- id:fb_YYYYMMDD_xxxx | run:... | roles:... | dims:... -->
     │ followed by: ## [user] YYYY-MM-DD + raw text
     ▼
-feedback_cmd.py — write_feedback_log()
+feedback.py — write_feedback_log()
     │ appends audit record to feedback_log.jsonl (never injected into prompts)
     │ fields: feedback_id, run_id, timestamp, roles, dims, text_length
     ▼
@@ -246,7 +246,7 @@ profiles don't break on upgrade. Document the new field in `README.md § Configu
 Key `.env` fields:
 | Variable | Default | Effect |
 |---|---|---|
-| `MAX_JOBS_PER_RUN` | `20` | Cap before interactive prompt triggers; `0` = no cap |
+| `MAX_JOBS_PER_RUN` | `40` | Cap before interactive prompt triggers; `0` = no cap |
 | `DEFAULT_LOOKBACK` | `3d` | How far back IMAP search reaches |
 | `MODEL` | `claude-sonnet-4-6` | Sonnet model for full scoring |
 | `PRESCREEN_MODEL` | `claude-haiku-4-5` | Haiku model for pre-screen pass |
@@ -299,7 +299,7 @@ See README § Privacy for the full data flow table.
 | `trace.py` | `write_trace()` → `runs.jsonl`; called for every job regardless of verdict |
 | `init_cmd.py` | `metis init` wizard (4-step, re-runnable); offers schedule setup at end |
 | `schedule_cmd.py` | Schedule install/remove/show; builds launchd plist (macOS) or crontab line (Linux) |
-| `feedback_cmd.py` | `metis feedback`: collect → Haiku parse → confirm → append to `feedback.md` |
+| `feedback.py` | `metis feedback`: collect → Haiku parse → confirm → append to `feedback.md` |
 
 ---
 
@@ -620,10 +620,10 @@ Scored against a 22-dimension framework across four quadrants: Value, Usability,
 |---|---|---|---|
 | v1 | 2026-06-16 | 7.0 | Baseline — tracker + init wizard + prompt caching |
 | v2 | 2026-06-18 | 7.5 | +source diversity (proactive ATS), +feedback loop, +AI moat (extract.py 27-field schema) |
-| v3 | 2026-06-18 | 7.6 | +onboarding (init2 wizard), +polish (InquirerPy), +sources cmd |
+| v3 | 2026-06-18 | 7.6 | +onboarding polish (InquirerPy), +career-page sources |
 | v4 | 2026-06-19 | 7.8 | +observability (trace.py / runs.jsonl), +learnability, +feedback (structured JSONL) |
-| v5 | 2026-06-22 | 8.0 | +reliability (3-retry backoff, launchd fallback), +polish (v7 visual refresh), 397/397 tests |
-| v6 | 2026-06-23 | 8.2 | +polish 9.0 (✓/? symbols, you/your voice), +onboarding (init2 → primary init), +report_cmd |
+| v5 | 2026-06-22 | 8.0 | +reliability (3-retry backoff, launchd fallback), +polish (v7 visual refresh), test suite green |
+| v6 | 2026-06-23 | 8.2 | +polish 9.0 (✓/? symbols, you/your voice), +primary `metis init`, +summary report |
 
 Top strengths (v6): AI proprietary moat 9.0, edge case grittiness 9.0, consistency & polish 9.0, documentation 9.0.
 Remaining gaps: bootstrap experience 5.5 (Gmail + venv setup still manual), performance 7.0 (no async fetch).

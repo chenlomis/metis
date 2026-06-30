@@ -10,11 +10,11 @@ See ARCHITECTURE.md for deep technical detail.
 **D-01 · profile.yaml lives outside the repo (`~/.job_pipeline/`)**
 Personal data (resume text, salary, location) must never be committed. The repo ships `profile.template.yaml` and `examples/profile_*.yaml` with fake personas. `mode=0600` enforced on write.
 
-**D-02 · Single profile.yaml for v1; conceptually four files**
-Target mental model: `profile.yaml` (candidate), `sources.yaml` (job sources), `config.yaml` (thresholds/schedule), `feedback.md` (calibration). They stay in one file for v1 simplicity but code should treat them as separate concerns — no cross-concern reads in the same function. Split when there's a concrete reason (MCP config-as-parameters refactor is the likely trigger).
+**D-02 · Keep user config local; split files only when the boundary is real**
+Target mental model: `profile.yaml` (candidate + preferences), `email_sources.yaml` (extra alert senders), `config.yaml` (thresholds/schedule), and `feedback.md` (calibration). Most config still lives in `profile.yaml` for v1 simplicity, but code should treat those concerns separately. Split when there's a concrete reason; MCP/config-as-parameters is the likely trigger.
 
 **D-03 · `experience`, `education`, `strengths` nest under `candidate`**
-These are resume-derived facts about the person, not search preferences. Nesting them under `candidate` makes the boundary explicit: `candidate.*` = "who you are", everything else = "what you want". Decided June 2026 with init2 schema simplification.
+These are resume-derived facts about the person, not search preferences. Nesting them under `candidate` makes the boundary explicit: `candidate.*` = "who you are", everything else = "what you want". Decided June 2026 during the profile schema simplification.
 
 **D-04 · `deal_breakers` and `salary_floor_usd` are top-level**
 They are search-criteria, not identity. Keeping them top-level (not under `preferences`) signals their weight: hard gates, not soft signals. `preferences.base_salary_target_usd` is the aspirational number; `salary_floor_usd` is the filter.
@@ -24,18 +24,18 @@ They are search-criteria, not identity. Keeping them top-level (not under `prefe
 
 ---
 
-## Onboarding (init / init2)
+## Onboarding (`metis init`)
 
-**D-06 · `metis init` is now the conversational wizard (formerly init2); init2_cmd.py kept as reference**
-The conversational flow (freeform resume paste → Claude extract → clarification → review) proved lower-friction and higher completion rate than the structured 8-step form. As of June 2026, `metis init` routes to the conversational wizard. `init_cmd.py` (structured form) and `init2_cmd.py` are retained as reference implementations. They write to the same `profile.yaml` and are interchangeable.
+**D-06 · `metis init` is the canonical setup wizard**
+The current flow (resume import → Claude extraction → preference/deal-breaker questions → review + save) proved lower-friction than the older structured form. As of June 2026, `metis init` is the only public onboarding command. Legacy setup code may remain for reference, but it should not appear in public help or docs.
 
-**D-07 · init2 edit menu mirrors wizard steps, not profile fields**
+**D-07 · The init edit menu mirrors wizard steps, not profile fields**
 The review menu offers "Step 2 — What you're looking for" and "Step 3 — What you'd pass on" rather than "Roles + level", "Salary floor", etc. Users entered data through steps, so editing should mirror that mental model. Field-level edits available via "Open profile in editor" for power users.
 
 **D-08 · "Re-run extraction" only appears when resume context is available**
 In quick-edit mode (existing profile), the wizard has no resume in memory. Showing "Re-run extraction" would be a broken promise (API key present but no resume to re-extract from). The option is conditionally hidden rather than shown-but-disabled to avoid confusion.
 
-**D-09 · init2 uses single-line text for Steps 2–3 (not multiline textarea)**
+**D-09 · Init uses single-line text for Steps 2–3, not multiline textarea**
 `inquirer.text(multiline=True)` without `vi_mode=True` submits on `Meta+Enter` (not `Enter`), causing apparent hangs. With `vi_mode=True`, users must press `Esc` then `Enter` — non-obvious and breaks on terminal resize. Single-line with `Enter` to submit is more reliable and sufficient; Claude extracts rich signal from one dense sentence.
 
 **D-10 · `_followups` returned as top-level key in the same YAML block**
@@ -74,7 +74,7 @@ Proactive jobs (Greenhouse/Lever API) arrive with JD pre-fetched. `enrich_jobs()
 The company list is a curated set of employers worth watching. Which roles to surface is derived from `profile.target.roles` (title patterns) and `profile.candidate.location` (country-level filter). This means the same companies.yml works for any job function — PM, SWE, design, etc.
 
 **D-48 · No tier system — all companies in companies.yml are active by default (June 2026)**
-The original S/A/B tier annotation limited runs to 15 of 50 companies. Tiers were removed: all companies in companies.yml are active unless explicitly excluded via `proactive_sources.exclude_companies` in `profile.yaml`. This gives full coverage across all 53 companies (46 Greenhouse, 6 Ashby, 4 Playwright) on every run. The tier field no longer exists in companies.yml or in profile.proactive_sources. Individual companies can still be excluded via `scorerole sources remove`.
+The original S/A/B tier annotation limited runs to 15 of 50 companies. Tiers were removed: all companies in companies.yml are active unless explicitly excluded via `proactive_sources.exclude_companies` in `profile.yaml`. This gives full coverage across all 53 companies (46 Greenhouse, 6 Ashby, 4 Playwright) on every run. The tier field no longer exists in companies.yml or in profile.proactive_sources. Individual companies can still be excluded via `metis sources remove`.
 
 **D-49 · Title filter strips level prefix for broader recall (June 2026)**
 `_build_title_patterns()` in `proactive.py` generates two tiers: level-qualified patterns (e.g. "staff product manager") and base-role patterns without the level prefix (e.g. "product manager"). This ensures companies that don't level-prefix their titles (Anthropic, OpenAI, GitHub, etc.) still surface matching roles. The level-fit evaluation happens downstream in scoring, not at the title-filter stage.
@@ -117,7 +117,7 @@ The Haiku processing step may detect feedback that belongs permanently in `profi
 **D-21 · `theme.py` is the single source of truth for all colors**
 No color hex values anywhere else in the codebase. Rich `style=` parameters must use `Style(color=THEME["key"])` objects — not f-string `"color:#hex"` (Rich's string parser rejects that syntax). `INQUIRER_STYLE` must be created via `get_style()` not a plain dict.
 
-**D-22 · Editor label in init2 is dynamically resolved at runtime**
+**D-22 · Editor label in init is dynamically resolved at runtime**
 `open_in_editor()` respects `$VISUAL`/`$EDITOR`, then tries `code` → `cursor` → `zed` → `nano`/`vi`. The menu item reflects what will actually open: "Open profile in VS Code" vs "Open profile in your default editor". Avoids surprising users who expect their configured editor.
 
 ---

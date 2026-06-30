@@ -58,7 +58,7 @@ metis/
   state.py         — run state / seen-jobs tracking
   track.py         — job tracking
   tracker.py       — tracker helpers
-  feedback_cmd.py  — feedback collection: collect → parse (Haiku) → save to feedback.md + feedback_log.jsonl
+  feedback.py      — feedback collection: collect → parse (Haiku) → save to feedback.md + feedback_log.jsonl
   sources/         — job source scrapers (proactive company career pages)
 
 emails/
@@ -155,7 +155,7 @@ make test-fast       # fast pass only
 
 # Manual — only if venv is already active:
 source venv/bin/activate
-pytest tests/ -q                                        # full pass (~397 tests, ~3s)
+pytest tests/ -q                                        # full pass (~459 tests, ~3s)
 pytest tests/test_core.py tests/test_schedule.py -q    # fast pass (~60 tests, <3s)
 ```
 
@@ -208,8 +208,7 @@ These constraints are enforced by `tests/test_render_format.py`. Run that test a
 
 ### 4. Profile YAML schema
 The profile has these top-level sections (order matters for display):
-`candidate`, `target`, `aspirations`, `preferences`, `scoring`, `experience`, `education`,
-`strengths`, `green_flags`, `yellow_flags`, `red_flags`, `deal_breakers`, `salary_floor_usd`, `notes`, `inferred`, `proactive_sources`
+`candidate`, `target`, `aspirations`, `preferences`, `deal_breakers`, `salary_floor_usd`, `inferred`, `track`, `notes`, `proactive_sources`
 
 ### 5. score.py ↔ render.py eval schema is a coupled contract
 The eval dict shape that `score.py` emits is consumed directly by `render.py`. These two files are **locked in lockstep** — changing one requires changing the other in the same edit:

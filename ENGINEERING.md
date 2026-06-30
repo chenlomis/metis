@@ -1,4 +1,4 @@
-# scorerole — Engineering Standards
+# metis — Engineering Standards
 
 Code quality criteria and implementation patterns for this codebase.
 Read this before generating new code. See CLAUDE.md for enforced constraints; see ARCHITECTURE.md for system design.
@@ -78,7 +78,7 @@ Do not add source-specific logic to `pipeline.py`.
 The dict that `score.py` emits and `render.py` consumes is a coupled contract. Changes to one require changes to the other. Use the `EvalResult` TypedDict in `types.py` so mismatches are type errors, not silent render failures.
 
 ```python
-# target: scorerole/types.py
+# target: metis/types.py
 from typing import TypedDict, Literal
 
 class EvalResult(TypedDict):
@@ -123,9 +123,9 @@ def test_salary_gate_filters_below_floor():
 
 ### Test file → module mapping
 Each production module has a corresponding test file:
-- `scorerole/score.py` → `tests/test_core.py`
-- `scorerole/extract.py` → `tests/test_extract.py`
-- `scorerole/track.py` → `tests/test_track.py` (target — not yet created)
+- `metis/score.py` → `tests/test_core.py`
+- `metis/extract.py` → `tests/test_extract.py`
+- `metis/track.py` → `tests/test_track.py` (target — not yet created)
 
 ### CI
 Run `make test` inside the venv. A GitHub Actions workflow (`.github/workflows/test.yml`) should run on every push to main. Tests that only pass locally are not tests.
@@ -193,9 +193,9 @@ Work through these in order. Run `make test` after each. Do not combine steps.
 
 | Step | Change | Risk | Status |
 |---|---|---|---|
-| 1 | Add `EvalResult` TypedDict in `types.py`; annotate `score.py`, `render.py`, `trace.py` | Zero — additive only | ✅ Done 2026-06-26 · 397/397 |
-| 2 | Split `render.py` → `render.py` (HTML only) + `deliver.py` (SMTP) | Low — mechanical split, tests cover render format | ✅ Done 2026-06-26 · 397/397 |
-| 3 | Split `track.py` → `track_imap.py`, `track_parse.py`, `track_write.py` | Medium — many functions, keep signatures identical | ✅ Done 2026-06-26 · 397/397 |
+| 1 | Add `EvalResult` TypedDict in `types.py`; annotate `score.py`, `render.py`, `trace.py` | Zero — additive only | Done 2026-06-26 |
+| 2 | Split `render.py` → `render.py` (HTML only) + `deliver.py` (SMTP) | Low — mechanical split, tests cover render format | Done 2026-06-26 |
+| 3 | Split `track.py` → `track_imap.py`, `track_parse.py`, `track_write.py` | Medium — many functions, keep signatures identical | Done 2026-06-26 |
 | 4 | Config-as-parameters: define `Config` dataclass, thread through all call sites | High — touches 9 modules; do last; requires full test pass | In progress — dataclass exists; legacy CLI paths still read env directly |
 
 Step 4 is the prerequisite for the MCP server. Do not attempt it until steps 1–3 are complete and green.
