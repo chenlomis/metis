@@ -94,7 +94,8 @@ metis/
   state.py          — seen_roles.json TTL store; _role_hash()
   trace.py          — write_trace() → ~/.job_pipeline/runs.jsonl (one record/job, every run)
   track.py          — parse confirmation/rejection emails → Applications.xlsx
-  tracker.py        — Applications.xlsx write helpers (called by track.py)
+  xlsx.py           — Applications.xlsx write helpers and column formatting
+  track_write.py    — tracker status update helpers used by metis track
   feedback.py       — metis feedback: collect notes → append to feedback.md → injected into scoring
   sources_cmd.py    — metis sources: list/add/remove/on/off email and company sources
   sources/
@@ -123,12 +124,12 @@ logs/                 — daily run logs + scheduled.log
 - `proactive.py` returns same job dict shape as LinkedIn (`source: "proactive"`, pre-filled `jd`); `enrich_jobs()` skips proactive jobs.
 - `open_to_remote` still exists in profile for backward compat; `location_preference` is the canonical field.
 - Profile lives at `~/.job_pipeline/profile.yaml` (outside repo). Repo has `profile.template.yaml` and `examples/`.
-- Python 3.9 compat: no `X | Y` union type syntax; use `Optional[X]` or string annotations.
+- Python 3.11+ is required. Modern type syntax is fine; do not add compatibility shims for older Python versions.
 - `trace.py` is the observability layer — `write_trace()` must be called for every job (prescreened, filtered, and scored). Do not remove or skip these calls.
 - Several modules still call `os.getenv()` at import time (score.py, extract.py, linkedin.py). This is a known library hygiene issue — do not make it worse. The config-as-parameters refactor will fix it.
 - **`render.py` email format is locked.** Section labels: "Solid Match / Moderate Match / Limited Match". Legend: "Strengths / Caution / Blockers". Stat tiles: "Evaluated / Solid Match / Moderate Match". Buttons: filled with verdict color, white text. Greeting: personalized when `candidate_name` set. Score breakdown must not appear in cards. Skipped section is a flat 2-col table. Enforced by `tests/test_render_format.py` — run after any render.py edit.
 - **`_role_hash()` in `state.py` is frozen.** MD5, `[:12]` slice, same normalization regex. Changing it invalidates `seen_roles.json` and causes a flood re-send.
-- **`_HEADERS` column order in `tracker.py` is frozen.** Existing `applications.xlsx` data relies on positional column indices. Header text is safe to rename; order is not.
+- **`_HEADERS` column order in `xlsx.py` is frozen.** Existing `applications.xlsx` data relies on positional column indices. Header text is safe to rename; order is not.
 - **`pipeline.py` stage order is load-bearing.** Deal-breaker split must run after `new_role_timestamps` is built and before `render_html`. `save_seen_roles` must run after `send_digest`. Do not reorder stages without explicit instruction.
 - **`score.py` eval schema and `render.py` are a coupled contract.** Verdict enum, 6 dimension names, 2 leveragePoints, 1 frictionPoint. Change both together or not at all.
 

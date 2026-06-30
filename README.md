@@ -215,7 +215,8 @@ metis
 
 > **Optional — Playwright-powered company sourcing:** metis can also pull roles directly from company career pages (Greenhouse, Lever, Ashby). This requires Playwright and is disabled by default. To enable:
 > ```bash
-> uv tool run "metis-job[browser]" -- playwright install chromium
+> pipx inject metis-job playwright --include-apps
+> playwright install chromium
 > # Then: metis sources add Stripe
 > ```
 

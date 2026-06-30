@@ -75,7 +75,7 @@ state.py — save_seen_roles()
     │ persists ONLY the roles that were actually scored
     │ merges into seen_roles.json, prunes entries older than 30 days
     ▼
-tracker.py — write_to_tracker()
+xlsx.py — write_to_tracker()
     │ _is_plausible_job_row() validation gate (blocks mis-parsed rows)
     │ appends Apply + Consider roles to applications.xlsx
     │ deduped by normalized title+company key; sorts by date descending
@@ -294,7 +294,7 @@ See README § Privacy for the full data flow table.
 | `render.py` | HTML digest building, SMTP delivery — output format locked; see CLAUDE.md constraint #0 |
 | `profile.py` | Profile YAML loader + `render_profile()` for scoring prompt |
 | `state.py` | `seen_roles.json` read/write/prune, `_role_hash()` — hash function frozen, do not change |
-| `tracker.py` | `applications.xlsx` write helpers; `_is_plausible_job_row()` validation gate; column order frozen |
+| `xlsx.py` | `applications.xlsx` write helpers; `_is_plausible_job_row()` validation gate; column order frozen |
 | `track.py` | Parse confirmation/rejection emails → update tracker status |
 | `trace.py` | `write_trace()` → `runs.jsonl`; called for every job regardless of verdict |
 | `init_cmd.py` | `metis init` wizard (4-step, re-runnable); offers schedule setup at end |
@@ -524,7 +524,7 @@ Score prompt updated: "foreign" (10) only applies when the role requires domain-
 Silent format regressions in `render.py` (legend labels, stat tile label, score breakdown visibility) were caused by agents making unsolicited changes during unrelated bug fixes. Fixed at two layers: CLAUDE.md constraint #0 names the locked strings; `tests/test_render_format.py` (18 assertions) enforces them after every edit. Format-breaking changes now fail tests immediately rather than surfacing in the next email.
 
 **LinkedIn positional parser: 3-case shift detection** (June 21 2026)
-`extract_jobs()` in `sources/linkedin.py` now detects when `before_lines[-2]` (expected company slot) looks like a location string and shifts all three fields up one position. Two additional cases handle company-name-in-title-slot patterns. `tracker.py` adds a second layer of defense via `_is_plausible_job_row()` which blocks mis-parsed rows at the xlsx write point.
+`extract_jobs()` in `sources/linkedin.py` now detects when `before_lines[-2]` (expected company slot) looks like a location string and shifts all three fields up one position. Two additional cases handle company-name-in-title-slot patterns. `xlsx.py` adds a second layer of defense via `_is_plausible_job_row()` which blocks mis-parsed rows at the xlsx write point.
 
 **launchd scheduled run reliability** (June 20 2026)
 DNS failures at Mac wake-from-sleep caused scheduled runs to fail with `[Errno 8] nodename nor servname provided`. Fixed with two layers: 3-attempt code-level retry (30s backoff) in `sources/linkedin.py`, plus `KeepAlive.SuccessfulExit=false` + `ThrottleInterval=900` in the launchd plist for a 15-minute OS-level retry if all code retries fail.

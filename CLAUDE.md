@@ -1,7 +1,7 @@
 # metis — Claude Code context
 
 ## What this project is
-A personal job alert pipeline. It pulls job listings, scores them against a user profile using Claude, and sends a personalized email digest. CLI entry point: `metis` → `metis/pipeline.py`.
+A personal job alert pipeline. It pulls job listings, scores them against a user profile using Claude, and sends a personalized email digest. CLI entry point: `metis` → `metis/cli.py:main`; digest orchestration lives in `metis/pipeline.py`.
 
 ## Key commands
 ```
@@ -47,7 +47,8 @@ METIS_THEME=dark  metis [...]
 ## File map
 ```
 metis/
-  pipeline.py      — CLI entry point, routes subcommands
+  cli.py           — CLI parsing and subcommand routing
+  pipeline.py      — digest pipeline orchestration
   init_cmd.py      — interactive profile setup wizard (InquirerPy + Rich)
   theme.py         — ALL colors, styles, and print helpers (single source of truth)
   profile.py       — load/save ~/.job_pipeline/profile.yaml
@@ -57,7 +58,8 @@ metis/
   schedule_cmd.py  — cron scheduling wizard
   state.py         — run state / seen-jobs tracking
   track.py         — job tracking
-  tracker.py       — tracker helpers
+  xlsx.py          — applications.xlsx write helpers
+  track_write.py   — tracker status update helpers
   feedback.py      — feedback collection: collect → parse (Haiku) → save to feedback.md + feedback_log.jsonl
   sources/         — job source scrapers (proactive company career pages)
 
@@ -226,8 +228,8 @@ OSS users who want to customize the schema must change score.py prompt + render.
 ### 6. state.py `_role_hash()` is a persisted key — do not change
 `_role_hash(title, company)` in `state.py` produces the dedup keys stored in `~/.job_pipeline/seen_roles.json`. Changing the hash function (normalization regex, algorithm, slice length) invalidates all historical keys — every previously seen role re-processes on the next run, causing a flood email. The current implementation (`md5(normalize(title+company))[:12]`) is intentional and sufficient — do not "improve" it.
 
-### 7. tracker.py column order is a persisted xlsx schema — do not reorder or insert
-`_HEADERS` and `_COL_*` constants in `tracker.py` define the column layout of `applications.xlsx`. The file may contain months of history. **Column order must never change** without an explicit migration plan — inserting or reordering columns corrupts existing rows.
+### 7. xlsx.py column order is a persisted xlsx schema — do not reorder or insert
+`_HEADERS` and `_COL_*` constants in `xlsx.py` define the column layout of `applications.xlsx`. The file may contain months of history. **Column order must never change** without an explicit migration plan — inserting or reordering columns corrupts existing rows.
 
 Safe to change: column header *text* in `_HEADERS` (row 1 display names), tracker file path (via `TRACKER_PATH` env var).
 Not safe without migration: adding a column in the middle, removing a column, reordering.
@@ -281,4 +283,4 @@ If running separate Claude Code sessions on design vs. build:
 - `render.py` is build-owned for bug fixes and new data wiring only — output format is locked (see constraint #0)
 - `pipeline.py` stage order is locked — bug fixes only, no restructuring (see constraint #8)
 - `state.py` `_role_hash()` is frozen — do not touch (see constraint #6)
-- `tracker.py` column order is frozen — header text and file path are safe to change, order is not (see constraint #7)
+- `xlsx.py` column order is frozen — header text and file path are safe to change, order is not (see constraint #7)
