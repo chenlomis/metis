@@ -1,8 +1,7 @@
 # metis candidate profile template
 # ─────────────────────────────────────────────────────────────────────────────
 # Copy to ~/.job_pipeline/profile.yaml and fill in, OR run:
-#   metis init   (structured wizard)
-#   metis init2  (conversational, beta)
+#   metis init
 #
 # Mental model:
 #   candidate.*   — who you are  (from resume + LinkedIn)

@@ -220,11 +220,11 @@ def _td(content: str, width: str | None = None, align: str = "left",
 
 
 def _fit_pill(label: str) -> str:
-    if "Strong" in label:
-        return f'<span style="background:#eef2ee;color:#2d5a2d;font-size:10px;font-weight:500;padding:2px 7px;border-radius:10px;">🟢 Strong</span>'
-    if "Partial" in label:
-        return f'<span style="background:#faeeda;color:#854f0b;font-size:10px;font-weight:500;padding:2px 7px;border-radius:10px;">🟡 Partial</span>'
-    return f'<span style="background:#f2eeee;color:#8b2e2e;font-size:10px;font-weight:500;padding:2px 7px;border-radius:10px;">🔴 Gap</span>'
+    if "Solid" in label or "Strong" in label:
+        return f'<span style="background:#eef2ee;color:#2d5a2d;font-size:10px;font-weight:500;padding:2px 7px;border-radius:10px;">Solid</span>'
+    if "Moderate" in label or "Partial" in label:
+        return f'<span style="background:#faeeda;color:#854f0b;font-size:10px;font-weight:500;padding:2px 7px;border-radius:10px;">Moderate</span>'
+    return f'<span style="background:#f2eeee;color:#8b2e2e;font-size:10px;font-weight:500;padding:2px 7px;border-radius:10px;">Gap</span>'
 
 
 def _trend_pill(label: str) -> str:
@@ -259,7 +259,7 @@ def _bar_chart(daily: dict) -> str:
             bh  = max(1, math.ceil(val / max_v * H)) if val > 0 else 0
             filled   = val > 0 and level <= bh
             top_cell = val > 0 and level == bh
-            bg     = TOTAL_NUM if filled else "transparent"  # #1f2118 matches Total Applied tile
+            bg     = APPLY_NUM if filled else "transparent"
             radius = "border-radius:2px 2px 0 0;" if top_cell else ""
             cells += (
                 f'<td width="{col_w}" style="width:{col_w}px;height:10px;'
@@ -333,26 +333,26 @@ _SURFACE_LABELS: dict[str, str] = {
     "internal_tools": "Internal Tooling",
 }
 
-# Lomis's profile fit for skill domains (Strong / Partial / Gap)
+# Lomis's profile fit for skill domains (Solid / Moderate / Gap)
 _SKILL_FIT: dict[str, str] = {
-    "roadmap": "Strong", "technical_specs": "Strong", "ml_ai": "Strong",
-    "platform": "Strong", "api": "Strong",
-    "user_research": "Partial", "gtm": "Partial", "data_analysis": "Partial",
-    "data": "Partial",
-    "growth": "Gap", "mobile": "Gap", "hardware": "Gap", "internal_tools": "Partial",
+    "roadmap": "Solid", "technical_specs": "Solid", "ml_ai": "Solid",
+    "platform": "Solid", "api": "Solid",
+    "user_research": "Moderate", "gtm": "Moderate", "data_analysis": "Moderate",
+    "data": "Moderate",
+    "growth": "Gap", "mobile": "Gap", "hardware": "Gap", "internal_tools": "Moderate",
 }
 
 # Vertical display names keyed by (company_tier, customer_type)
 # fit_areas = Lomis's relevant skills for this vertical type
 _VERTICAL_META: dict[tuple, tuple[str, str, str]] = {
     # (company_tier, customer_type) -> (display_name, fit_areas, fit)
-    ("large_private", "b2b"):      ("Enterprise SaaS (Large Private)", "AI Platform, CLM, IAM",  "Strong"),
-    ("large_public",  "b2b"):      ("Enterprise SaaS (Large Public)",  "Enterprise Platform",    "Strong"),
-    ("growth",        "b2b"):      ("Growth-Stage B2B",                "0→1 Product",            "Strong"),
-    ("early",         "b2b"):      ("Early-Stage B2B",                 "0→1 Scope",              "Partial"),
-    ("large_private", "developer"):("Developer Tools",                  "Azure CLI, API Design",  "Strong"),
-    ("large_public",  "b2c"):      ("Consumer (Large Public)",         "Consumer UX",            "Partial"),
-    ("large_private", "b2c"):      ("Consumer (Large Private)",        "Consumer UX",            "Partial"),
+    ("large_private", "b2b"):      ("Enterprise SaaS (Large Private)", "AI Platform, CLM, IAM",  "Solid"),
+    ("large_public",  "b2b"):      ("Enterprise SaaS (Large Public)",  "Enterprise Platform",    "Solid"),
+    ("growth",        "b2b"):      ("Growth-Stage B2B",                "0→1 Product",            "Solid"),
+    ("early",         "b2b"):      ("Early-Stage B2B",                 "0→1 Scope",              "Moderate"),
+    ("large_private", "developer"):("Developer Tools",                  "Azure CLI, API Design",  "Solid"),
+    ("large_public",  "b2c"):      ("Consumer (Large Public)",         "Consumer UX",            "Moderate"),
+    ("large_private", "b2c"):      ("Consumer (Large Private)",        "Consumer UX",            "Moderate"),
 }
 
 
@@ -457,7 +457,7 @@ def load_market_intel(
         pct = cnt / n * 100
         trend = "Trending ↑" if pct > 50 else ("Established" if pct > 20 else "Niche")
         label = _STACK_LABELS.get(key) or _SURFACE_LABELS.get(key, key)
-        fit   = _SKILL_FIT.get(key, "Partial")
+        fit   = _SKILL_FIT.get(key, "Moderate")
         skills_a.append({
             "name": label, "freq": cnt, "freq_pct": f"{round(pct)}%",
             "trend": trend, "fit": fit,
@@ -480,7 +480,7 @@ def load_market_intel(
             parts = [p for p in key if p]
             name = " / ".join(p.replace("_", " ").title() for p in parts) or "Unknown"
             fit_areas = "—"
-            fit = "Partial"
+            fit = "Moderate"
         verticals_b.append({
             "name": name, "freq": cnt,
             "fit_areas": fit_areas, "fit": fit,

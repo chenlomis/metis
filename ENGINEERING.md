@@ -21,7 +21,7 @@ Read this before generating new code. See CLAUDE.md for enforced constraints; se
 
 ### Module size
 - **Hard limit: 400 lines per module.** If a file exceeds this, it has more than one responsibility.
-- Current exceptions (tracked as tech debt): `track.py` (1,348), `init_cmd.py` (1,467), `pipeline.py` (908). Do not make these larger.
+- Current exceptions (tracked as tech debt): `track.py` (~1,275), `report_cmd.py` (~893), `init_cmd.py` (~813), `score.py` (~695), `pipeline.py` (~607), `render.py` (~581). Do not make these larger.
 - When adding to a large module, ask: does this belong here, or does it warrant a new file?
 
 ### Function length
@@ -64,7 +64,7 @@ def score_jobs(jobs, *, config: Config):
     ...
 ```
 
-`Config` is a dataclass defined in `config.py` and built once in `main()`. All functions receive it as a parameter. This is the prereq for the MCP server (Stage 1 of the interface roadmap).
+`Config` is a dataclass defined in `config.py`. New code should receive configuration through parameters instead of adding new module-level environment reads. Some legacy CLI paths still read environment variables directly; finish migrating those before exposing metis as a long-lived service or MCP server.
 
 ### Source abstraction
 New job sources belong in `sources/`. Each source module must:
@@ -196,6 +196,6 @@ Work through these in order. Run `make test` after each. Do not combine steps.
 | 1 | Add `EvalResult` TypedDict in `types.py`; annotate `score.py`, `render.py`, `trace.py` | Zero — additive only | ✅ Done 2026-06-26 · 397/397 |
 | 2 | Split `render.py` → `render.py` (HTML only) + `deliver.py` (SMTP) | Low — mechanical split, tests cover render format | ✅ Done 2026-06-26 · 397/397 |
 | 3 | Split `track.py` → `track_imap.py`, `track_parse.py`, `track_write.py` | Medium — many functions, keep signatures identical | ✅ Done 2026-06-26 · 397/397 |
-| 4 | Config-as-parameters: define `Config` dataclass, thread through all call sites | High — touches 9 modules; do last; requires full test pass | ✅ Done 2026-06-26 · 397/397 |
+| 4 | Config-as-parameters: define `Config` dataclass, thread through all call sites | High — touches 9 modules; do last; requires full test pass | In progress — dataclass exists; legacy CLI paths still read env directly |
 
 Step 4 is the prerequisite for the MCP server. Do not attempt it until steps 1–3 are complete and green.

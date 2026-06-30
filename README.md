@@ -1,14 +1,22 @@
-<!-- logo or demo gif goes here -->
-
 # metis
 
 **Spend your time and energy on roles that matter.**
 
-Metis is an AI-powered career agent that automates the first round of job discovery by screening and ranking new opportunities against your profile, experience, career goals, and deal breakers. It does so by consolidating roles from job alerts and company career pages, semantically compares them to your background, and delivers a personalized scored digest on a schedule you control. Beyond that, it also automatically track applications and recruiter responses in a spreadsheet and generate summaries to help you understand how your search is progressing over time 
+Metis is an AI-powered career agent that automates the first round of job discovery by screening and ranking new opportunities against your profile, experience, career goals, and deal breakers. It consolidates roles from job alerts and company career pages, compares them to your background, and delivers a personalized scored digest on a schedule you control. It can also track applications and recruiter responses in a spreadsheet, then generate summaries that show how your search is progressing over time.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Powered by Claude](https://img.shields.io/badge/powered%20by-Claude%20Sonnet-blueviolet.svg)](https://www.anthropic.com)
+
+![Metis demo preview](docs/assets/metis-demo-thumbnail.png)
+
+<!--
+Demo video note:
+Upload the local demo MP4 to a GitHub Release or issue comment,
+then replace the placeholder below with the generated GitHub asset URL.
+Avoid committing the MP4 directly; it is over 100 MB.
+-->
+<!-- [Watch the demo](https://github.com/chenlomis/metis/assets/REPLACE_ME) -->
 
 ---
 
@@ -26,12 +34,12 @@ Metis is an AI-powered career agent that automates the first round of job discov
 
 ## What it does
 
-**Profile setup (`metis init`).** This is an interactive wizard that builds your profile by (1) reading your resume & linked in profile, and (2) understanding relevant info on your aspirations, preferences, and deal breakers. Claude uses the info to build a `profile.yaml`, which every future scoring run is evaluated against. You can rerun it or edit the file directly at any time. 
+**Profile setup (`metis init`).** This is an interactive wizard that builds your profile by reading your resume, optionally enriching from LinkedIn, and asking about your aspirations, preferences, and deal breakers. Claude uses that context to build a `profile.yaml`, which every future scoring run is evaluated against. You can rerun it or edit the file directly at any time.
 
- As part of the set up, you can also add company career-page sources with (`metis sources add`) and enable automated scheduling with (`metis schedule`). Both can be edited and reconfigured later 
+As part of setup, you can also add company career-page sources with `metis sources add` and enable automated scheduling with `metis schedule`. Both can be edited and reconfigured later.
 
 
-**Email digest (`metis`).** Each run ingests new roles from all configured sources, deduplicates across runs, extract relevant info, and scores each role through a multi-stage Claude pipeline. The end result is a HTML email digest with scored roles. Every JD gets a categorical verdict and a 0-100 score:
+**Email digest (`metis`).** Each run ingests new roles from all configured sources, deduplicates across runs, extracts relevant info, and scores each role through a multi-stage Claude pipeline. The end result is an HTML email digest with scored roles. Every JD gets a categorical verdict and a 0-100 score:
 
 - Solid Match (75+): roles worth prioritizing
 - Moderate Match (55-74): roles worth a closer look
@@ -39,11 +47,11 @@ Metis is an AI-powered career agent that automates the first round of job discov
 
 Each evaluation surfaces two strengths and one potential friction point, alongside normalized tags for a quick scan. Roles in the Solid Match and Moderate Match tiers are automatically written to `applications.xlsx` to kickstart application tracking.
 
-**Application tracking (`metis track`).** After you apply, this command scans your inbox for confirmation, rejection, and recruiter emails and updates the `applications.xlsx` correspondingly
+**Application tracking (`metis track`).** After you apply, this command scans your inbox for confirmation, rejection, and recruiter emails and updates `applications.xlsx`.
 
 **Progress reporting (`metis summary`).** High-level insights across score distribution, verdict trends, and application rates. Useful both for tracking how your search has evolved and for spotting patterns that help calibrate your profile over time.
 
-**Feedback tuning (`metis feedback`).** After reviewing the digest, app tracker, or the overall summary, you can provide generic or specific feedback via this command (i.e "seed-stage roles keep scoring high but I always skip them"). The system parses it, asks you to confirm the signal, and injects the signals into all future scoring runs as a high-priority calibration note. Feedback currently has a 30day TTL and conflicting signals are handled gracefully.
+**Feedback tuning (`metis feedback`).** After reviewing the digest, app tracker, or overall summary, you can provide generic or specific feedback via this command, such as "seed-stage roles keep scoring high but I always skip them." The system parses it, asks you to confirm the signal, and injects it into future scoring runs as a high-priority calibration note.
 
 ---
 
@@ -174,7 +182,7 @@ GMAIL_APP_PASSWORD=xxxx-xxxx-xxxx-xxxx
 
 # Optional (defaults shown)
 RECIPIENT_EMAIL=you@gmail.com       # where to send the digest (defaults to GMAIL_ADDRESS)
-MAX_JOBS_PER_RUN=20                 # cap per run to control API cost; 0 = no cap
+MAX_JOBS_PER_RUN=40                 # cap per run to control API cost; 0 = no cap
 DEFAULT_LOOKBACK=3d                 # how far back to fetch on each run
 MODEL=claude-sonnet-4-6             # Claude model for full scoring
 PRESCREEN_MODEL=claude-haiku-4-5    # model for quick title/company pre-screening
@@ -211,7 +219,7 @@ metis
 > # Then: metis sources add Stripe
 > ```
 
-**Expected output:** metis fetches LinkedIn alert emails from the last 3 days, scores each role, and emails you a ranked digest. On first run this takes 30-90 seconds depending on how many roles it finds.
+**Expected output:** metis fetches LinkedIn alert emails from the last 3 days, scores each role, and emails you a ranked digest. On first run this usually takes 30-90 seconds for small batches, and longer if many roles need JD extraction and scoring.
 
 > **No emails found?** LinkedIn alert emails may take up to 24 hours to arrive after setup. Run `metis --lookback 14d` to cast a wider net, or see [Troubleshooting](#troubleshooting).
 
@@ -267,7 +275,7 @@ LinkedIn alert senders are built in. Company sourcing can pull roles directly fr
 | `metis summary --lookback 60d`       | Scope market intel to a 60-day window. Default is 30d.                                  |
 | `metis summary --output report.html` | Save the report as HTML instead of sending it.                                          |
 | `metis summary --output report.pdf`  | Save the report as PDF instead of sending it.                                           |
-| `metis summary --send`               | Send the report as a real email, without the draft preview prefix.                      |
+| `metis summary --preview`            | Send the report with a `[DRAFT PREVIEW]` subject prefix.                                |
 | `metis feedback`                     | Add calibration notes that improve future scoring runs.                                 |
 | `metis feedback add`                 | Same as `metis feedback`.                                                               |
 | `metis feedback list`                | Show recent feedback entries.                                                           |
@@ -306,6 +314,7 @@ Local data stored in `~/.job_pipeline/` (outside the repo, never committed):
 |-----------------------|--------------------------------------------------|-------------------------|
 | `profile.yaml`        | Your extracted profile                           | 600 (owner-readable)    |
 | `seen_roles.json`     | MD5 hashes of scored roles and timestamps, 30-day TTL | 600 (owner-readable) |
+| `role_queue.json`     | Pre-screened roles waiting for the next capped scoring run | 600 (owner-readable) |
 | `logs/YYYY-MM-DD.log` | Pipeline run logs (may contain job titles)       | default                 |
 
 ---
@@ -314,7 +323,9 @@ Local data stored in `~/.job_pipeline/` (outside the repo, never committed):
 
 Scoring a typical 10-job batch costs roughly $0.05-0.15 with `claude-sonnet-4-6`. Running `metis` daily on a typical alert volume (20-30 roles/week) runs about $0.50-2.00/month.
 
-When more than `MAX_JOBS_PER_RUN` new roles appear (default: 20), metis pauses and shows the count and estimated cost before proceeding. Roles beyond the cap stay unseen and reappear next run. They are never silently discarded.
+Runtime depends on how many roles survive deduplication and pre-screening. A larger run may make several model calls: Haiku pre-screening, structured JD extraction, then Sonnet scoring. metis logs chunk progress while it works so long runs do not look frozen.
+
+When more than `MAX_JOBS_PER_RUN` new roles appear (default: 40), metis pauses and shows the count and estimated cost before proceeding. If you choose fewer than the available roles, metis pre-screens the full batch, scores the freshest roles up to your chosen count, and stores the remaining pre-screen survivors in `role_queue.json` for the next run. They are never silently discarded or marked seen before scoring.
 
 Set `MAX_JOBS_PER_RUN=0` in `.env` to remove the cap.
 

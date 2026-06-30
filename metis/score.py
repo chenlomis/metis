@@ -336,12 +336,16 @@ def _build_score_suffix(name: str, apply_t: int, consider_t: int, salary_is_hard
                                  collaboration_model: embedded eng collab vs heavy XFN
                                Default each to 50 when absent (neutral, no penalty).
                                Compare against the candidate's stated company_types and aspirations.
+                               Fast-paced shipping, high ownership, and ambiguous role boundaries
+                               are positive signals when the profile favors 0→1 / growth-stage work.
+                               Do not turn those into friction unless the JD states unsustainable
+                               hours, on-call expectations, or unusually high travel.
 
   domain_background   (0.15)  Does this role require niche domain expertise the candidate demonstrably lacks?
                                Score by how much the DOMAIN BARRIER (not just industry preference) costs real effectiveness:
                                100 — native domain (AI infra, dev tools, enterprise SaaS, platform/infra PM); or any domain
                                      where general PM skills transfer without meaningful loss.
-                               70  — adjacent domain (B2C consumer, fintech, productivity, marketplace); PM fundamentals
+                               70  — adjacent domain (B2B SaaS, B2C consumer, fintech, productivity, marketplace); PM fundamentals
                                      apply, domain knowledge is learnable on the job. This is the DEFAULT when domain
                                      is ambiguous — do NOT penalize the absence of industry_targets match alone.
                                40  — regulated/compliance domain requiring specific credential knowledge the candidate
@@ -352,6 +356,12 @@ def _build_score_suffix(name: str, apply_t: int, consider_t: int, salary_is_hard
                                Use extracted customer_type, product_surface, industry as signal.
                                Positive industry_targets (AI infra, dev tools) signal what the candidate PREFERS —
                                they do NOT make all other domains a penalty. Only regulate compliance barriers score low.
+                               A product surface being outside the candidate's strongest background is not by itself
+                               a negative. It is only a caution when the JD explicitly requires domain-specific
+                               credibility, credentials, buyer relationships, or years of experience.
+                               Do not let domain_background alone push a role below the consider threshold unless
+                               the JD states a hard prerequisite domain barrier. If seniority, PM craft, and product
+                               surface fit are strong, adjacent verticals should stay consider-or-better.
 
   company_stage       (0.10)  Does the company stage match the candidate's stated preference?
                                Use extracted company_stage and company_tier.
@@ -407,9 +417,14 @@ GOOD: "8-yr AI platform track maps to required infra ownership scope."
 For deal-breaker filtered roles, emit dimensions: [] (no scoring performed).
 
 leveragePoints: exactly 2 bullets following the writing rules above. Always 2 — never 1, never 3.
-frictionPoints: exactly 1 honest, specific concern following the writing rules above.
-  Use [] only if there is genuinely no material concern at all.
+frictionPoints: 0 or 1 honest, specific concern following the writing rules above.
+  Use [] when there is no material caution. Do not manufacture a concern just to fill the field.
   NEVER write placeholder text ("none", "n/a", "no concerns", "none material").
+  Do not write positive or neutral signals as friction. Fast-paced shipping, B2B SaaS,
+  productivity SaaS, public-company scale, and adjacent domain learning are not cautions
+  unless the JD makes them concrete risks for this candidate.
+  For apply/consider roles, friction should answer "what should the candidate verify?"
+  not "what is imperfect?" Omit friction when the only issue is non-native-but-learnable domain.
   For "skipped" verdict: frictionPoints[0] is shown as the skip reason in the digest.
     Write it as a short phrase (≤12 words). Always use JSON array syntax: ["phrase here"]
     BAD: ["The role is scoped as TPM, not PM — the candidate's career track is IC PM, making this misaligned regardless of company prestige."]
@@ -423,7 +438,7 @@ TAG VOCABULARY — pick only from this list; do not invent new tags:
     "level: Principal scope" "0→1 scope"               "AI-native team"
     "strong eng collab"     "comp: meets floor"
 
-  AMBER (caution — evaluate carefully):
+  AMBER (material caution — evaluate carefully, not a generic preference gap):
     "domain: adjacent"      "domain: B2C gap"          "domain: hardware-adj"
     "level: scope unclear"  "level: title gap"         "level: overqualified"
     "stage: seed/early"     {"'comp: undisclosed'" if salary_is_hard_floor else "(comp:undisclosed — DO NOT USE: salary is aspirational, not a hard floor)"}        "visa: unclear"
@@ -435,6 +450,11 @@ TAG VOCABULARY — pick only from this list; do not invent new tags:
 
   For deal-breaker filtered roles the gate code sets the tag automatically — do not add more.
   Use up to 4 tags. Pick the best match; do not combine two tags for the same dimension.
+  Never assign a sentiment that conflicts with the vocabulary above. In particular,
+  "stage: public co fit" is GREEN, not amber; B2B productivity SaaS is not a domain caution;
+  and "domain: foreign" requires an explicit hard domain prerequisite, not merely a preference mismatch.
+  Do not use "domain: adjacent" as a generic warning tag when the role is otherwise a strong
+  PM/product-surface fit. Use it only when the JD asks for credible domain fluency the profile lacks.
 
 Thresholds (from the candidate's profile.yaml scoring section):
   score >= {apply_t}  →  apply
@@ -602,6 +622,7 @@ def _score_chunk(client: anthropic.Anthropic, jobs: list[dict], system_prompt: s
             )
     _inject_weights(evals)
     _normalize_list_fields(evals)
+    _normalize_tag_sentiments(evals)
     return evals
 
 
@@ -614,6 +635,55 @@ def _normalize_list_fields(evals: list[dict]) -> None:
                 ev[field] = [val.strip()] if val.strip() else []
             elif not isinstance(val, list):
                 ev[field] = []
+
+
+_TAG_SENTIMENTS = {
+    # Green
+    "AI/ML: native": "green",
+    "dev tools: match": "green",
+    "enterprise SaaS: match": "green",
+    "stage: growth fit": "green",
+    "stage: public co fit": "green",
+    "level: Staff/Lead scope": "green",
+    "level: Principal scope": "green",
+    "0→1 scope": "green",
+    "AI-native team": "green",
+    "strong eng collab": "green",
+    "comp: meets floor": "green",
+    # Amber
+    "domain: adjacent": "amber",
+    "domain: B2C gap": "amber",
+    "domain: hardware-adj": "amber",
+    "level: scope unclear": "amber",
+    "level: title gap": "amber",
+    "level: overqualified": "amber",
+    "stage: seed/early": "amber",
+    "comp: undisclosed": "amber",
+    "visa: unclear": "amber",
+    "degree gate": "amber",
+    "anon employer": "amber",
+    # Red
+    "domain: foreign": "red",
+    "comp: below floor": "red",
+    "export ctrl flag": "red",
+    "clearance required": "red",
+    "hard prereq: background": "red",
+}
+
+
+def _normalize_tag_sentiments(evals: list[dict]) -> None:
+    """Keep known tag text aligned with the rubric's canonical sentiment."""
+    for ev in evals:
+        tags = ev.get("tags", [])
+        if not isinstance(tags, list):
+            ev["tags"] = []
+            continue
+        for tag in tags:
+            if not isinstance(tag, dict):
+                continue
+            text = tag.get("text")
+            if text in _TAG_SENTIMENTS:
+                tag["sentiment"] = _TAG_SENTIMENTS[text]
 
 
 def _inject_weights(evals: list[dict]) -> None:
@@ -649,7 +719,9 @@ def score_jobs_batch(
         log.info("Scoring %d jobs in %d chunks of ≤%d", len(jobs), len(chunks), _SCORE_CHUNK_SIZE)
 
     all_evals: list[dict] = []
-    for chunk in chunks:
+    for idx, chunk in enumerate(chunks, start=1):
+        if len(chunks) > 1:
+            log.info("Scoring chunk %d/%d — %d role(s); still working…", idx, len(chunks), len(chunk))
         evals = _score_chunk(client, chunk, system_prompt, model=model)
         for i in range(len(chunk)):
             all_evals.append(evals[i] if i < len(evals) else _error_eval)

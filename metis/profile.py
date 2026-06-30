@@ -19,6 +19,11 @@ YAML_PATH    = Path(_os.environ["METIS_PROFILE"]) if "METIS_PROFILE" in _os.envi
 MD_PATH      = PROFILE_DIR / "profile.md"
 
 
+def _data_dir() -> Path:
+    """Resolve state dir at call time so tests/personas can patch env safely."""
+    return Path(_os.environ["METIS_DATA_DIR"]) if "METIS_DATA_DIR" in _os.environ else PROFILE_DIR
+
+
 # ---------------------------------------------------------------------------
 # YAML loader + renderer
 # ---------------------------------------------------------------------------
@@ -210,7 +215,7 @@ def load_profile_text() -> str | None:
         return None
 
     # 3. Append feedback notes if present
-    feedback_path = PROFILE_DIR / "feedback.md"
+    feedback_path = _data_dir() / "feedback.md"
     if feedback_path.exists():
         feedback = feedback_path.read_text().strip()
         if feedback:

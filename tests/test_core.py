@@ -46,13 +46,13 @@ class TestRoleHash:
         assert _role_hash("Staff PM", "Stripe") != _role_hash("Staff PM", "Anthropic")
         assert _role_hash("Staff PM", "Stripe") != _role_hash("Senior PM", "Stripe")
 
-    def test_company_variants_hash_identically(self):
-        """'NVIDIA' and 'NVIDIA AI' must dedup to the same hash — branding suffix, not a different company."""
+    def test_company_variant_suffixes_do_not_change_persisted_hash_contract(self):
+        """_role_hash is persisted; do not add company canonicalization without migration."""
         from metis.state import _role_hash
-        assert _role_hash("Staff PM", "NVIDIA") == _role_hash("Staff PM", "NVIDIA AI")
-        assert _role_hash("Staff PM", "Anthropic") == _role_hash("Staff PM", "Anthropic Labs")
-        assert _role_hash("Staff PM", "Acme") == _role_hash("Staff PM", "Acme Corp.")
-        assert _role_hash("Staff PM", "Stripe") == _role_hash("Staff PM", "Stripe Inc.")
+        assert _role_hash("Staff PM", "NVIDIA") != _role_hash("Staff PM", "NVIDIA AI")
+        assert _role_hash("Staff PM", "Anthropic") != _role_hash("Staff PM", "Anthropic Labs")
+        assert _role_hash("Staff PM", "Acme") != _role_hash("Staff PM", "Acme Corp.")
+        assert _role_hash("Staff PM", "Stripe") != _role_hash("Staff PM", "Stripe Inc.")
 
     def test_distinct_companies_still_differ(self):
         """Normalization must not collapse genuinely different companies."""
@@ -366,6 +366,13 @@ class TestParseLookback:
         delta = datetime.datetime.now() - result
         assert delta.total_seconds() < 10
 
+    def test_prompt_score_all_accepts_number_below_cap(self, monkeypatch):
+        from metis.pipeline import _prompt_score_all
+
+        monkeypatch.setattr("builtins.input", lambda _prompt: "30")
+
+        assert _prompt_score_all(110, 40) == 30
+
 
 # ---------------------------------------------------------------------------
 # profile.py — render_profile sanity
@@ -445,6 +452,63 @@ class TestRenderProfile:
         assert "EXPERIENCE:" not in out
         assert "EDUCATION:" not in out
         assert "DEAL BREAKERS" not in out
+
+    def test_load_profile_text_reads_feedback_from_data_dir(self, tmp_path, monkeypatch):
+        """METIS_DATA_DIR must isolate feedback for demos/personas."""
+        import importlib
+        import metis.profile as profile_mod
+
+        profile_path = tmp_path / "profile.yaml"
+        profile_path.write_text(
+            "candidate:\n"
+            "  name: Demo User\n"
+            "target:\n"
+            "  roles:\n"
+            "    - Product Manager\n"
+        )
+        (tmp_path / "feedback.md").write_text("Prefer climate roles over generic SaaS.")
+
+        monkeypatch.setenv("METIS_PROFILE", str(profile_path))
+        monkeypatch.setenv("METIS_DATA_DIR", str(tmp_path))
+        profile_mod = importlib.reload(profile_mod)
+
+        out = profile_mod.load_profile_text()
+
+        assert "Demo User" in out
+        assert "Prefer climate roles over generic SaaS." in out
+
+        monkeypatch.delenv("METIS_PROFILE", raising=False)
+        monkeypatch.delenv("METIS_DATA_DIR", raising=False)
+        importlib.reload(profile_mod)
+
+
+# ---------------------------------------------------------------------------
+# score.py — output normalization
+# ---------------------------------------------------------------------------
+
+class TestScoreNormalization:
+    def test_scoring_rubric_keeps_adjacent_domains_soft(self):
+        from metis.score import _build_score_suffix
+
+        rubric = _build_score_suffix("Lomis", 75, 55)
+
+        assert "Do not let domain_background alone push a role below the consider threshold" in rubric
+        assert "domain: foreign\" requires an explicit hard domain prerequisite" in rubric
+
+    def test_known_tag_text_forces_canonical_sentiment(self):
+        from metis.score import _normalize_tag_sentiments
+
+        evals = [{
+            "tags": [
+                {"text": "stage: public co fit", "sentiment": "amber"},
+                {"text": "domain: foreign", "sentiment": "amber"},
+            ]
+        }]
+
+        _normalize_tag_sentiments(evals)
+
+        assert evals[0]["tags"][0]["sentiment"] == "green"
+        assert evals[0]["tags"][1]["sentiment"] == "red"
 
 
 # ---------------------------------------------------------------------------

@@ -14,30 +14,9 @@ RUNS_PATH         = DATA_DIR / "runs.jsonl"            # per-job trace records w
 SKIPPED_TTL_DAYS = 90
 
 
-_CO_VARIANT_SUFFIX = re.compile(
-    r"\s+(?:AI|Labs?|Technologies|Tech|Software|Systems|Solutions|Platforms?|"
-    r"Inc\.?|LLC|Corp\.?|Ltd\.?|Co\.?)$",
-    re.IGNORECASE,
-)
-
-def _canonical_company(name: str) -> str:
-    """Strip branding/legal suffixes so variant names hash identically.
-
-    'NVIDIA AI' → 'NVIDIA', 'Anthropic Labs' → 'Anthropic', 'Acme Corp.' → 'Acme'.
-    Applied before _role_hash so seen_roles dedup is stable across name variants.
-    _role_hash itself is frozen (CLAUDE.md #6); normalization happens at the call site.
-    """
-    prev = None
-    result = name.strip()
-    while result != prev:
-        prev = result
-        result = _CO_VARIANT_SUFFIX.sub("", result).strip()
-    return result
-
-
 def _role_hash(title: str, company: str) -> str:
     """Stable 12-char hash from normalized title + company."""
-    key = re.sub(r"[^a-z0-9]", "", (title + _canonical_company(company)).lower())
+    key = re.sub(r"[^a-z0-9]", "", (title + company).lower())
     return hashlib.md5(key.encode()).hexdigest()[:12]
 
 

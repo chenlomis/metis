@@ -1,7 +1,7 @@
-# metis — Claude Code context
+# metis — Codex context
 
 ## What this project is
-A personal job alert pipeline. It pulls job listings, scores them against a user profile using Claude, and sends a personalized email digest. CLI entry point: `metis` → `metis/pipeline.py`.
+A personal job alert pipeline. It pulls job listings, scores them against a user profile using Codex, and sends a personalized email digest. CLI entry point: `metis` → `metis/cli.py`; digest orchestration lives in `metis/pipeline.py`.
 
 ## Key commands
 ```
@@ -33,7 +33,7 @@ metis track --lookback 30d     # accepts same DURATION format as main runner
 metis track --dry-run          # parse + classify, no xlsx write, no open; prints matches to stdout
 
 # feedback — calibration notes that shape future scoring
-metis feedback                 # collect → Claude parse → conflict detect → save to feedback.md
+metis feedback                 # collect → Codex parse → conflict detect → save to feedback.md
 metis feedback list            # show last 5 entries (full history: ~/.job_pipeline/feedback.md)
 
 # debug — dump most recent LinkedIn alert email
@@ -47,11 +47,12 @@ METIS_THEME=dark  metis [...]
 ## File map
 ```
 metis/
-  pipeline.py      — CLI entry point, routes subcommands
+  cli.py           — CLI parsing and subcommand routing
+  pipeline.py      — digest pipeline orchestration
   init_cmd.py      — interactive profile setup wizard (InquirerPy + Rich)
   theme.py         — ALL colors, styles, and print helpers (single source of truth)
   profile.py       — load/save ~/.job_pipeline/profile.yaml
-  extract.py       — Claude extraction of structured profile from resume text
+  extract.py       — Codex extraction of structured profile from resume text
   score.py         — scoring logic against profile
   render.py        — builds DigestPayload, renders HTML via React Email or Python fallback
   schedule_cmd.py  — cron scheduling wizard
@@ -264,7 +265,7 @@ All interactive prompts in `init_cmd.py` use five helpers — do not use `questi
 `schedule_cmd.py` still uses `questionary` (not migrated — fine to leave as-is).
 
 ## Dependencies
-- `anthropic` — Claude API (profile extraction + job scoring)
+- `anthropic` — Codex API (profile extraction + job scoring)
 - `rich>=13.0` — terminal formatting
 - `questionary>=2.0` — used by `schedule_cmd.py` only
 - `InquirerPy>=0.3.4` — prompt library for `init_cmd.py` `_ask*` helpers; in `requirements.txt`
@@ -273,7 +274,7 @@ All interactive prompts in `init_cmd.py` use five helpers — do not use `questi
 - `pyyaml` — profile serialization
 
 ## Multiple sessions warning
-If running separate Claude Code sessions on design vs. build:
+If running separate Codex sessions on design vs. build:
 - `theme.py` is design-owned — build session should not edit it
 - `init_cmd.py` is a shared boundary — coordinate before editing
 - `emails/` and `utils/colors.ts` are design-owned

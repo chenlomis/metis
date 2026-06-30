@@ -70,13 +70,13 @@ def _leverage_friction(leverage_pts, friction_pts) -> str:
     for pt in leverage_pts:
         html += (
             f'<p style="margin:0 0 4px 0;font-size:13px;line-height:1.6;font-family:{_FONT}">'
-            f'<span style="color:#2d5a2d">&#8593; </span>'
+            f'<span style="color:#2d5a2d">&#10003; </span>'
             f'<span style="color:#2d5a2d">{pt}</span></p>'
         )
     for pt in friction_pts:
         html += (
             f'<p style="margin:0 0 10px 0;font-size:13px;line-height:1.6;font-family:{_FONT}">'
-            f'<span style="color:#7a5c1e">&#8595; </span>'
+            f'<span style="color:#7a5c1e">? </span>'
             f'<span style="color:#7a5c1e">{pt}</span></p>'
         )
     if html and not friction_pts:
@@ -86,11 +86,11 @@ def _leverage_friction(leverage_pts, friction_pts) -> str:
 
 def _stat_cell(number: int, label: str, color: str) -> str:
     return (
-        f'<td valign="top" style="background:#f5f5f3;padding:10px 12px;border-radius:4px">'
-        f'<div style="font-size:24px;font-weight:500;color:{color};line-height:1;font-family:{_FONT}">'
+        f'<td width="33.33%" valign="top" style="background:#f5f5f3;padding:12px 14px;border-radius:6px">'
+        f'<div style="font-size:32px;font-weight:600;color:{color};line-height:1;font-family:{_FONT}">'
         f'{number}</div>'
-        f'<div style="font-size:11px;color:{_C_MUTED};text-transform:uppercase;'
-        f'letter-spacing:0.04em;margin-top:2px;font-family:{_FONT}">{label}</div>'
+        f'<div style="font-size:10px;color:{_C_MUTED};text-transform:uppercase;'
+        f'letter-spacing:0.06em;margin-top:3px;font-family:{_FONT}">{label}</div>'
         f'</td>'
     )
 
@@ -102,7 +102,7 @@ def _section_header(label: str, count_text: str, bar_color: str, label_color: st
         f'<tr>'
         f'<td width="3" style="background:{bar_color};border-radius:2px;font-size:0;line-height:0">&nbsp;</td>'
         f'<td width="8">&nbsp;</td>'
-        f'<td style="font-size:13px;font-weight:500;color:{label_color};'
+        f'<td style="font-size:14px;font-weight:600;color:{label_color};'
         f'font-family:{_FONT};padding:8px 0">{label}</td>'
         f'<td style="font-size:12px;color:{_C_MUTED};text-align:right;'
         f'font-family:{_FONT};padding:8px 0">{count_text}</td>'
@@ -174,12 +174,12 @@ def _job_card(job: dict, bg: str, pill_bg: str, pill_color: str) -> str:
     )
     return (
         f'<table width="100%" cellpadding="0" cellspacing="0" border="0" '
-        f'style="background:{bg};border:1px solid {_C_BORDER};border-radius:4px">'
-        f'<tr><td style="padding:16px">'
+        f'style="background:{bg};border:1px solid {_C_BORDER};border-radius:8px">'
+        f'<tr><td style="padding:14px 16px">'
         # Row 1 — title + score pill
         f'<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:4px">'
         f'<tr>'
-        f'<td style="font-size:15px;font-weight:500;color:#222;font-family:{_FONT}">'
+        f'<td style="font-size:15px;font-weight:500;color:#1f2118;font-family:{_FONT}">'
         f'{job["title"]}</td>'
         f'<td width="1" style="white-space:nowrap;padding-left:8px;vertical-align:top">'
         f'<span style="background:{pill_bg};color:{pill_color};font-size:12px;font-weight:500;'
@@ -287,6 +287,17 @@ def build_digest_payload(
     }
 
 
+def _sync_bundled_templates(pkg_templates: Path, react_dir: Path) -> None:
+    """Copy bundled React Email source files into the runtime template dir."""
+    import shutil
+    react_dir.mkdir(parents=True, exist_ok=True)
+    for src in pkg_templates.rglob("*"):
+        if src.is_file():
+            dest = react_dir / src.relative_to(pkg_templates)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dest)
+
+
 def _resolve_react_dir() -> "Path | None":
     """Return the React Email working directory, bootstrapping it on first use.
 
@@ -305,8 +316,11 @@ def _resolve_react_dir() -> "Path | None":
     data_dir = Path(os.environ.get("METIS_DATA_DIR", Path.home() / ".job_pipeline"))
     react_dir = data_dir / "email_templates"
     ts_node   = react_dir / "node_modules" / ".bin" / "ts-node"
+    pkg_templates = Path(__file__).parent / "email_templates"
 
     if ts_node.exists():
+        if pkg_templates.exists():
+            _sync_bundled_templates(pkg_templates, react_dir)
         return react_dir  # already bootstrapped
 
     # Check Node is available before attempting bootstrap
@@ -315,18 +329,11 @@ def _resolve_react_dir() -> "Path | None":
         return None
 
     # Copy bundled template source into data dir (once)
-    pkg_templates = Path(__file__).parent / "email_templates"
     if not pkg_templates.exists():
         log.warning("Bundled email_templates not found in package — falling back to Python renderer.")
         return None
 
-    import shutil
-    react_dir.mkdir(parents=True, exist_ok=True)
-    for src in pkg_templates.rglob("*"):
-        if src.is_file():
-            dest = react_dir / src.relative_to(pkg_templates)
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dest)
+    _sync_bundled_templates(pkg_templates, react_dir)
 
     # Run npm install (one-time, ~30s)
     log.info("First-time React Email setup — running npm install (this takes ~30 seconds) …")
@@ -391,12 +398,11 @@ def build_digest_html(jobs: list[dict], run_date: str, deal_breaker_count: int =
 
     # --- Stat row ---
     stat_row = (
-        f'<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:14px">'
+        f'<table width="100%" cellpadding="0" cellspacing="0" border="0" '
+        f'style="margin-bottom:14px;table-layout:fixed;border-collapse:separate;border-spacing:6px 0">'
         f'<tr>'
         f'{_stat_cell(len(jobs),    "Evaluated", "#1f2118")}'
-        f'<td width="6">&nbsp;</td>'
         f'{_stat_cell(len(apply),   "Solid Match",     "#2d5a2d")}'
-        f'<td width="6">&nbsp;</td>'
         f'{_stat_cell(len(consider),"Moderate Match",  "#854F0B")}'
         f'</tr></table>'
     )

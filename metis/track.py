@@ -21,8 +21,43 @@ import logging
 import re
 import sys
 import time
+from email.header import decode_header
 
 log = logging.getLogger(__name__)
+
+
+def _email_date_iso(date_header: str) -> str:
+    from email.utils import parsedate_to_datetime
+
+    try:
+        dt = parsedate_to_datetime(date_header)
+        if dt.tzinfo is not None:
+            dt = dt.astimezone()
+        d = dt.date()
+    except Exception:
+        d = datetime.date.today()
+    return min(d, datetime.date.today()).isoformat()
+
+
+def _norm_company_token(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
+def _infer_company_from_known_apps(email_dict: dict, applied_companies: set[str]) -> str | None:
+    haystack = _norm_company_token(
+        " ".join(str(email_dict.get(k, "")) for k in ("subject", "sender", "body"))
+    )
+    if not haystack:
+        return None
+
+    matches = [
+        company for company in applied_companies
+        if len(_norm_company_token(company)) >= 4
+        and _norm_company_token(company) in haystack
+    ]
+    if not matches:
+        return None
+    return max(matches, key=len)
 
 # Re-exports for backward-compat (tests import from scorerole.track)
 from .track_parse import classify_email, _LLM_VALID_CLASSES  # noqa: F401
@@ -359,10 +394,7 @@ def fetch_candidate_emails(
                         log.debug("track: skipping auto-submitted — %s", subject[:80])
                         continue
 
-                    try:
-                        email_date = parsedate_to_datetime(date_header).date().isoformat()
-                    except Exception:
-                        email_date = datetime.date.today().isoformat()
+                    email_date = _email_date_iso(date_header)
 
                     body = _extract_body(msg)
                     log.debug("track: fetched — %s | from: %s", subject[:80], sender[:50])
@@ -405,6 +437,10 @@ def _clean_company(raw: str) -> str | None:
     company = company.strip()
     if not company or len(company) < 2:
         return None
+    if re.fullmatch(r"(?:re|fw|fwd)", company, re.IGNORECASE):
+        return None
+    if re.search(r"\b(?:we received your application|let'?s connect|your application)\b", company, re.IGNORECASE):
+        return None
     # If the string contains colon or looks like a role title, discard it — we caught too much
     if ":" in company:
         company = company.split(":")[0].strip()
@@ -446,7 +482,13 @@ def extract_company(subject: str, body: str) -> str | None:
 _ROLE_BOILERPLATE = re.compile(
     r"if you are not|keep an eye|we will contact|please continue|"
     r"for this role|for this position|you are not selected|"
-    r"time to apply for our|taking the time",
+    r"time to apply for our|taking the time|"
+    r"unique skills deemed necessary|we received your application|let'?s connect",
+    re.IGNORECASE,
+)
+_ROLE_TITLE_SIGNAL = re.compile(
+    r"\b(?:product|program|project|manager|director|engineer|designer|"
+    r"scientist|analyst|architect|lead|principal|staff|senior|head|vp)\b",
     re.IGNORECASE,
 )
 
@@ -462,6 +504,20 @@ def _clean_role(raw: str) -> str | None:
     if len(role) < 4 or len(role) > _ROLE_MAX_LEN:
         return None
     if _ROLE_BOILERPLATE.search(role):
+        return None
+    return role
+
+
+def _norm_for_entity(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
+def _finalize_role(role: str | None, company: str | None) -> str | None:
+    if not role:
+        return None
+    if company and _norm_for_entity(role) == _norm_for_entity(company):
+        return None
+    if not _ROLE_TITLE_SIGNAL.search(role):
         return None
     return role
 
@@ -533,11 +589,11 @@ def parse_email(email_dict: dict, llm_client=None) -> dict:
     if not company:
         company = _company_from_sender(email_dict.get("sender", ""))
 
-    role = extract_role(subject, body)
+    role = _finalize_role(extract_role(subject, body), company)
     # Claude fallback when regex comes up empty — many ATS templates don't use
     # standard "applying for the X role" phrasing but do mention the title somewhere
     if role is None and llm_client is not None:
-        role = _extract_role_llm(subject, body, llm_client)
+        role = _finalize_role(_extract_role_llm(subject, body, llm_client), company)
     log.debug("track: parse  [%s] company=%r | %s", classification[:4], company, subject[:70])
 
     return {
@@ -714,7 +770,8 @@ def _apply_status_fill(ws, row_idx: int, col: int, value: str) -> None:
 def update_confirmation(ws, row_idx: int, date_applied: str) -> None:
     """Flip action_taken → Applied and set date_applied + application_status."""
     ws.cell(row_idx, 6).value = "Applied"
-    ws.cell(row_idx, 7).value = date_applied
+    if not ws.cell(row_idx, 7).value:
+        ws.cell(row_idx, 7).value = date_applied
     ws.cell(row_idx, 8).value = "Pending"
     _apply_status_fill(ws, row_idx, 6, "Applied")
     _apply_status_fill(ws, row_idx, 8, "Pending")
@@ -744,9 +801,10 @@ def _write_row_from_email(ws, parsed: dict, suggestion_status: str,
     from .xlsx import _set_hyperlink
 
     next_row = ws.max_row + 1
+    role_title = parsed.get("role") or ("External application" if suggestion_status == "External" else "")
     values = [
         date_suggested or parsed["date"],
-        parsed.get("role") or "",
+        role_title,
         parsed.get("company") or "",
         match_score,
         suggestion_status,
@@ -964,10 +1022,7 @@ def backfill_from_digests(
                     msg = email_lib.message_from_bytes(raw_bytes)
 
                     date_header = msg.get("Date", "")
-                    try:
-                        email_date = parsedate_to_datetime(date_header).date().isoformat()
-                    except Exception:
-                        email_date = datetime.date.today().isoformat()
+                    email_date = _email_date_iso(date_header)
 
                     # Extract HTML body from digest email
                     html_body = ""
@@ -1086,10 +1141,7 @@ def backfill_from_digests(
                     msg = email_lib.message_from_bytes(raw_bytes)
 
                     date_header = msg.get("Date", "")
-                    try:
-                        email_date = parsedate_to_datetime(date_header).date().isoformat()
-                    except Exception:
-                        email_date = datetime.date.today().isoformat()
+                    email_date = _email_date_iso(date_header)
 
                     html_body = ""
                     if msg.is_multipart():
@@ -1176,7 +1228,15 @@ def run_track(
         log.info("track: no candidate emails found in lookback window.")
         return
 
-    parsed_emails = [parse_email(e, llm_client=llm_client) for e in emails]
+    parsed_emails = []
+    for email_dict in emails:
+        parsed = parse_email(email_dict, llm_client=llm_client)
+        if not parsed.get("company"):
+            inferred = _infer_company_from_known_apps(email_dict, applied_companies)
+            if inferred:
+                parsed["company"] = inferred
+                log.info("track: inferred company from tracker context — %s", inferred)
+        parsed_emails.append(parsed)
 
     actionable = [p for p in parsed_emails
                   if p["classification"] in ("confirmation", "rejection", "recruiter_screen")
@@ -1220,6 +1280,10 @@ def run_track(
         kind    = parsed["classification"]
 
         row_idx = find_tracker_row(ws, company, role)
+        if row_idx is None and kind == "confirmation" and role:
+            row_idx = find_tracker_row(ws, company, None)
+            if row_idx is not None:
+                log.info("track: matched confirmation by company only — %s / %s", company, role)
 
         if row_idx is None:
             if kind == "confirmation":

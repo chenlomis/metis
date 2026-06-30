@@ -76,6 +76,10 @@ class TestStatTileLabel:
         # "Apply" appears in "View posting" link text — guard the stat tile label specifically
         assert "Solid Match" in html  # positive guard is sufficient
 
+    def test_stat_tiles_use_fixed_equal_layout(self, html):
+        assert "table-layout:fixed" in html
+        assert 'width="33.33%"' in html
+
 
 # ---------------------------------------------------------------------------
 # 2. Legend labels
@@ -148,6 +152,14 @@ class TestViewPostingButton:
     def test_button_is_filled_not_outlined(self, html):
         # Button must use background color fill with white text.
         assert "color:#ffffff" in html, "Button text must be white (filled button)"
+
+
+class TestPointMarkers:
+    def test_python_fallback_uses_check_and_question_mark(self, html):
+        assert "&#10003;" in html
+        assert "? </span>" in html
+        assert "&#8593;" not in html
+        assert "&#8595;" not in html
 
 
 # ---------------------------------------------------------------------------

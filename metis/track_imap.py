@@ -18,6 +18,19 @@ log = logging.getLogger(__name__)
 _IMAP_MAX_RETRIES = 3
 _IMAP_RETRY_DELAY = 30   # seconds between retries on transient network errors
 
+
+def _email_date_iso(date_header: str) -> str:
+    from email.utils import parsedate_to_datetime
+
+    try:
+        dt = parsedate_to_datetime(date_header)
+        if dt.tzinfo is not None:
+            dt = dt.astimezone()
+        d = dt.date()
+    except Exception:
+        d = datetime.date.today()
+    return min(d, datetime.date.today()).isoformat()
+
 # ATS platform domains to search by sender — catches ATS emails regardless of subject.
 # These are the @domain portions used in FROM IMAP searches.
 _ATS_FROM_DOMAINS = [
@@ -226,10 +239,7 @@ def fetch_candidate_emails(
                         log.debug("track: skipping auto-submitted — %s", subject[:80])
                         continue
 
-                    try:
-                        email_date = parsedate_to_datetime(date_header).date().isoformat()
-                    except Exception:
-                        email_date = datetime.date.today().isoformat()
+                    email_date = _email_date_iso(date_header)
 
                     body = _extract_body(msg)
                     log.debug("track: fetched — %s | from: %s", subject[:80], sender[:50])

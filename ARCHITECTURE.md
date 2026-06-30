@@ -285,7 +285,8 @@ See README § Privacy for the full data flow table.
 
 | Module | Responsibility |
 |---|---|
-| `pipeline.py` | CLI entry point, orchestration, cap/prompt logic — stage order is load-bearing, do not reorder |
+| `cli.py` | CLI parsing, subcommand registration, and command routing |
+| `pipeline.py` | Digest pipeline orchestration and cap/prompt logic — stage order is load-bearing, do not reorder |
 | `sources/linkedin.py` | IMAP fetch, email parsing (3-case positional shift detection), JD enrichment, IMAP retry |
 | `sources/__init__.py` | Routing between alert modes (lookback vs. seen-ID gate) |
 | `extract.py` | Layer 1 Haiku extraction (27 structured fields), hard gate checker, context formatter |

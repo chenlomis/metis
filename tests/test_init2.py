@@ -282,16 +282,16 @@ class TestExtractWithClaudeV2:
 
 class TestInit2SubcommandRegistration:
 
-    def test_init_registered_in_pipeline(self):
+    def test_init_registered_in_cli(self):
         """'init' must appear as a recognised subcommand in the argparse setup."""
-        import metis.pipeline as pipeline
-        source = open(pipeline.__file__).read()
-        assert '"init"' in source, "'init' subcommand not found in pipeline.py"
+        import metis.cli as cli
+        source = open(cli.__file__).read()
+        assert '"init"' in source, "'init' subcommand not found in cli.py"
 
     def test_init_routes_to_run_init(self):
-        """pipeline.py dispatch block for 'init' must import and call run_init."""
-        import metis.pipeline as pipeline
-        source = open(pipeline.__file__).read()
+        """cli.py dispatch block for 'init' must import and call run_init."""
+        import metis.cli as cli
+        source = open(cli.__file__).read()
         assert "from .init_cmd import run_init" in source
         assert "run_init(" in source
 

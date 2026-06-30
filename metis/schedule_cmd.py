@@ -433,46 +433,35 @@ def run_schedule_wizard() -> None:
     """Interactive prompt to install or update the schedule."""
     try:
         import questionary
-        from questionary import Style as QStyle
     except ImportError:
         sys.exit("❌  questionary not installed. Run: pip install questionary")
 
-    from .theme import THEME
-    Q_STYLE = QStyle([
-        ("qmark",       f"fg:{THEME['accent']} bold"),
-        ("question",    f"fg:{THEME['muted']} bold"),
-        ("answer",      f"fg:{THEME['accent']} bold"),
-        ("pointer",     f"fg:{THEME['accent']} bold"),
-        ("highlighted", f"fg:{THEME['muted']} bold"),
-        ("selected",    f"fg:{THEME['success']}"),
-        ("instruction", f"fg:{THEME['dim']}"),
-        ("separator",   f"fg:{THEME['dim']}"),
-        ("text",        f"fg:{THEME['muted']}"),
-        ("disabled",    f"fg:{THEME['dim']}"),
-    ])
+    from .theme import QUESTIONARY_STYLE, console
 
     existing = load_schedule()
     if existing:
         label = _schedule_label(existing)
-        print(f"\n  Current schedule: {label} at {existing.get('time', '?')}")
+        console.print(f"\n  [dim]Current schedule: {label} at {existing.get('time', '?')}[/dim]")
         _raw = questionary.text(
             "  Replace the existing schedule?",
+            qmark="",
             instruction="(y/yes to replace, n/no to keep)",
             validate=lambda v: True if v.strip().lower() in ("y", "yes", "n", "no") else "Type y or n",
-            style=Q_STYLE,
+            style=QUESTIONARY_STYLE,
         ).ask()
         if _raw is None or _raw.strip().lower() not in ("y", "yes"):
-            print("  Schedule unchanged.")
+            console.print("  [dim]Schedule unchanged.[/dim]")
             return
 
     frequency = questionary.select(
         "  How often should metis run?",
+        qmark="",
         choices=[
             questionary.Choice("Daily",         value="daily"),
             questionary.Choice("Twice a week",  value="twice_weekly"),
             questionary.Choice("Weekly",        value="weekly"),
         ],
-        style=Q_STYLE,
+        style=QUESTIONARY_STYLE,
     ).ask()
     if frequency is None:
         return
@@ -484,13 +473,14 @@ def run_schedule_wizard() -> None:
         all_days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
         selected = questionary.checkbox(
             "  Which two days?",
+            qmark="",
             choices=[
                 questionary.Choice(name, value=WEEKDAY_TO_INT[name],
                                    checked=(WEEKDAY_TO_INT[name] in _DEFAULT_TWICE_WEEKLY_DAYS))
                 for name in all_days
             ],
             validate=lambda s: True if len(s) == 2 else "Please select exactly 2 days",
-            style=Q_STYLE,
+            style=QUESTIONARY_STYLE,
         ).ask()
         if selected is None:
             return
@@ -499,8 +489,9 @@ def run_schedule_wizard() -> None:
     elif frequency == "weekly":
         day_name = questionary.select(
             "  Which day of the week?",
+            qmark="",
             choices=["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
-            style=Q_STYLE,
+            style=QUESTIONARY_STYLE,
         ).ask()
         if day_name is None:
             return
@@ -508,8 +499,9 @@ def run_schedule_wizard() -> None:
 
     time_str = questionary.text(
         "  At what time? (24h, local time, e.g. 08:00)",
+        qmark="",
         default="08:00",
-        style=Q_STYLE,
+        style=QUESTIONARY_STYLE,
         validate=lambda t: (
             True if re.match(r"^\d{1,2}:\d{2}$", t) else "Use HH:MM format, e.g. 08:00"
         ),
@@ -525,35 +517,34 @@ def run_schedule_wizard() -> None:
 
     # Confirm before installing
     label = _schedule_label({**config, **FREQUENCY_OPTIONS.get(frequency, {})})
-    print(f"\n  Schedule:  {label} at {time_str}")
-    print("  Will run:  digest (score + email)  →  track (xlsx update)")
+    console.print(f"\n  [bold]Schedule:[/bold]  {label} at {time_str}")
+    console.print("  [dim]Will run: digest (score + email) → track (xlsx update)[/dim]")
     _raw = questionary.text(
         "  Install?",
+        qmark="",
         instruction="(y/yes to confirm, n/no to cancel)",
         validate=lambda v: True if v.strip().lower() in ("y", "yes", "n", "no") else "Type y or n",
-        style=Q_STYLE,
+        style=QUESTIONARY_STYLE,
     ).ask()
     if _raw is None or _raw.strip().lower() not in ("y", "yes"):
-        print("  Cancelled.")
+        console.print("  [dim]Cancelled.[/dim]")
         return
 
     try:
         install_schedule(config)
     except RuntimeError as e:
-        print(f"\n  ❌  Install failed: {e}")
+        console.print(f"\n  [red]Install failed:[/] {e}")
         return
 
     lookback = FREQUENCY_OPTIONS[frequency]["lookback"]
-    print(f"\n  ✓  Schedule installed: {label} at {time_str}")
-    print(f"     metis will fetch the last {lookback} of alerts, email the digest, and update your tracker.")
+    console.print(f"\n  [green]✓[/]  Schedule installed: {label} at {time_str}")
+    console.print(f"     [dim]metis will fetch the last {lookback} of alerts, email the digest, and update your tracker.[/dim]")
     if platform.system() == "Darwin":
-        print(f"     OS job: {LAUNCHD_PLIST}")
-    print(f"     Config: {SCHEDULE_FILE}")
-    print()
-    print("  To pause:   metis schedule pause")
-    print("  To change:  metis schedule set")
-    print("  To remove:  metis schedule remove")
-    print()
+        console.print(f"     [dim]OS job:[/] {LAUNCHD_PLIST}")
+    console.print(f"     [dim]Config:[/] {SCHEDULE_FILE}\n")
+    console.print("  [dim]To pause:[/]   metis schedule pause")
+    console.print("  [dim]To change:[/]  metis schedule set")
+    console.print("  [dim]To remove:[/]  metis schedule remove\n")
 
 
 # ---------------------------------------------------------------------------

@@ -163,7 +163,9 @@ def extract_jd_structs(client: anthropic.Anthropic, jobs: list[dict],
         log.info("Extraction: %d jobs in %d chunks of ≤%d", len(jobs), len(chunks), _EXTRACT_CHUNK_SIZE)
 
     all_structs: list[dict] = []
-    for chunk in chunks:
+    for idx, chunk in enumerate(chunks, start=1):
+        if len(chunks) > 1:
+            log.info("Extraction chunk %d/%d — %d role(s); still working…", idx, len(chunks), len(chunk))
         try:
             structs = _extract_chunk(client, chunk, model=model)
         except Exception as exc:

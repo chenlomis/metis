@@ -1,10 +1,13 @@
-"""metis init — interactive profile setup wizard.
+"""Archived legacy profile setup wizard.
 
 Uses InquirerPy for prompts and Rich for formatted output.
 Parses a resume (PDF / DOCX / TXT), optionally a LinkedIn export,
 collects preferences interactively, extracts a structured profile
 with Claude, lets the user review and edit, then saves to
 ~/.job_pipeline/profile.yaml.
+
+This module is retained for `metis init_bak` compatibility. The supported
+onboarding flow is `metis init` in init_cmd.py.
 """
 import os, re, sys, shutil, subprocess, logging
 from pathlib import Path

@@ -323,6 +323,10 @@ def _clean_company(raw: str) -> str | None:
     company = company.strip()
     if not company or len(company) < 2:
         return None
+    if re.fullmatch(r"(?:re|fw|fwd)", company, re.IGNORECASE):
+        return None
+    if re.search(r"\b(?:we received your application|let'?s connect|your application)\b", company, re.IGNORECASE):
+        return None
     if ":" in company:
         company = company.split(":")[0].strip()
     if _ROLE_TITLE_WORDS.search(company) and len(company.split()) >= 2:
@@ -396,7 +400,13 @@ def extract_company(subject: str, body: str) -> str | None:
 _ROLE_BOILERPLATE = re.compile(
     r"if you are not|keep an eye|we will contact|please continue|"
     r"for this role|for this position|you are not selected|"
-    r"time to apply for our|taking the time",
+    r"time to apply for our|taking the time|"
+    r"unique skills deemed necessary|we received your application|let'?s connect",
+    re.IGNORECASE,
+)
+_ROLE_TITLE_SIGNAL = re.compile(
+    r"\b(?:product|program|project|manager|director|engineer|designer|"
+    r"scientist|analyst|architect|lead|principal|staff|senior|head|vp)\b",
     re.IGNORECASE,
 )
 
@@ -412,6 +422,20 @@ def _clean_role(raw: str) -> str | None:
     if _ROLE_BOILERPLATE.search(role):
         return None
     return role
+
+
+def _finalize_role(role: str | None, company: str | None) -> str | None:
+    if not role:
+        return None
+    if company and _norm_for_entity(role) == _norm_for_entity(company):
+        return None
+    if not _ROLE_TITLE_SIGNAL.search(role):
+        return None
+    return role
+
+
+def _norm_for_entity(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", text.lower())
 
 
 def extract_role(subject: str, body: str) -> str | None:
@@ -444,7 +468,7 @@ def parse_email(email_dict: dict, llm_client=None) -> dict:
     if not company:
         company = _company_from_sender(email_dict.get("sender", ""))
 
-    role = extract_role(subject, body)
+    role = _finalize_role(extract_role(subject, body), company)
     log.debug("track: parse  [%s] company=%r | %s", classification[:4], company, subject[:70])
 
     return {

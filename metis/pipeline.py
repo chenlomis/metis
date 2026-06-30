@@ -109,7 +109,7 @@ def _prompt_score_all(n_found: int, cap: int) -> int:
     Accepts:
       Enter / n / N      → cap (default, no pre-screen)
       y / yes / all      → n_found (Haiku pre-screen runs first)
-      a number (40, 60…) → that count, clamped to cap..n_found (no pre-screen)
+      a number           → that count, clamped to 1..n_found
     """
     from .score import estimate_cost, estimate_cost_hi
     cost_str  = estimate_cost(n_found)
@@ -123,10 +123,10 @@ def _prompt_score_all(n_found: int, cap: int) -> int:
     else:
         print(f"     Estimated cost: ~{cost_str}")
     print(f"     (Haiku pre-screen runs first — actual cost typically 40–60% lower.)")
-    print(f"     Roles beyond the cap stay unseen until their 30-day TTL expires.\n")
+    print(f"     Roles beyond the number you choose are queued for the next run.\n")
     try:
         ans = input(
-            f"  Score how many? Enter a number ({cap}–{n_found}), 'all', or press Enter for cap ({cap}): "
+            f"  Score how many? Enter a number (1–{n_found}), 'all', or press Enter for cap ({cap}): "
         ).strip().lower()
     except (EOFError, KeyboardInterrupt):
         print()
@@ -137,8 +137,7 @@ def _prompt_score_all(n_found: int, cap: int) -> int:
     if ans in ("y", "yes", "all"):
         return n_found
     try:
-        n = int(ans)
-        n = max(cap, min(n, n_found))
+        n = max(1, min(int(ans), n_found))
         print(f"     → {n} roles · estimated cost: ~{estimate_cost(n)}")
         return n
     except ValueError:
@@ -273,15 +272,16 @@ def _stage_cap(
     all_jobs: list[dict],
     score_all: bool,
     client,                  # anthropic.Anthropic — passed through to prescreen if needed
+    dry_run: bool = False,
 ) -> tuple[list[dict], bool]:
     """Apply the per-run cap and optionally run the Haiku pre-screen.
 
     Returns (jobs_to_score, did_prescreen).
 
     Cap logic (in priority order):
-      --no-limit flag            → skip prompt, run Haiku pre-screen, score everything that survives
-      interactive TTY       → ask user; if yes, run pre-screen; if no, cap to MAX_JOBS_PER_RUN
-      non-interactive cron  → cap silently, log warning
+      --no-limit flag       → confirm, run Haiku pre-screen, score everything that survives
+      interactive TTY       → ask how many to score; then pre-screen and cap to that number
+      non-interactive cron  → pre-screen, then cap silently to MAX_JOBS_PER_RUN
 
     IMPORTANT: This function must be called BEFORE building new_role_timestamps so that
     only the final survivors get persisted to seen_roles.json (role-burial fix).
@@ -345,22 +345,25 @@ def _stage_cap(
         for job in before_prescreen:
             if id(job) not in passed_ids:
                 job["eval"] = {"score": 0, "verdict": "prescreened", "reason": "haiku_prescreen_filtered"}
-                write_trace(job)
+                if not dry_run:
+                    write_trace(job)
 
     # Apply effective cap after pre-screen. Excess roles are queued for the next run.
     if cap_to is not None and len(all_jobs) > cap_to:
         excess = all_jobs[cap_to:]
         all_jobs = all_jobs[:cap_to]
-        save_role_queue(excess)
-        log.info("Capping to %d role(s); %d queued for next run → role_queue.json",
-                 cap_to, len(excess))
+        if not dry_run:
+            save_role_queue(excess)
+        queue_msg = "would be queued for next run" if dry_run else "queued for next run → role_queue.json"
+        log.info("Capping to %d role(s); %d %s", cap_to, len(excess), queue_msg)
     else:
-        save_role_queue([])  # everything scored this run — queue is now empty
+        if not dry_run:
+            save_role_queue([])  # everything scored this run — queue is now empty
 
     return all_jobs, should_prescreen
 
 
-def _stage_enrich_and_score(jobs: list[dict], client) -> list[dict]:
+def _stage_enrich_and_score(jobs: list[dict], client, dry_run: bool = False) -> list[dict]:
     """Fetch JDs (enrich), run Layer 1 extraction + gate checks, then score + rank with Sonnet.
 
     Layer 1 (Haiku, temperature=0):
@@ -421,9 +424,10 @@ def _stage_enrich_and_score(jobs: list[dict], client) -> list[dict]:
             )
 
     ranked = rank_jobs(jobs)
-    from .trace import write_trace
-    for job in ranked:
-        write_trace(job)
+    if not dry_run:
+        from .trace import write_trace
+        for job in ranked:
+            write_trace(job)
     return ranked
 
 
@@ -532,7 +536,7 @@ def run_pipeline(since_dt: datetime.datetime, score_all: bool = False, dry_run: 
     # new_role_timestamps is built AFTER this so only surviving roles get persisted.
     # (Pre-fix: capped roles were written to seen_roles.json and locked out for 14 days
     #  without ever being evaluated — the role-burial bug.)
-    all_jobs, _prescreened = _stage_cap(all_jobs, score_all, client)
+    all_jobs, _prescreened = _stage_cap(all_jobs, score_all, client, dry_run=dry_run)
     if not all_jobs:
         log.info("Pre-screen filtered all roles — nothing left to score.")
         return
@@ -544,7 +548,7 @@ def run_pipeline(since_dt: datetime.datetime, score_all: bool = False, dry_run: 
     }
 
     # Stage 3: Enrich (fetch JDs) + score + rank
-    all_jobs = _stage_enrich_and_score(all_jobs, client)
+    all_jobs = _stage_enrich_and_score(all_jobs, client, dry_run=dry_run)
 
     # Stage 4: Split deal-breaker filtered roles
     scored_jobs, n_filtered = _stage_split_filtered(all_jobs)
@@ -559,7 +563,8 @@ def run_pipeline(since_dt: datetime.datetime, score_all: bool = False, dry_run: 
             )
         else:
             log.info("No scoreable roles after filtering — no digest sent.")
-        save_seen_roles(new_role_timestamps)
+        if not dry_run:
+            save_seen_roles(new_role_timestamps)
         return
 
     # Stage 5: Render + deliver digest (persists seen_roles on success)
@@ -589,355 +594,12 @@ def debug_emails():
 
 
 # ---------------------------------------------------------------------------
-# CLI entry point
+# Backward-compatible CLI shim
 # ---------------------------------------------------------------------------
 
-def main():
-    import argparse
-
-    # Set up logging here (not at module level) so importing pipeline
-    # doesn't create directories or hijack the root logger.
-    LOG_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)  # restrict ~/.job_pipeline to owner
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s  %(levelname)s  %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        handlers=[
-            logging.FileHandler(LOG_DIR / f"{datetime.date.today()}.log"),
-            logging.StreamHandler(),
-        ],
-    )
-
-    parser = argparse.ArgumentParser(
-        prog="metis",
-        description="AI-powered job alert digest — filters, scores, and delivers "
-                    "only what's worth your time.",
-    )
-    parser.add_argument(
-        "--lookback", default=None, metavar="DURATION",
-        help="Override lookback window. Accepts: '3d', '7d', '2026-05-10'. "
-             "Default: since last run (falls back to 3d if no prior run).",
-    )
-    parser.add_argument(
-        "--no-limit", dest="score_all", action="store_true",
-        help="Score every role in the lookback window, ignoring MAX_JOBS_PER_RUN. "
-             "A Haiku pre-screen runs first to keep API costs down. "
-             "Useful for catch-up runs after a long gap or a reset.",
-    )
-    parser.add_argument(
-        "--dry-run", dest="dry_run", action="store_true",
-        help="Full run (fetch + score) but no writes: no email sent, no seen_roles saved, no tracker updated.",
-    )
-
-    subparsers = parser.add_subparsers(dest="command")
-
-    # init_bak subcommand (archived — use `metis init` for the conversational wizard)
-    init_p = subparsers.add_parser(
-        "init_bak",
-        help="[archived] Create your scoring profile from a resume (PDF, DOCX, or TXT).",
-    )
-    init_p.add_argument(
-        "--resume", metavar="PATH",
-        help="Path to your resume (PDF, DOCX, or TXT). Prompted interactively if omitted.",
-    )
-    init_p.add_argument(
-        "--linkedin", metavar="PATH",
-        help="Optional: LinkedIn export PDF or data archive for profile enrichment.",
-    )
-
-    # init subcommand — conversational onboarding wizard
-    subparsers.add_parser(
-        "init",
-        help="Conversational profile setup — freeform prompts instead of a form.",
-    )
-
-    # reset subcommand
-    reset_p = subparsers.add_parser("reset", help="Clear seen-role state so all roles reprocess.")
-    reset_p.add_argument("--force",   action="store_true", help="Skip confirmation prompt.")
-    reset_p.add_argument("--profile", action="store_true", help="Also delete your scoring profile (~/.job_pipeline/profile.yaml).")
-
-    # schedule subcommand  (git-style nested actions)
-    schedule_p = subparsers.add_parser(
-        "schedule",
-        help="Install, inspect, or remove the automated digest schedule.",
-        description=(
-            "Show the current schedule when called with no action.\n\n"
-            "  metis schedule        show current schedule + OS job status\n"
-            "  metis schedule set    interactive setup (or update)\n"
-            "  metis schedule remove remove the scheduled job"
-        ),
-    )
-    schedule_sub = schedule_p.add_subparsers(dest="schedule_action")
-    schedule_sub.add_parser(
-        "set",
-        help="Run the interactive setup wizard to install or replace the schedule.",
-    )
-    schedule_sub.add_parser(
-        "pause",
-        help="Temporarily disable the schedule without losing your settings.",
-    )
-    schedule_sub.add_parser(
-        "resume",
-        help="Re-enable a paused schedule.",
-    )
-    schedule_sub.add_parser(
-        "remove",
-        help="Remove the scheduled job and clear ~/.job_pipeline/schedule.json.",
-    )
-    _run_p = schedule_sub.add_parser(
-        "run",
-        help=argparse.SUPPRESS,   # internal: called by launchd/cron
-    )
-    _run_p.add_argument(
-        "--lookback", dest="run_lookback", default="1d", metavar="DURATION",
-    )
-
-    # track subcommand
-    track_p = subparsers.add_parser(
-        "track",
-        help="Parse confirmation and rejection emails, update the Applications tracker.",
-        description=(
-            "Fetches emails from Gmail, classifies them as confirmations or rejections,\n"
-            "and updates the Applications xlsx tracker accordingly.\n\n"
-            "  metis track                   # parse last 7 days\n"
-            "  metis track --lookback 30d    # extend lookback\n"
-            "  metis track --dry-run         # preview matches, no writes"
-        ),
-    )
-    track_p.add_argument(
-        "--lookback", default="7d", metavar="DURATION",
-        help="How far back to look for emails. Accepts '7d', '30d', '2026-06-01'. Default: 7d",
-    )
-    track_p.add_argument(
-        "--dry-run", dest="dry_run", action="store_true",
-        help="Parse and classify emails; print matches to stdout without writing or opening the tracker.",
-    )
-
-    # sources subcommand
-    sources_p = subparsers.add_parser(
-        "sources",
-        help="Manage all job sources (email alerts + company career pages).",
-        description=(
-            "View and manage all job sources.\n\n"
-            "  metis sources                    show all active sources\n"
-            "  metis sources add                interactive picker (company or alert)\n"
-            "  metis sources add Stripe         add a specific company\n"
-            "  metis sources add --all          add every company in the pool\n"
-            "  metis sources remove             interactively remove sources\n"
-            "  metis sources on                 enable company scraping\n"
-            "  metis sources off                disable company scraping"
-        ),
-    )
-    sources_sub = sources_p.add_subparsers(dest="sources_action")
-    sources_sub.add_parser("list",   help="Show all active sources.")
-    sources_add_p = sources_sub.add_parser("add", help="Add a company or alert source.")
-    sources_add_p.add_argument("source_name", nargs="*", help="Company name to add (omit for interactive).")
-    sources_add_p.add_argument("--all", dest="add_all", action="store_true", help="Add all companies in the pool.")
-    sources_sub.add_parser("remove", help="Interactively remove sources.")
-    sources_sub.add_parser("on",     help="Enable company scraping.")
-    sources_sub.add_parser("off",    help="Disable company scraping.")
-    email_p   = sources_sub.add_parser("email", help="Manage email alert sources.")
-    email_sub = email_p.add_subparsers(dest="email_action")
-    email_sub.add_parser("list",   help="List email alert sources.")
-    email_sub.add_parser("add",    help="Add an email alert source (interactive).")
-    email_sub.add_parser("remove", help="Remove an email alert source (interactive).")
-
-    # feedback subcommand
-    feedback_p = subparsers.add_parser(
-        "feedback",
-        help="Add calibration notes that shape future scoring runs.",
-        description=(
-            "Collect free-form feedback on past scoring, parsed by Claude and\n"
-            "appended to ~/.job_pipeline/feedback.md. Injected into the scoring\n"
-            "prompt on every subsequent run.\n\n"
-            "  metis feedback add    # interactive prompt\n"
-            "  metis feedback list   # show recent entries"
-        ),
-    )
-    feedback_sub = feedback_p.add_subparsers(dest="feedback_action")
-    feedback_sub.add_parser("add",  help="Add a calibration note interactively.")
-    feedback_sub.add_parser("list", help="Show recent feedback entries.")
-
-    # debug subcommand
-    subparsers.add_parser("debug", help="Dump the most recent LinkedIn alert email for inspection.")
-
-    # summary subcommand
-    summary_p = subparsers.add_parser(
-        "summary",
-        help="Generate and send the Metis market summary.",
-        description=(
-            "Compiles cumulative pipeline metrics from the tracker and sends\n"
-            "the summary to your email address.\n\n"
-            "  metis summary                        # send to email\n"
-            "  metis summary --output summary.html  # save as HTML\n"
-            "  metis summary --output summary.pdf   # save as PDF\n"
-            "  metis summary --lookback 60d         # scope market intel to 60 days"
-        ),
-    )
-    summary_p.add_argument(
-        "--output", default=None, metavar="FILE",
-        help="Save summary to FILE (.html or .pdf) instead of sending by email.",
-    )
-    summary_p.add_argument(
-        "--lookback", default="30d", metavar="DURATION",
-        help="How far back to scope market intelligence sections. Default: 30d",
-    )
-    summary_p.add_argument(
-        "--send", action="store_true",
-        help="Send as a real summary email (no [DRAFT PREVIEW] prefix).",
-    )
-
-
-
-    args = parser.parse_args()
-
-    if args.command == "init_bak":
-        _validate_env(require_gmail=False)   # only needs API key to parse resume
-        from .init_bak_cmd import run_init
-        run_init(
-            api_key=ANTHROPIC_API_KEY,
-            resume_path_arg=getattr(args, "resume", "") or "",
-            supplement_path_arg=getattr(args, "linkedin", "") or "",
-        )
-
-    elif args.command == "init":
-        _validate_env(require_gmail=False)
-        from .init_cmd import run_init
-        run_init(api_key=ANTHROPIC_API_KEY)
-
-    elif args.command == "reset":
-        targets = [SEEN_FILE]
-        if args.profile:
-            targets.append(DATA_DIR / "profile.yaml")
-
-        existing = [p for p in targets if p.exists()]
-        if not existing:
-            print("Nothing to reset — no state files found.")
-            return
-
-        names = ", ".join(p.name for p in existing)
-        if not args.force:
-            suffix = " + your scoring profile" if args.profile else ""
-            ans = input(f"Clear dedup state{suffix}? This cannot be undone. [y/N] ")
-            if ans.strip().lower() != "y":
-                print("Aborted.")
-                return
-
-        for p in existing:
-            p.unlink(missing_ok=True)
-        print(f"Cleared: {names}")
-        if args.profile and (DATA_DIR / "profile.yaml") in existing:
-            print("Run `metis init` to rebuild your scoring profile.")
-
-    elif args.command == "schedule":
-        from .schedule_cmd import (
-            show_schedule, run_schedule_wizard, remove_schedule,
-            pause_schedule, resume_schedule,
-        )
-        action = getattr(args, "schedule_action", None)
-        if action == "set":
-            run_schedule_wizard()
-        elif action == "pause":
-            paused = pause_schedule()
-            if paused:
-                print("  Schedule paused. Run `metis schedule resume` to re-enable.")
-            else:
-                print("  Nothing to pause — schedule is already paused or not configured.")
-        elif action == "resume":
-            resumed = resume_schedule()
-            if resumed:
-                print("  Schedule resumed.")
-            else:
-                print("  Nothing to resume — schedule is already active or not configured.")
-        elif action == "remove":
-            removed = remove_schedule()
-            print("  Schedule removed." if removed else "  No schedule was configured.")
-        elif action == "run":
-            _validate_env()
-            lookback_str = getattr(args, "run_lookback", "1d") or "1d"
-            since_dt = _parse_lookback(lookback_str)
-            if not since_dt:
-                print(f"Could not parse --lookback '{lookback_str}'. Try: '1d', '4d', '7d'")
-                raise SystemExit(1)
-            log.info("=== Scheduled run: digest + track (lookback %s) ===", lookback_str)
-            run_pipeline(since_dt=since_dt)
-            from .track import run_track
-            run_track(
-                gmail_address=GMAIL_ADDRESS,
-                app_password=GMAIL_APP_PASSWORD,
-                since_dt=since_dt,
-                dry_run=False,
-                api_key=ANTHROPIC_API_KEY,
-            )
-        else:
-            show_schedule()
-
-    elif args.command == "track":
-        _validate_env()
-        since_dt = _parse_lookback(getattr(args, "lookback", "7d"))
-        if not since_dt:
-            print(f"Could not parse --lookback '{args.lookback}'. Try: '7d', '30d', '2026-06-01'")
-            raise SystemExit(1)
-        from .track import run_track
-        run_track(
-            gmail_address=GMAIL_ADDRESS,
-            app_password=GMAIL_APP_PASSWORD,
-            since_dt=since_dt,
-            dry_run=getattr(args, "dry_run", False),
-            api_key=ANTHROPIC_API_KEY,
-        )
-
-    elif args.command == "sources":
-        from .sources_cmd import run_sources
-        action       = getattr(args, "sources_action", None)
-        email_action = getattr(args, "email_action", None)
-        name_parts   = getattr(args, "source_name", None)
-        name         = " ".join(name_parts) if name_parts else None
-        add_all      = getattr(args, "add_all", False)
-        run_sources(action, name or None, add_all=add_all, email_action=email_action)
-
-    elif args.command == "feedback":
-        _validate_env(require_gmail=False)
-        action = getattr(args, "feedback_action", None)
-        if action == "list":
-            from .feedback import run_feedback_list
-            run_feedback_list()
-        else:
-            from .feedback import run_feedback
-            run_feedback(api_key=ANTHROPIC_API_KEY)
-
-    elif args.command == "debug":
-        _validate_env()
-        debug_emails()
-
-    elif args.command == "summary":
-        _validate_env()
-        from .report_cmd import run_report
-        from .xlsx import TRACKER_PATH
-        lookback_str = getattr(args, "lookback", "30d") or "30d"
-        _lb_days = int(re.sub(r"[^\d]", "", lookback_str) or 30)
-        run_report(
-            tracker_path=TRACKER_PATH,
-            gmail_address=GMAIL_ADDRESS,
-            app_password=GMAIL_APP_PASSWORD,
-            output=getattr(args, "output", None),
-            preview=not getattr(args, "send", False),
-            lookback_days=_lb_days,
-        )
-
-    else:
-        # Default: run the digest pipeline
-        _validate_env()
-        if args.lookback:
-            since_dt = _parse_lookback(args.lookback)
-            if not since_dt:
-                print(f"Could not parse --lookback '{args.lookback}'. "
-                      f"Try: '3d', '7d', '2026-05-10'")
-                raise SystemExit(1)
-        else:
-            since_dt, label = _since_last_run()
-            log.info("Lookback window: %s", label)
-        run_pipeline(since_dt=since_dt, score_all=args.score_all, dry_run=args.dry_run)
+def main(argv: list[str] | None = None):
+    from .cli import main as cli_main
+    return cli_main(argv)
 
 
 if __name__ == "__main__":

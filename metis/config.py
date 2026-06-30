@@ -1,12 +1,12 @@
-"""scorerole/config.py — runtime configuration as an explicit dataclass.
+"""metis/config.py — runtime configuration as an explicit dataclass.
 
-Build once in main() via Config.from_env() after load_dotenv(). Pass as a
-parameter to run_pipeline() and run_track() — never read os.getenv() inside
-module bodies or at import time.
+Target pattern: build once in main() via Config.from_env() after load_dotenv(),
+then pass as a parameter to pipeline and tracking functions. Some legacy CLI
+paths still read environment variables directly; new code should prefer this
+dataclass instead of adding more module-level config.
 
-This is the prerequisite for the MCP server (Stage 1 of the interface roadmap):
-an MCP tool call can construct Config from the request context and call
-run_pipeline(config) without touching the ambient environment.
+This is the path toward wrappers such as an MCP server, where callers need to
+construct config from request context without mutating the ambient environment.
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ class Config:
     model:              str = "claude-sonnet-4-6"
     prescreen_model:    str = "claude-haiku-4-5"
     extract_model:      str = "claude-haiku-4-5"
-    max_jobs_per_run:   int = 20
+    max_jobs_per_run:   int = 40
     default_lookback:   str = "3d"
 
     @classmethod
@@ -38,6 +38,6 @@ class Config:
             model              = os.getenv("MODEL",              "claude-sonnet-4-6"),
             prescreen_model    = os.getenv("PRESCREEN_MODEL",    "claude-haiku-4-5"),
             extract_model      = os.getenv("EXTRACT_MODEL",      "claude-haiku-4-5"),
-            max_jobs_per_run   = int(os.getenv("MAX_JOBS_PER_RUN", "20")),
+            max_jobs_per_run   = int(os.getenv("MAX_JOBS_PER_RUN", "40")),
             default_lookback   = os.getenv("DEFAULT_LOOKBACK",   "3d"),
         )

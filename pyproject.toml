@@ -24,7 +24,7 @@ dependencies = [
 ]
 
 [project.scripts]
-metis = "metis.pipeline:main"
+metis = "metis.cli:main"
 
 [project.optional-dependencies]
 browser = ["playwright>=1.40"]
@@ -40,5 +40,7 @@ metis = [
     "email_templates/render.ts",
     "email_templates/package.json",
     "email_templates/tsconfig.json",
+    "email_templates/types.ts",
+    "email_templates/utils/*.ts",
     "email_templates/emails/**/*.tsx",
 ]

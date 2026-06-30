@@ -58,6 +58,12 @@ _RED    = "FFC7CE"   # app_status=Rejected
 _GREY   = "D9D9D9"   # action_taken=Not Applied, suggestion_status=Limited Match
 _STATUS_FILL = {
     # suggestion_status
+    "Apply":          _GREEN,
+    "Consider":       _YELLOW,
+    "Partial":        _GREY,
+    "Partial Match":  _GREY,
+    "Skipped":        _GREY,
+    "Filtered":       _RED,
     "Solid Match":    _GREEN,
     "Moderate Match": _YELLOW,
     "Limited Match":  _GREY,
@@ -69,6 +75,7 @@ _STATUS_FILL = {
     "Pending":      _YELLOW,
     "Proceeding":   _GREEN,
     "Rejected":     _RED,
+    "Recruiter Screen": "BDD7EE",
 }
 
 # ---------------------------------------------------------------------------
@@ -160,6 +167,7 @@ def _sort_rows_by_date(ws) -> None:
             cell.font         = snap["font"]
             cell.number_format = snap["number_fmt"]
             cell.alignment    = snap["alignment"]
+            cell.hyperlink     = None
             if snap["hyperlink"]:
                 cell.hyperlink = snap["hyperlink"]
 
@@ -174,13 +182,18 @@ def _make_fill(hex_color: str):
     return PatternFill(fill_type="solid", fgColor=hex_color)
 
 
-def _apply_row_styles(ws, row_idx: int, suggestion_status: str, action_taken: str) -> None:
+def _apply_row_styles(
+    ws,
+    row_idx: int,
+    suggestion_status: str | None = None,
+    action_taken: str | None = None,
+    application_status: str | None = None,
+) -> None:
     """Apply conditional fill colors to mutable enum cells."""
-    from openpyxl.styles import PatternFill
-
     cells_and_values = [
         (ws.cell(row_idx, _COL_SUGGESTION_STATUS), suggestion_status),
         (ws.cell(row_idx, _COL_ACTION_TAKEN),      action_taken),
+        (ws.cell(row_idx, _COL_APP_STATUS),        application_status),
     ]
     for cell, value in cells_and_values:
         color = _STATUS_FILL.get(value)
@@ -283,6 +296,43 @@ def _append_job_row(ws, job: dict, run_date_str: str) -> None:
     _apply_row_styles(ws, next_row, suggestion_status, action_taken)
 
 
+def format_tracker_sheet(ws) -> None:
+    """Normalize tracker presentation without changing column order or values."""
+    from openpyxl.styles import Alignment
+
+    _set_column_widths(ws)
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
+
+    for row_idx in range(2, ws.max_row + 1):
+        ws.cell(row_idx, _COL_MATCH_SCORE).number_format = "0%"
+
+        for col_idx in (
+            _COL_DATE_SUGGESTED,
+            _COL_MATCH_SCORE,
+            _COL_SUGGESTION_STATUS,
+            _COL_ACTION_TAKEN,
+            _COL_DATE_APPLIED,
+            _COL_APP_STATUS,
+        ):
+            ws.cell(row_idx, col_idx).alignment = Alignment(horizontal="center", vertical="top")
+
+        for col_idx in (_COL_ROLE_TITLE, _COL_COMPANY, _COL_NOTES):
+            ws.cell(row_idx, col_idx).alignment = Alignment(
+                horizontal="left",
+                vertical="top",
+                wrap_text=(col_idx == _COL_NOTES),
+            )
+
+        _apply_row_styles(
+            ws,
+            row_idx,
+            str(ws.cell(row_idx, _COL_SUGGESTION_STATUS).value or ""),
+            str(ws.cell(row_idx, _COL_ACTION_TAKEN).value or ""),
+            str(ws.cell(row_idx, _COL_APP_STATUS).value or ""),
+        )
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -349,6 +399,7 @@ def write_to_tracker(jobs: list[dict], run_date: str | None = None) -> None:
         added += 1
 
     if added:
+        format_tracker_sheet(ws)
         _sort_rows_by_date(ws)
         wb.save(TRACKER_PATH)
         TRACKER_PATH.chmod(0o600)

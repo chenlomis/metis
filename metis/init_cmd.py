@@ -1,4 +1,4 @@
-"""metis init2 — conversational profile setup wizard (beta).
+"""metis init — conversational profile setup wizard.
 
 Conversational alternative to `metis init`. Two freeform prompts replace
 the structured Step 2/3 form. Claude extracts the profile, then asks at most
@@ -146,7 +146,7 @@ def _print_welcome(console, THEME, rich_box):
         f"  [{THEME['accent']} bold]3.[/]  [bold]What you'd pass on[/bold]  [{THEME['dim']}]— what to exclude[/]\n"
         f"  [{THEME['accent']} bold]4.[/]  [bold]Review + save[/bold]  [{THEME['dim']}]— confirm and calibrate[/]\n\n"
         f"[{THEME['dim']}]~5 mins · Enter to skip · "
-        f"`metis init2` to update anytime[/]",
+        f"`metis init` to update anytime[/]",
         style=Style(bgcolor=THEME["accent_bg"]),
         border_style=Style(color=THEME["accent"]),
         box=rich_box.ROUNDED,
@@ -275,7 +275,7 @@ def _step_want(console, THEME, INQUIRER_STYLE, print_section, print_section_intr
         "Tip — describe useful details such as: role title, company type, domain,"
         " work style, location, and comp expectations."
     )
-    print_eg('"Staff or Principal PM at an AI infrastructure or developer tools company. Prefer growth-stage, remote-first, small team, $280k+ base. Excited by agentic AI or LLM infra."')
+    print_eg('"Staff or Principal PM at an AI infrastructure or developer tools company. Prefer growth-stage, remote-first, small team. Excited by agentic AI or LLM infra."')
     console.print()
     console.print("  [dim italic][Enter] submit  ·  empty [Enter] to skip[/dim italic]")
     console.print()
@@ -662,7 +662,7 @@ def run_init(api_key):
     # Fail fast in non-interactive environments (CI, pipes, scripts)
     if not sys.stdin.isatty():
         console.print(
-            "[bold]metis init2[/bold] requires an interactive terminal.\n"
+            "[bold]metis init[/bold] requires an interactive terminal.\n"
             f"  [dim]For non-interactive setup, edit [{THEME['accent']}]{PROFILE_PATH}[/] directly.[/dim]"
         )
         sys.exit(1)
@@ -809,5 +809,5 @@ def run_init(api_key):
         open_in_editor(PROFILE_PATH)
 
     console.print(
-        "\n  [dim]Run `metis init2` any time to update your profile.[/dim]\n"
+        "\n  [dim]Run `metis init` any time to update your profile.[/dim]\n"
     )

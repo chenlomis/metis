@@ -120,9 +120,10 @@ def _write_row_from_email(ws, parsed: dict, suggestion_status: str,
     from .xlsx import _set_hyperlink
 
     next_row = ws.max_row + 1
+    role_title = parsed.get("role") or ("External application" if suggestion_status == "External" else "")
     values = [
         date_suggested or parsed["date"],
-        parsed.get("role") or "",
+        role_title,
         parsed.get("company") or "",
         match_score,
         suggestion_status,
@@ -163,9 +164,9 @@ def create_backfill_row(ws, parsed: dict) -> None:
     """Create a row for a confirmed application with no prior tracker entry.
 
     Used for roles applied to before the tracker existed, or applied to outside
-    the scorerole digest. suggestion_status='Pre-tracker' marks these as backfills.
+    the metis digest. suggestion_status='External' marks these as backfills.
     """
-    _write_row_from_email(ws, parsed, suggestion_status="Pre-tracker")
+    _write_row_from_email(ws, parsed, suggestion_status="External")
 
 
 # ---------------------------------------------------------------------------

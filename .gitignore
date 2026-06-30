@@ -11,17 +11,19 @@ __pycache__/
 !.env.example
 
 # Pipeline runtime data (lives in ~/.job_pipeline/, outside this repo)
-profile.yaml
-seen_roles.json
-runs.jsonl
-applications.xlsx
-last_run.json
-feedback.md
-feedback_log.jsonl
-schedule.json
-role_queue.json
-skipped_roles.json
-debug_email.txt
+**/.job_pipeline/
+**/.job_pipeline_*/
+**/profile.yaml
+**/seen_roles.json
+**/runs.jsonl
+**/applications.xlsx
+**/last_run.json
+**/feedback.md
+**/feedback_log.jsonl
+**/schedule.json
+**/role_queue.json
+**/skipped_roles.json
+**/debug_email.txt
 
 # Build output
 *.html

@@ -163,11 +163,18 @@ Not all tests need to run on every change:
 | Routine change | `pytest tests/test_core.py tests/test_schedule.py -q` | ~60 | <3s |
 | `extract.py` changed | add `tests/test_extract.py` | +70 | ~10s |
 | Pre-release / big refactor | `pytest tests/ -q` | all | ~4s |
-| E2e spot-check | `python run_persona_test.py` | real pipeline | ~10–20 min |
+| Mocked e2e spot-check | `make test-e2e` | bounded persona pipeline, mocked Gmail/API/SMTP | <3s |
+| Live e2e spot-check | `python run_persona_test.py --dry-run` | real Gmail/API pipeline, isolated persona state | ~10–20 min |
 
 `test_extract.py` is the heavyweight suite — it mocks the Claude API for structured data extraction tests. Skip it unless `extract.py` was touched.
 
 ## Persona test tooling
+
+`tests/test_e2e_personas.py` is the zero-cost e2e gate. It runs the public
+`run_pipeline()` orchestration against PM, designer, and software-engineer
+example profiles with 25 fake roles and `MAX_JOBS_PER_RUN=20`. Gmail, Anthropic,
+SMTP, tracker writes, and persistent state writes are mocked, so this is safe for
+CI and pre-release checks.
 
 `run_persona_test.py` (repo root) runs the full pipeline against real Gmail input under a mock profile:
 

@@ -83,10 +83,12 @@ def run_for_persona(
     importlib.reload(render_mod)
     import metis.state as state_mod
     importlib.reload(state_mod)
+    import metis.xlsx as xlsx_mod
+    importlib.reload(xlsx_mod)
 
-    _orig_send = render_mod.send_digest
+    _orig_send = pipeline_mod.send_digest
 
-    def _labelled_send(html, run_date, deal_breaker_count=0):
+    def _labelled_send(html, run_date, job_count=0, **_kwargs):
         from email.mime.multipart import MIMEMultipart
         from email.mime.text import MIMEText
         import smtplib
@@ -102,7 +104,7 @@ def run_for_persona(
         log.info(f"Digest sent → {msg['To']}  subject: {msg['Subject']}")
 
     if not dry_run:
-        render_mod.send_digest = _labelled_send
+        pipeline_mod.send_digest = _labelled_send
 
     since_dt = datetime.datetime.now() - datetime.timedelta(days=lookback_days)
     try:
@@ -114,9 +116,10 @@ def run_for_persona(
     except SystemExit as e:
         log.warning(f"Pipeline exited: {e}")
     finally:
-        render_mod.send_digest = _orig_send
+        pipeline_mod.send_digest = _orig_send
         os.environ.pop("METIS_PROFILE", None)
         os.environ.pop("METIS_DATA_DIR", None)
+        importlib.reload(xlsx_mod)
 
     return True
 

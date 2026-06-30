@@ -125,6 +125,43 @@ class TestT07SmtpFailureDoesNotWriteSeenRoles:
 
         mock_save.assert_called_once_with(new_role_timestamps)
 
+    def test_dry_run_does_not_write_delivery_state(self):
+        """Dry-run renders the digest preview but must not send or persist state."""
+        jobs = [_make_job("apply")]
+        new_role_timestamps = {"abc123": "2026-06-28T10:00:00"}
+
+        with (
+            patch("metis.pipeline.render_html", return_value="<html>digest</html>"),
+            patch("metis.pipeline.send_digest") as mock_send,
+            patch("metis.pipeline.save_seen_roles") as mock_seen,
+            patch("metis.pipeline.save_skipped_roles") as mock_skipped,
+            patch("metis.pipeline.save_last_run") as mock_last_run,
+            patch("metis.xlsx.write_to_tracker") as mock_tracker,
+        ):
+            from metis.pipeline import _stage_deliver
+            _stage_deliver(
+                jobs,
+                n_filtered=0,
+                new_role_timestamps=new_role_timestamps,
+                dry_run=True,
+            )
+
+        mock_send.assert_not_called()
+        mock_seen.assert_not_called()
+        mock_skipped.assert_not_called()
+        mock_last_run.assert_not_called()
+        mock_tracker.assert_not_called()
+
+    def test_dry_run_cap_does_not_write_role_queue(self):
+        """Dry-run should not clear or overwrite role_queue.json."""
+        jobs = [_make_job("apply")]
+
+        with patch("metis.pipeline.save_role_queue") as mock_queue:
+            from metis.pipeline import _stage_cap
+            _stage_cap(jobs, score_all=False, client=MagicMock(), dry_run=True)
+
+        mock_queue.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # T-08  track → xlsx: confirmation email flips row to Applied
@@ -227,3 +264,73 @@ class TestTrackXlsxIntegration:
         ws = self._reload_ws(tracker)
         assert ws.cell(2, 7).value == "2026-06-01", \
             "existing date_applied must not be overwritten by a follow-up confirmation"
+
+    def test_company_only_confirmation_can_match_existing_row(self, tmp_path):
+        tracker = _make_tracker(tmp_path, [
+            {"role_title": "Staff Product Manager, AI Platform", "company": "Weights & Biases",
+             "action_taken": "Not Applied"},
+        ])
+
+        from metis.track_write import find_tracker_row, update_confirmation
+        wb = openpyxl.load_workbook(tracker)
+        ws = wb.active
+        row_idx = find_tracker_row(ws, "Weights & Biases", None)
+        assert row_idx is not None
+        update_confirmation(ws, row_idx, "2026-06-29")
+        wb.save(tracker)
+
+        ws = self._reload_ws(tracker)
+        assert ws.cell(2, 6).value == "Applied"
+        assert ws.cell(2, 7).value == "2026-06-29"
+
+    def test_external_backfill_uses_clean_placeholder_title(self, tmp_path):
+        tracker = _make_tracker(tmp_path, [])
+
+        from metis.track_write import create_backfill_row
+        wb = openpyxl.load_workbook(tracker)
+        ws = wb.active
+        create_backfill_row(ws, {
+            "company": "Docker",
+            "role": None,
+            "date": "2026-06-29",
+        })
+        wb.save(tracker)
+
+        ws = self._reload_ws(tracker)
+        assert ws.cell(2, 2).value == "External application"
+        assert ws.cell(2, 3).value == "Docker"
+        assert ws.cell(2, 5).value == "External"
+
+
+def test_parse_email_rejects_reply_subject_noise():
+    from metis.track_parse import parse_email
+
+    parsed = parse_email({
+        "subject": "Re: Let's connect",
+        "body": "Thanks for your message.",
+        "sender": "Jane Person <jane@gmail.com>",
+        "date": "2026-06-29",
+    })
+
+    assert parsed["company"] is None
+    assert parsed["role"] is None
+
+
+def test_parse_email_drops_company_as_role_title():
+    from metis.track_parse import parse_email
+
+    parsed = parse_email({
+        "subject": "Thanks for applying to Weights & Biases",
+        "body": "Thanks for applying to Weights & Biases.",
+        "sender": "Weights & Biases Talent <careers@wandb.com>",
+        "date": "2026-06-29",
+    })
+
+    assert parsed["company"] == "Weights & Biases"
+    assert parsed["role"] is None
+
+
+def test_track_decode_header_value_import_path():
+    from metis.track import _decode_header_value
+
+    assert _decode_header_value("Metis Progress Report") == "Metis Progress Report"

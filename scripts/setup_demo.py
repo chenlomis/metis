@@ -15,11 +15,12 @@ Run with:
     python scripts/setup_demo.py
 
 Then record using:
+    export METIS_PROFILE=~/.job_pipeline_demo/profile.yaml
     export METIS_DATA_DIR=~/.job_pipeline_demo
-    metis --lookback 7d
-    metis track
-    metis summary
-    unset METIS_DATA_DIR   # back to real data after filming
+    ./venv/bin/python -m metis.cli --lookback 7d
+    ./venv/bin/python -m metis.cli track
+    ./venv/bin/python -m metis.cli summary
+    unset METIS_PROFILE METIS_DATA_DIR   # back to real data after filming
 """
 
 from __future__ import annotations
@@ -27,7 +28,9 @@ from __future__ import annotations
 import datetime
 import json
 import random
+import re
 import shutil
+from copy import copy
 from pathlib import Path
 
 import openpyxl
@@ -40,7 +43,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 REAL_DIR = Path.home() / ".job_pipeline"
 DEMO_DIR = Path.home() / ".job_pipeline_demo"
 
-# How many Not Applied rows to sample alongside all Applied rows.
+# How many Not Applied rows to sample alongside scored Applied rows.
 # With fixed alignment formula (TP+TN)/total, each Not Applied Solid/Moderate row
 # is an FN that drags alignment down. Keep this low to stay above 80%.
 # Math: (42 applied + 150 skipped) / (42 + NOT_APPLIED_SAMPLE + 150) = target
@@ -63,6 +66,12 @@ _RED    = "FFC7CE"
 _GREY   = "D9D9D9"
 
 _STATUS_FILL = {
+    "Apply":          _GREEN,
+    "Consider":       _YELLOW,
+    "Partial":        _GREY,
+    "Partial Match":  _GREY,
+    "Skipped":        _GREY,
+    "Filtered":       _RED,
     "Solid Match":    _GREEN,
     "Moderate Match": _YELLOW,
     "Limited Match":  _GREY,
@@ -71,6 +80,7 @@ _STATUS_FILL = {
     "Pending":        _YELLOW,
     "Proceeding":     _GREEN,
     "Rejected":       _RED,
+    "Recruiter Screen": "BDD7EE",
 }
 
 _HEADERS = [
@@ -78,6 +88,17 @@ _HEADERS = [
     "suggestion_status", "action_taken", "date_applied",
     "application_status", "notes",
 ]
+
+_METIS_SCORED = {
+    "Apply", "Consider", "Solid Match", "Moderate Match", "Limited Match",
+    "Partial Match", "Partial", "Skipped", "Filtered",
+}
+_HISTORICAL_APPLIED = {"External", "Pre-tracker"}
+_JANKY_ENTITY = re.compile(
+    r"^(?:re|fw|fwd)$|we received your application|let'?s connect|"
+    r"unique skills deemed necessary",
+    re.IGNORECASE,
+)
 
 _COL_WIDTHS = {
     "A": 16, "B": 30, "C": 20, "D": 14,
@@ -94,8 +115,16 @@ def _make_fill(value: str) -> PatternFill | None:
     return PatternFill(fill_type="solid", fgColor=color) if color else None
 
 
+def _is_clean_historical_applied(row_values: tuple) -> bool:
+    title = str(row_values[1] or "").strip()
+    company = str(row_values[2] or "").strip()
+    if not title or not company:
+        return False
+    return not (_JANKY_ENTITY.search(title) or _JANKY_ENTITY.search(company))
+
+
 def _copy_xlsx(src: Path, dest: Path, applied_rows: list, not_applied_sample: list) -> None:
-    src_wb = openpyxl.load_workbook(src, data_only=True)
+    src_wb = openpyxl.load_workbook(src, data_only=False)
     src_ws = src_wb.active
 
     dest_wb = openpyxl.Workbook()
@@ -113,10 +142,19 @@ def _copy_xlsx(src: Path, dest: Path, applied_rows: list, not_applied_sample: li
 
     # Write rows: Applied first, then Not Applied sample
     all_demo_rows = applied_rows + not_applied_sample
-    for row_idx, row_values in enumerate(all_demo_rows, start=2):
+    for row_idx, (src_row_idx, row_values) in enumerate(all_demo_rows, start=2):
         for col_idx, value in enumerate(row_values, start=1):
             cell = dest_ws.cell(row=row_idx, column=col_idx, value=value)
-            cell.alignment = Alignment(horizontal="left")
+            cell.alignment = Alignment(
+                horizontal="center" if col_idx in (1, 4, 5, 6, 7, 8) else "left",
+                vertical="top",
+                wrap_text=(col_idx == 9),
+            )
+
+            src_cell = src_ws.cell(src_row_idx, col_idx)
+            if src_cell.hyperlink:
+                cell.hyperlink = src_cell.hyperlink.target
+                cell.font = copy(src_cell.font)
 
         dest_ws.cell(row=row_idx, column=4).number_format = "0%"
 
@@ -131,7 +169,10 @@ def _copy_xlsx(src: Path, dest: Path, applied_rows: list, not_applied_sample: li
 
     dest_wb.save(dest)
     print(f"  Created {dest}")
-    print(f"    {len(applied_rows)} Applied rows (all preserved)")
+    scored_applied = sum(1 for _, row in applied_rows if row[4] in _METIS_SCORED)
+    historical_applied = sum(1 for _, row in applied_rows if row[4] in _HISTORICAL_APPLIED)
+    print(f"    {scored_applied} Metis-scored Applied rows")
+    print(f"    {historical_applied} historical Applied rows (External/Pre-tracker, clean only)")
     print(f"    {len(not_applied_sample)} Not Applied rows (sampled)")
     print(f"    {len(all_demo_rows)} total xlsx rows")
 
@@ -167,22 +208,32 @@ def main() -> None:
     if real_xlsx.exists():
         wb = openpyxl.load_workbook(real_xlsx, data_only=True)
         ws = wb.active
-        all_rows = [tuple(r) for r in ws.iter_rows(min_row=2, values_only=True)
-                    if any(c is not None for c in r)]
+        all_rows = [
+            (r_idx, tuple(ws.cell(r_idx, c).value for c in range(1, len(_HEADERS) + 1)))
+            for r_idx in range(2, ws.max_row + 1)
+            if any(ws.cell(r_idx, c).value is not None for c in range(1, len(_HEADERS) + 1))
+        ]
 
-        # Exclude External and Pre-tracker rows — they predate metis and skew
-        # the Total Applied count and alignment metrics in the summary.
-        metis_scored = {"Apply", "Consider", "Solid Match", "Moderate Match", "Limited Match",
-                        "Partial Match", "Partial", "Skipped", "Filtered"}
-        scored_rows = [r for r in all_rows if r[4] in metis_scored]
+        scored_rows = [r for r in all_rows if r[1][4] in _METIS_SCORED]
+        historical_applied = [
+            r for r in all_rows
+            if r[1][4] in _HISTORICAL_APPLIED
+            and r[1][5] == "Applied"
+            and _is_clean_historical_applied(r[1])
+        ]
 
-        applied     = [r for r in scored_rows if r[5] == "Applied"]
-        not_applied = [r for r in scored_rows if r[5] == "Not Applied"]
+        applied     = [r for r in scored_rows if r[1][5] == "Applied"]
+        not_applied = [r for r in scored_rows if r[1][5] == "Not Applied"]
 
         sample_size = min(NOT_APPLIED_SAMPLE, len(not_applied))
         not_applied_sample = random.sample(not_applied, sample_size)
 
-        _copy_xlsx(real_xlsx, DEMO_DIR / "applications.xlsx", applied, not_applied_sample)
+        _copy_xlsx(
+            real_xlsx,
+            DEMO_DIR / "applications.xlsx",
+            applied + historical_applied,
+            not_applied_sample,
+        )
     else:
         print("  WARNING: No applications.xlsx found in real data dir")
 
@@ -227,22 +278,34 @@ def main() -> None:
         print("  Created empty runs.jsonl")
 
     # ── 5. Fresh dedup state ─────────────────────────────────────────────────
-    (DEMO_DIR / "seen_roles.json").write_text(json.dumps({"roles": {}, "version": 1}, indent=2))
+    # state.load_seen_roles() expects a flat {role_hash: iso_timestamp} mapping.
+    (DEMO_DIR / "seen_roles.json").write_text("{}")
     print("  Created empty seen_roles.json (all recent roles will score fresh)")
 
+    (DEMO_DIR / "role_queue.json").write_text("[]")
+    print("  Cleared role_queue.json")
+
     # ── Summary ──────────────────────────────────────────────────────────────
-    xlsx_total   = len(applied) + len(not_applied_sample) if real_xlsx.exists() else 0
+    scored_xlsx_total = len(applied) + len(not_applied_sample) if real_xlsx.exists() else 0
+    all_xlsx_total = (
+        len(applied) + len(historical_applied) + len(not_applied_sample)
+        if real_xlsx.exists() else 0
+    )
     skipped_total = len(skipped_sample) if real_skipped.exists() else 0
     print(f"""
-Demo summary total that 'metis summary' will show:
-  {xlsx_total} xlsx rows + {skipped_total} skipped = {xlsx_total + skipped_total} roles scored
+Demo summary baseline before filming a new digest run:
+  {scored_xlsx_total} scored xlsx rows + {skipped_total} skipped = {scored_xlsx_total + skipped_total} roles scored
+  {all_xlsx_total} total tracker rows, including historical External/Pre-tracker applied rows
+
+Each filmed 'metis --lookback ...' run adds newly evaluated rows/skipped roles to that baseline.
 
 To film:
+  export METIS_PROFILE=~/.job_pipeline_demo/profile.yaml
   export METIS_DATA_DIR=~/.job_pipeline_demo
-  metis --lookback 7d     # scored digest
-  metis track             # tracker update
-  metis summary           # progress report
-  unset METIS_DATA_DIR    # back to real data
+  ./venv/bin/python -m metis.cli --lookback 7d     # scored digest
+  ./venv/bin/python -m metis.cli track             # tracker update
+  ./venv/bin/python -m metis.cli summary           # progress report
+  unset METIS_PROFILE METIS_DATA_DIR    # back to real data
 
 Your real ~/.job_pipeline/ was not touched.
 """)

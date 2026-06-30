@@ -25,15 +25,23 @@ function StatTile({
 }) {
   return (
     <td
-      width="33%"
-      style={{ background: bg, padding: '12px 14px', borderRadius: '6px', verticalAlign: 'top' }}
+      width="33.33%"
+      style={{ padding: '0 4px', verticalAlign: 'top' }}
     >
-      <p style={{ fontSize: '32px', fontWeight: 600, color: numColor, margin: '0 0 3px 0', fontFamily: FONT, lineHeight: '1' }}>
-        {number}
-      </p>
-      <p style={{ fontSize: '10px', color: lblColor, textTransform: 'uppercase', letterSpacing: '0.06em', margin: 0, fontFamily: FONT }}>
-        {label}
-      </p>
+      <table width="100%" cellPadding={0} cellSpacing={0} border={0} style={{ background: bg, borderRadius: '6px', tableLayout: 'fixed' }}>
+        <tbody>
+          <tr>
+            <td style={{ padding: '12px 14px', verticalAlign: 'top' }}>
+              <p style={{ fontSize: '32px', fontWeight: 600, color: numColor, margin: '0 0 3px 0', fontFamily: FONT, lineHeight: '1' }}>
+                {number}
+              </p>
+              <p style={{ fontSize: '10px', color: lblColor, textTransform: 'uppercase', letterSpacing: '0.06em', margin: 0, fontFamily: FONT }}>
+                {label}
+              </p>
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </td>
   );
 }
@@ -94,7 +102,7 @@ export default function DigestHeader({ date, totalEvaluated, applyCount, conside
         <tbody>
           <tr>
             <td style={{ padding: '14px 20px 16px' }}>
-              <table width="100%" cellPadding={0} cellSpacing={0} border={0} style={{ borderCollapse: 'collapse' }}>
+              <table width="100%" cellPadding={0} cellSpacing={0} border={0} style={{ borderCollapse: 'collapse', tableLayout: 'fixed' }}>
                 <tbody>
                   <tr>
                     <StatTile
@@ -104,7 +112,6 @@ export default function DigestHeader({ date, totalEvaluated, applyCount, conside
                       numColor={C_STAT_TOTAL_NUM}
                       lblColor={C_STAT_TOTAL_LBL}
                     />
-                    <td width={8}>&nbsp;</td>
                     <StatTile
                       number={applyCount}
                       label="Solid Match"
@@ -112,7 +119,6 @@ export default function DigestHeader({ date, totalEvaluated, applyCount, conside
                       numColor={C_STAT_APPLY_NUM}
                       lblColor={C_STAT_APPLY_LBL}
                     />
-                    <td width={8}>&nbsp;</td>
                     <StatTile
                       number={considerCount}
                       label="Moderate Match"
