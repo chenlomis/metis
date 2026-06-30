@@ -281,7 +281,7 @@ def format_extraction_for_scoring(ext: dict, listing_company: str = "") -> str:
         lines.append(f"  Domain: {' | '.join(dom_parts)}")
 
     # Company
-    stage = ext.get("company_stage", "unknown")
+    stage = ext.get("company_stage") or "unknown"
     tier  = ext.get("company_tier")
     co_str = stage + (f" / {tier}" if tier else "")
     # When stage is unknown but the listing has a known company name, surface it so

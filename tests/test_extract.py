@@ -242,6 +242,12 @@ class TestFormatExtractionForScoring:
         out = format_extraction_for_scoring(s)
         assert "3d/wk" in out
 
+    def test_null_company_stage_uses_unknown(self):
+        from metis.extract import format_extraction_for_scoring
+        s = _minimal_struct(company_stage=None, company_tier="large_private")
+        out = format_extraction_for_scoring(s, listing_company="Acme")
+        assert "Company: unknown / large_private (listed as: Acme)" in out
+
     def test_none_struct_returns_empty(self):
         from metis.extract import format_extraction_for_scoring
         assert format_extraction_for_scoring(None) == ""
