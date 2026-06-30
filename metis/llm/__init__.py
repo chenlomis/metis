@@ -71,6 +71,37 @@ def _text_from_anthropic_response(response: Any) -> str:
     return str(getattr(content[0], "text", "") or "")
 
 
+def _system_to_text(system: str | list[dict[str, Any]]) -> str:
+    if isinstance(system, str):
+        return system
+    parts: list[str] = []
+    for block in system:
+        if isinstance(block, dict) and block.get("type") == "text":
+            parts.append(str(block.get("text", "")))
+    return "\n\n".join(p for p in parts if p)
+
+
+def _openai_usage(raw_usage: Any) -> LLMUsage:
+    return LLMUsage(
+        input_tokens=int(getattr(raw_usage, "input_tokens", 0) or 0),
+        output_tokens=int(getattr(raw_usage, "output_tokens", 0) or 0),
+    )
+
+
+def _text_from_openai_response(response: Any) -> str:
+    output_text = getattr(response, "output_text", None)
+    if output_text is not None:
+        return str(output_text)
+
+    chunks: list[str] = []
+    for item in getattr(response, "output", []) or []:
+        for content in getattr(item, "content", []) or []:
+            text = getattr(content, "text", None)
+            if text is not None:
+                chunks.append(str(text))
+    return "".join(chunks)
+
+
 class AnthropicLLM:
     provider = "anthropic"
     is_metis_llm = True
@@ -121,6 +152,66 @@ class AnthropicLLM:
         )
 
 
+class OpenAILLM:
+    provider = "openai"
+    is_metis_llm = True
+
+    def __init__(self, *, api_key: str):
+        if not api_key:
+            raise LLMAuthError("OPENAI_API_KEY is not set")
+        try:
+            import openai
+            from openai import OpenAI
+        except ImportError as exc:
+            raise LLMProviderError(
+                "openai package is not installed. Install project dependencies after adding OpenAI support."
+            ) from exc
+
+        self._openai = openai
+        self._client = OpenAI(api_key=api_key)
+
+    def _retryable_errors(self) -> tuple[type[BaseException], ...]:
+        return tuple(
+            err
+            for name in ("InternalServerError", "RateLimitError", "APIConnectionError", "APITimeoutError")
+            if isinstance((err := getattr(self._openai, name, None)), type)
+        )
+
+    def complete(
+        self,
+        *,
+        model: str,
+        system: str | list[dict[str, Any]],
+        user: str,
+        max_tokens: int,
+        temperature: float | None = None,
+        json_mode: bool = False,
+    ) -> LLMResponse:
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "instructions": _system_to_text(system),
+            "input": user,
+            "max_output_tokens": max_tokens,
+        }
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+        if json_mode:
+            kwargs["text"] = {"format": {"type": "json_object"}}
+
+        try:
+            response = self._client.responses.create(**kwargs)
+        except self._retryable_errors() as exc:
+            raise LLMTransientError(str(exc)) from exc
+        except getattr(self._openai, "AuthenticationError", LLMAuthError) as exc:
+            raise LLMAuthError(str(exc)) from exc
+
+        return LLMResponse(
+            text=_text_from_openai_response(response),
+            usage=_openai_usage(getattr(response, "usage", None)),
+            raw=response,
+        )
+
+
 def complete_text(
     client: Any,
     *,
@@ -166,8 +257,6 @@ def create_llm_client(*, provider: str, api_key: str) -> LLMClient:
     provider_id = (provider or "anthropic").strip().lower()
     if provider_id == "anthropic":
         return AnthropicLLM(api_key=api_key)
-    raise LLMProviderError(
-        f"Unsupported LLM provider '{provider_id}'. "
-        "This branch currently wires the provider boundary with Anthropic only."
-    )
-
+    if provider_id == "openai":
+        return OpenAILLM(api_key=api_key)
+    raise LLMProviderError(f"Unsupported LLM provider '{provider_id}'.")

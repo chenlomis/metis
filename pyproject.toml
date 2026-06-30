@@ -9,6 +9,7 @@ description = "AI-powered job alert digest — filters, scores, and delivers onl
 requires-python = ">=3.11"
 dependencies = [
     "anthropic>=0.40",
+    "openai>=1.82",
     "httpx",
     "requests",
     "beautifulsoup4",

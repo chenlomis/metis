@@ -18,11 +18,14 @@ for _dotenv_path in _dotenv_candidates:
 # Config
 # ---------------------------------------------------------------------------
 ANTHROPIC_API_KEY  = os.getenv("ANTHROPIC_API_KEY")
+OPENAI_API_KEY     = os.getenv("OPENAI_API_KEY")
 LLM_PROVIDER       = os.getenv("METIS_LLM_PROVIDER", os.getenv("LLM_PROVIDER", "anthropic"))
 GMAIL_ADDRESS      = os.getenv("GMAIL_ADDRESS", "")
 GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
 RECIPIENT_EMAIL    = os.getenv("RECIPIENT_EMAIL", GMAIL_ADDRESS)
 MODEL              = os.getenv("MODEL", "claude-sonnet-4-6")
+PRESCREEN_MODEL    = os.getenv("PRESCREEN_MODEL", "claude-haiku-4-5")
+EXTRACT_MODEL      = os.getenv("EXTRACT_MODEL", "claude-haiku-4-5")
 MAX_JOBS_PER_RUN   = int(os.getenv("MAX_JOBS_PER_RUN", "40"))
 DEFAULT_LOOKBACK   = os.getenv("DEFAULT_LOOKBACK", "3d")  # fallback only; main() uses last-run timestamp when available
 
@@ -49,10 +52,15 @@ def _validate_env(require_gmail: bool = True):
             "  ANTHROPIC_API_KEY is not set.\n"
             "  Get one at https://console.anthropic.com (separate from Claude.ai subscription)."
         )
-    elif provider != "anthropic":
+    elif provider == "openai" and not OPENAI_API_KEY:
+        errors.append(
+            "  OPENAI_API_KEY is not set.\n"
+            "  Get one at https://platform.openai.com/api-keys."
+        )
+    elif provider not in ("anthropic", "openai"):
         errors.append(
             f"  METIS_LLM_PROVIDER={provider} is not supported yet.\n"
-            "  This branch has the provider abstraction wired, with Anthropic as the first live adapter."
+            "  Supported providers: anthropic, openai."
         )
     if require_gmail:
         if not GMAIL_ADDRESS:
@@ -348,7 +356,7 @@ def _stage_cap(
         from .score import prescreen_jobs_batch
         from .trace import write_trace
         before_prescreen = list(all_jobs)
-        all_jobs = prescreen_jobs_batch(client, all_jobs)
+        all_jobs = prescreen_jobs_batch(client, all_jobs, model=PRESCREEN_MODEL)
         passed_ids = {id(j) for j in all_jobs}
         for job in before_prescreen:
             if id(job) not in passed_ids:
@@ -400,7 +408,7 @@ def _stage_enrich_and_score(jobs: list[dict], client, dry_run: bool = False) -> 
 
     # Layer 1: structured extraction
     try:
-        extractions = extract_jd_structs(client, jobs)
+        extractions = extract_jd_structs(client, jobs, model=EXTRACT_MODEL)
     except Exception as exc:
         log.warning("Layer 1 extraction failed (%s) — scoring without extraction context", exc)
         extractions = [{} for _ in jobs]
@@ -424,7 +432,7 @@ def _stage_enrich_and_score(jobs: list[dict], client, dry_run: bool = False) -> 
 
     if to_score:
         try:
-            score_jobs_batch(client, to_score, profile_data)   # mutates job["eval"] in-place
+            score_jobs_batch(client, to_score, profile_data, model=MODEL)   # mutates job["eval"] in-place
         except FileNotFoundError:
             raise SystemExit(
                 "\n❌  No scoring profile found.\n"
@@ -526,7 +534,9 @@ def run_pipeline(since_dt: datetime.datetime, score_all: bool = False, dry_run: 
     """
     log.info(f"=== Pipeline run starting — lookback since {since_dt.strftime('%Y-%m-%d')} ===")
     try:
-        client = create_llm_client(provider=LLM_PROVIDER, api_key=ANTHROPIC_API_KEY or "")
+        provider_id = (LLM_PROVIDER or "anthropic").strip().lower()
+        api_key = OPENAI_API_KEY if provider_id == "openai" else ANTHROPIC_API_KEY
+        client = create_llm_client(provider=provider_id, api_key=api_key or "")
     except LLMProviderError as exc:
         raise SystemExit(f"\n❌  {exc}\n") from exc
     seen_roles = load_seen_roles()
