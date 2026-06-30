@@ -12,6 +12,7 @@ import json, logging, os, re, time
 from pathlib import Path
 import anthropic
 
+from .llm import LLMTransientError, complete_text
 from .prompts import JD_EXTRACT_SYSTEM
 
 log = logging.getLogger(__name__)
@@ -29,6 +30,7 @@ _RETRYABLE = (
     anthropic.RateLimitError,
     anthropic.APIConnectionError,
     anthropic.APITimeoutError,
+    LLMTransientError,
 )
 _MAX_ATTEMPTS = 3
 
@@ -76,7 +78,7 @@ def _is_valid_struct(obj: object) -> bool:
     return _REQUIRED_KEYS.issubset(obj.keys())
 
 
-def _extract_chunk(client: anthropic.Anthropic, jobs: list[dict],
+def _extract_chunk(client, jobs: list[dict],
                    *, model: str = _DEFAULT_EXTRACT_MODEL) -> list[dict]:
     """Extract structured fields for one chunk of jobs. Returns list of structs."""
     job_blocks = "\n\n---\n\n".join(
@@ -96,19 +98,18 @@ def _extract_chunk(client: anthropic.Anthropic, jobs: list[dict],
     response = None
     for attempt in range(_MAX_ATTEMPTS):
         try:
-            response = client.messages.create(
+            response = complete_text(
+                client,
                 model=model,
                 max_tokens=max(1024, len(jobs) * 350),
                 temperature=0,
                 system=JD_EXTRACT_SYSTEM,
-                messages=[{
-                    "role": "user",
-                    "content": (
-                        f"Extract structured fields for all {len(jobs)} jobs. "
-                        f"Return a JSON array of exactly {len(jobs)} objects.\n\n"
-                        f"{job_blocks}"
-                    ),
-                }],
+                user=(
+                    f"Extract structured fields for all {len(jobs)} jobs. "
+                    f"Return a JSON array of exactly {len(jobs)} objects.\n\n"
+                    f"{job_blocks}"
+                ),
+                json_mode=True,
             )
             break
         except _RETRYABLE as exc:
@@ -130,7 +131,7 @@ def _extract_chunk(client: anthropic.Anthropic, jobs: list[dict],
     )
 
     raw = re.sub(
-        r"^```(?:json)?\s*|\s*```$", "", response.content[0].text.strip(), flags=re.MULTILINE
+        r"^```(?:json)?\s*|\s*```$", "", response.text.strip(), flags=re.MULTILINE
     ).strip()
 
     try:
@@ -147,7 +148,7 @@ def _extract_chunk(client: anthropic.Anthropic, jobs: list[dict],
         return [{**dict(_BLANK_STRUCT), "jd_quality": "extraction_failed"} for _ in jobs]
 
 
-def extract_jd_structs(client: anthropic.Anthropic, jobs: list[dict],
+def extract_jd_structs(client, jobs: list[dict],
                        *, model: str = _DEFAULT_EXTRACT_MODEL) -> list[dict]:
     """Extract Layer 1 structured fields for all jobs. Returns one dict per job, same order.
 

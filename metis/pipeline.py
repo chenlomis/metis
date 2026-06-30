@@ -2,7 +2,8 @@ from __future__ import annotations
 import os, re, sys, datetime, logging
 from pathlib import Path
 from dotenv import load_dotenv
-import anthropic
+
+from .llm import LLMProviderError, create_llm_client
 
 # Load .env from project root (dev/editable install) or ~/.job_pipeline/.env (pipx/pip install).
 _dotenv_candidates = [
@@ -17,6 +18,7 @@ for _dotenv_path in _dotenv_candidates:
 # Config
 # ---------------------------------------------------------------------------
 ANTHROPIC_API_KEY  = os.getenv("ANTHROPIC_API_KEY")
+LLM_PROVIDER       = os.getenv("METIS_LLM_PROVIDER", os.getenv("LLM_PROVIDER", "anthropic"))
 GMAIL_ADDRESS      = os.getenv("GMAIL_ADDRESS", "")
 GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
 RECIPIENT_EMAIL    = os.getenv("RECIPIENT_EMAIL", GMAIL_ADDRESS)
@@ -41,10 +43,16 @@ from .deliver import send_digest
 # ---------------------------------------------------------------------------
 def _validate_env(require_gmail: bool = True):
     errors = []
-    if not ANTHROPIC_API_KEY:
+    provider = (LLM_PROVIDER or "anthropic").strip().lower()
+    if provider == "anthropic" and not ANTHROPIC_API_KEY:
         errors.append(
             "  ANTHROPIC_API_KEY is not set.\n"
             "  Get one at https://console.anthropic.com (separate from Claude.ai subscription)."
+        )
+    elif provider != "anthropic":
+        errors.append(
+            f"  METIS_LLM_PROVIDER={provider} is not supported yet.\n"
+            "  This branch has the provider abstraction wired, with Anthropic as the first live adapter."
         )
     if require_gmail:
         if not GMAIL_ADDRESS:
@@ -271,7 +279,7 @@ def _stage_ingest(since_dt: datetime.datetime, seen_roles: set, profile=None) ->
 def _stage_cap(
     all_jobs: list[dict],
     score_all: bool,
-    client,                  # anthropic.Anthropic — passed through to prescreen if needed
+    client,                  # Metis LLM client — passed through to prescreen if needed
     dry_run: bool = False,
 ) -> tuple[list[dict], bool]:
     """Apply the per-run cap and optionally run the Haiku pre-screen.
@@ -517,7 +525,10 @@ def run_pipeline(since_dt: datetime.datetime, score_all: bool = False, dry_run: 
     dry_run=True skips all writes: no email send, no seen_roles save, no tracker write.
     """
     log.info(f"=== Pipeline run starting — lookback since {since_dt.strftime('%Y-%m-%d')} ===")
-    client     = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    try:
+        client = create_llm_client(provider=LLM_PROVIDER, api_key=ANTHROPIC_API_KEY or "")
+    except LLMProviderError as exc:
+        raise SystemExit(f"\n❌  {exc}\n") from exc
     seen_roles = load_seen_roles()
 
     # Load profile early — needed for proactive source config and gate checks

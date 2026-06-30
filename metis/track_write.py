@@ -116,15 +116,15 @@ def _write_row_from_email(ws, parsed: dict, suggestion_status: str,
                           match_score: float | None = None,
                           url: str = "") -> None:
     """Shared helper: append one row to ws from parsed email data."""
-    from openpyxl.styles import Alignment
-    from .xlsx import _set_hyperlink
+    from .xlsx import _apply_row_alignment, _external_role_title, _set_hyperlink
 
     next_row = ws.max_row + 1
-    role_title = parsed.get("role") or ("External application" if suggestion_status == "External" else "")
+    company = parsed.get("company") or ""
+    role_title = _external_role_title(parsed.get("role"), company, suggestion_status)
     values = [
         date_suggested or parsed["date"],
         role_title,
-        parsed.get("company") or "",
+        company,
         match_score,
         suggestion_status,
         "Applied",
@@ -133,10 +133,12 @@ def _write_row_from_email(ws, parsed: dict, suggestion_status: str,
         None,
     ]
     for col_idx, value in enumerate(values, start=1):
-        ws.cell(next_row, col_idx, value).alignment = Alignment(vertical="top")
+        ws.cell(next_row, col_idx, value)
+    _apply_row_alignment(ws, next_row)
 
-    if url:
-        _set_hyperlink(ws.cell(next_row, 2), url, values[1])
+    link_url = url or parsed.get("url") or ""
+    if link_url:
+        _set_hyperlink(ws.cell(next_row, 2), link_url, values[1])
 
     ws.cell(next_row, 4).number_format = "0%"
     for col, val in [(5, suggestion_status), (6, "Applied"), (8, "Pending")]:
@@ -158,6 +160,8 @@ def create_skipped_row(ws, parsed: dict, skipped_meta: dict) -> None:
         ws.cell(next_row, 2).value = skipped_meta["role_title"]
     if skipped_meta.get("company"):
         ws.cell(next_row, 3).value = skipped_meta["company"]
+    from .xlsx import _apply_row_alignment
+    _apply_row_alignment(ws, next_row)
 
 
 def create_backfill_row(ws, parsed: dict) -> None:

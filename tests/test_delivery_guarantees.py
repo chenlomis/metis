@@ -301,6 +301,59 @@ class TestTrackXlsxIntegration:
         assert ws.cell(2, 3).value == "Docker"
         assert ws.cell(2, 5).value == "External"
 
+    def test_external_backfill_never_uses_company_as_role_title(self, tmp_path):
+        tracker = _make_tracker(tmp_path, [])
+
+        from metis.track_write import create_backfill_row
+        wb = openpyxl.load_workbook(tracker)
+        ws = wb.active
+        create_backfill_row(ws, {
+            "company": "Anthropic",
+            "role": "Anthropic",
+            "date": "2026-06-29",
+        })
+        wb.save(tracker)
+
+        ws = self._reload_ws(tracker)
+        assert ws.cell(2, 2).value == "External application"
+        assert ws.cell(2, 3).value == "Anthropic"
+
+    def test_external_backfill_alignment_matches_tracker_convention(self, tmp_path):
+        tracker = _make_tracker(tmp_path, [])
+
+        from metis.track_write import create_backfill_row
+        wb = openpyxl.load_workbook(tracker)
+        ws = wb.active
+        create_backfill_row(ws, {
+            "company": "Docker",
+            "role": None,
+            "date": "2026-06-29",
+        })
+        wb.save(tracker)
+
+        ws = self._reload_ws(tracker)
+        centered_cols = (1, 4, 5, 6, 7, 8)
+        left_cols = (2, 3, 9)
+        assert all(ws.cell(2, col).alignment.horizontal == "center" for col in centered_cols)
+        assert all(ws.cell(2, col).alignment.horizontal == "left" for col in left_cols)
+
+    def test_external_backfill_uses_parsed_url_as_hyperlink(self, tmp_path):
+        tracker = _make_tracker(tmp_path, [])
+
+        from metis.track_write import create_backfill_row
+        wb = openpyxl.load_workbook(tracker)
+        ws = wb.active
+        create_backfill_row(ws, {
+            "company": "Docker",
+            "role": "Staff Product Manager",
+            "url": "https://www.linkedin.com/jobs/view/123/",
+            "date": "2026-06-29",
+        })
+        wb.save(tracker)
+
+        ws = self._reload_ws(tracker)
+        assert ws.cell(2, 2).hyperlink.target == "https://www.linkedin.com/jobs/view/123/"
+
 
 def test_parse_email_rejects_reply_subject_noise():
     from metis.track_parse import parse_email
@@ -328,6 +381,20 @@ def test_parse_email_drops_company_as_role_title():
 
     assert parsed["company"] == "Weights & Biases"
     assert parsed["role"] is None
+
+
+def test_parse_email_preserves_url_metadata():
+    from metis.track_parse import parse_email
+
+    parsed = parse_email({
+        "subject": "Thanks for applying to Docker",
+        "body": "Thanks for applying to Docker.",
+        "sender": "Docker Talent <careers@docker.com>",
+        "date": "2026-06-29",
+        "url": "https://www.linkedin.com/jobs/view/123/",
+    })
+
+    assert parsed["url"] == "https://www.linkedin.com/jobs/view/123/"
 
 
 def test_track_decode_header_value_import_path():

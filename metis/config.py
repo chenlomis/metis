@@ -16,7 +16,11 @@ from dataclasses import dataclass, field
 
 @dataclass
 class Config:
+    llm_provider:       str = "anthropic"
     anthropic_api_key:  str = ""
+    openai_api_key:     str = ""
+    gemini_api_key:     str = ""
+    xai_api_key:        str = ""
     gmail_address:      str = ""
     gmail_app_password: str = ""
     recipient_email:    str = ""
@@ -31,7 +35,11 @@ class Config:
         """Build Config from environment variables (call once after load_dotenv())."""
         gmail = os.getenv("GMAIL_ADDRESS", "")
         return cls(
+            llm_provider      = os.getenv("METIS_LLM_PROVIDER", os.getenv("LLM_PROVIDER", "anthropic")),
             anthropic_api_key  = os.getenv("ANTHROPIC_API_KEY", ""),
+            openai_api_key     = os.getenv("OPENAI_API_KEY", ""),
+            gemini_api_key     = os.getenv("GEMINI_API_KEY", ""),
+            xai_api_key        = os.getenv("XAI_API_KEY", ""),
             gmail_address      = gmail,
             gmail_app_password = os.getenv("GMAIL_APP_PASSWORD", ""),
             recipient_email    = os.getenv("RECIPIENT_EMAIL", gmail),

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import datetime
 import email as email_lib
+import html as html_lib
 import imaplib
 import logging
 import re
@@ -269,6 +270,63 @@ def _extract_body(msg) -> str:
     return ""
 
 
+def _extract_links(msg) -> list[str]:
+    """Extract candidate links from plain/html email parts without fetching them."""
+    links: list[str] = []
+
+    def _add_from_text(text: str) -> None:
+        for url in re.findall(r"https?://[^\s<>\"]+", text):
+            links.append(html_lib.unescape(url).rstrip(").,;"))
+
+    def _add_from_html(text: str) -> None:
+        for raw in re.findall(r'''href=["']([^"']+)["']''', text, flags=re.IGNORECASE):
+            url = html_lib.unescape(raw)
+            if url.startswith("http"):
+                links.append(url.rstrip(").,;"))
+        _add_from_text(text)
+
+    if msg.is_multipart():
+        for part in msg.walk():
+            ct = part.get_content_type()
+            payload = part.get_payload(decode=True)
+            if not payload:
+                continue
+            decoded = _safe_decode(payload, part.get_content_charset())
+            if ct == "text/html":
+                _add_from_html(decoded)
+            elif ct == "text/plain":
+                _add_from_text(decoded)
+    else:
+        payload = msg.get_payload(decode=True)
+        if payload:
+            decoded = _safe_decode(payload, msg.get_content_charset())
+            if msg.get_content_type() == "text/html":
+                _add_from_html(decoded)
+            else:
+                _add_from_text(decoded)
+
+    seen: set[str] = set()
+    unique: list[str] = []
+    for link in links:
+        if link not in seen:
+            seen.add(link)
+            unique.append(link)
+    return unique
+
+
+def _candidate_job_url(links: list[str] | None) -> str | None:
+    """Pick the most useful job URL from email links, preferring LinkedIn JDs."""
+    if not links:
+        return None
+    for link in links:
+        if re.search(r"linkedin\.com/(?:jobs/view|comm/jobs/view)", link, re.IGNORECASE):
+            return link
+    for link in links:
+        if re.search(r"(?:greenhouse|lever|ashbyhq|workday|myworkdayjobs|smartrecruiters)", link, re.IGNORECASE):
+            return link
+    return None
+
+
 def fetch_candidate_emails(
     gmail_address: str,
     app_password: str,
@@ -397,11 +455,13 @@ def fetch_candidate_emails(
                     email_date = _email_date_iso(date_header)
 
                     body = _extract_body(msg)
+                    links = _extract_links(msg)
                     log.debug("track: fetched — %s | from: %s", subject[:80], sender[:50])
                     emails.append({
                         "subject": subject,
                         "sender":  sender,
                         "body":    body,
+                        "links":   links,
                         "date":    email_date,
                     })
             break   # success
@@ -600,6 +660,7 @@ def parse_email(email_dict: dict, llm_client=None) -> dict:
         "classification": classification,
         "company":        company,
         "role":           role,
+        "url":            _candidate_job_url(email_dict.get("links")),
         "date":           email_dict["date"],
         "subject":        subject,
         "sender":         email_dict["sender"],
@@ -797,15 +858,15 @@ def _write_row_from_email(ws, parsed: dict, suggestion_status: str,
                           match_score: float | None = None,
                           url: str = "") -> None:
     """Shared helper: append one row to ws from parsed email data."""
-    from openpyxl.styles import Alignment
-    from .xlsx import _set_hyperlink
+    from .xlsx import _apply_row_alignment, _external_role_title, _set_hyperlink
 
     next_row = ws.max_row + 1
-    role_title = parsed.get("role") or ("External application" if suggestion_status == "External" else "")
+    company = parsed.get("company") or ""
+    role_title = _external_role_title(parsed.get("role"), company, suggestion_status)
     values = [
         date_suggested or parsed["date"],
         role_title,
-        parsed.get("company") or "",
+        company,
         match_score,
         suggestion_status,
         "Applied",
@@ -814,10 +875,12 @@ def _write_row_from_email(ws, parsed: dict, suggestion_status: str,
         None,
     ]
     for col_idx, value in enumerate(values, start=1):
-        ws.cell(next_row, col_idx, value).alignment = Alignment(vertical="top")
+        ws.cell(next_row, col_idx, value)
+    _apply_row_alignment(ws, next_row)
 
-    if url:
-        _set_hyperlink(ws.cell(next_row, 2), url, values[1])
+    link_url = url or parsed.get("url") or ""
+    if link_url:
+        _set_hyperlink(ws.cell(next_row, 2), link_url, values[1])
 
     ws.cell(next_row, 4).number_format = "0%"
     for col, val in [(5, suggestion_status), (6, "Applied"), (8, "Pending")]:
@@ -840,6 +903,8 @@ def create_skipped_row(ws, parsed: dict, skipped_meta: dict) -> None:
         ws.cell(next_row, 2).value = skipped_meta["role_title"]
     if skipped_meta.get("company"):
         ws.cell(next_row, 3).value = skipped_meta["company"]
+    from .xlsx import _apply_row_alignment
+    _apply_row_alignment(ws, next_row)
 
 
 def create_backfill_row(ws, parsed: dict) -> None:
@@ -1322,7 +1387,8 @@ def run_track(
         elif kind == "recruiter_screen":
             log.info("track: skip recruiter screen (already %s) — %s", current_status, company)
 
-    from .xlsx import _sort_rows_by_date
+    from .xlsx import _sort_rows_by_date, format_tracker_sheet
+    format_tracker_sheet(ws)
     _sort_rows_by_date(ws)
 
     if changed:

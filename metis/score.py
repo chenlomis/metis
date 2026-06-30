@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import List
 import anthropic
 
+from .llm import LLMTransientError, complete_text
 from .types import EvalResult, JobDict
 
 log = logging.getLogger(__name__)
@@ -143,7 +144,7 @@ def _recover_partial_json(raw: str) -> list[dict]:
     return objects
 
 
-def prescreen_jobs_batch(client: anthropic.Anthropic, jobs: list[dict],
+def prescreen_jobs_batch(client, jobs: list[dict],
                          *, model: str = _DEFAULT_PRESCREEN_MODEL) -> list[dict]:
     """Fast Haiku pre-screen on title+company only — filters obvious mismatches before
     JD enrichment and full Sonnet scoring.
@@ -165,7 +166,8 @@ def prescreen_jobs_batch(client: anthropic.Anthropic, jobs: list[dict],
     )
 
     try:
-        response = client.messages.create(
+        response = complete_text(
+            client,
             model=model,
             max_tokens=max(256, len(jobs) * 12),  # ~12 tok/job: "1. Y\n" with headroom
             system=(
@@ -179,7 +181,7 @@ def prescreen_jobs_batch(client: anthropic.Anthropic, jobs: list[dict],
                 "Never filter on seniority level — scope must be assessed from the full JD, not the title.\n"
                 "When uncertain, Y."
             ),
-            messages=[{"role": "user", "content": job_lines}],
+            user=job_lines,
         )
     except Exception as exc:
         log.warning(
@@ -189,7 +191,7 @@ def prescreen_jobs_batch(client: anthropic.Anthropic, jobs: list[dict],
         )
         return jobs
 
-    raw   = response.content[0].text.strip()
+    raw   = response.text.strip()
     usage = response.usage
     log.info(
         f"Pre-screen ({model}) — "
@@ -532,7 +534,7 @@ _SCORE_CHUNK_SIZE = 15   # max jobs per Sonnet call (~15 × 300 tok ≈ 4,500 ou
 _MAX_OUTPUT_TOKENS = 8192
 
 
-def _score_chunk(client: anthropic.Anthropic, jobs: list[dict], system_prompt: str,
+def _score_chunk(client, jobs: list[dict], system_prompt: str,
                  *, model: str = _DEFAULT_MODEL) -> list[dict]:
     """Score one chunk of jobs. Returns evals list (may be shorter than jobs on truncation)."""
     from .extract import format_extraction_for_scoring
@@ -559,23 +561,23 @@ def _score_chunk(client: anthropic.Anthropic, jobs: list[dict], system_prompt: s
         anthropic.RateLimitError,        # 429
         anthropic.APIConnectionError,    # network blip
         anthropic.APITimeoutError,       # request timed out
+        LLMTransientError,
     )
     _MAX_ATTEMPTS = 3
     response = None
     for attempt in range(_MAX_ATTEMPTS):
         try:
-            response = client.messages.create(
+            response = complete_text(
+                client,
                 model=model,
                 max_tokens=_MAX_OUTPUT_TOKENS,
                 system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
-                messages=[{
-                    "role": "user",
-                    "content": (
-                        f"Score all {len(jobs)} jobs. "
-                        f"Return a JSON array of exactly {len(jobs)} objects.\n\n"
-                        f"{job_blocks}"
-                    ),
-                }],
+                user=(
+                    f"Score all {len(jobs)} jobs. "
+                    f"Return a JSON array of exactly {len(jobs)} objects.\n\n"
+                    f"{job_blocks}"
+                ),
+                json_mode=True,
             )
             break
         except _RETRYABLE as exc:
@@ -601,9 +603,7 @@ def _score_chunk(client: anthropic.Anthropic, jobs: list[dict], system_prompt: s
         usage.output_tokens,
     )
 
-    raw = re.sub(
-        r"^```(?:json)?\s*|\s*```$", "", response.content[0].text.strip(), flags=re.MULTILINE
-    ).strip()
+    raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", response.text.strip(), flags=re.MULTILINE).strip()
     try:
         evals = json.loads(raw)
         if isinstance(evals, dict):
@@ -697,7 +697,7 @@ def _inject_weights(evals: list[dict]) -> None:
 
 
 def score_jobs_batch(
-    client: anthropic.Anthropic,
+    client,
     jobs: List[JobDict],
     profile: dict | None = None,
     *,

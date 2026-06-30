@@ -475,6 +475,7 @@ def parse_email(email_dict: dict, llm_client=None) -> dict:
         "classification": classification,
         "company":        company,
         "role":           role,
+        "url":            email_dict.get("url"),
         "date":           email_dict["date"],
         "subject":        subject,
         "sender":         email_dict["sender"],
