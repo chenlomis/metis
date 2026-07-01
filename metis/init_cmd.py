@@ -652,6 +652,76 @@ def _run_review(profile, console, THEME, INQUIRER_STYLE, api_key=None,
 
 
 # ---------------------------------------------------------------------------
+# Step 0 — Connect inbox via OAuth
+# ---------------------------------------------------------------------------
+
+def _step_connect_inbox(console, THEME, INQUIRER_STYLE) -> None:
+    """Prompt the user to connect their inbox via OAuth (Gmail or Outlook).
+
+    Metis needs read access to fetch job alert emails and send access to
+    deliver your digest. This step is skipped if a token is already stored.
+    Runs before the profile wizard so email previews work immediately.
+    """
+    from .auth import gmail_oauth, outlook_oauth
+    from InquirerPy import inquirer
+    from InquirerPy.base.control import Choice
+
+    gmail_connected   = gmail_oauth.is_connected()
+    outlook_connected = outlook_oauth.is_connected()
+
+    if gmail_connected or outlook_connected:
+        provider = "Gmail" if gmail_connected else "Outlook"
+        console.print(f"\n  [{THEME['success']}]✓[/]  Inbox already connected ({provider})")
+        return
+
+    console.print(
+        "\n  [bold]Connect your inbox[/bold]\n"
+        "\n"
+        "  Metis needs read-only access to fetch job alert emails (Wellfound, Ladders,\n"
+        "  Waymo, GitHub, and others), and send access to deliver your digest back to you.\n"
+        "\n"
+        "  Your browser will open — you'll see exactly what's being granted before you approve.\n"
+        "  Metis only reads emails from senders you configure, and only sends your digest.\n"
+    )
+
+    connect = inquirer.confirm(
+        message="  › Connect your inbox now?",
+        default=True,
+        style=INQUIRER_STYLE,
+    ).execute()
+
+    if not connect:
+        console.print(
+            "  [dim]Skipped — you can connect later. Without inbox access, Metis will\n"
+            "  fall back to IMAP (requires GMAIL_ADDRESS + GMAIL_APP_PASSWORD in .env).[/dim]"
+        )
+        return
+
+    provider_choice = inquirer.select(
+        message="  › Which inbox?",
+        choices=[
+            Choice(value="gmail",   name="Gmail"),
+            Choice(value="outlook", name="Outlook / Hotmail / Live"),
+        ],
+        style=INQUIRER_STYLE,
+    ).execute()
+
+    console.print("\n  Opening your browser…\n")
+    try:
+        if provider_choice == "gmail":
+            email_addr = gmail_oauth.connect()
+            console.print(f"  [{THEME['success']}]✓[/]  Gmail connected ({email_addr})")
+        else:
+            email_addr = outlook_oauth.connect()
+            console.print(f"  [{THEME['success']}]✓[/]  Outlook connected ({email_addr})")
+    except Exception as e:
+        console.print(
+            f"  [{THEME['warning']}]⚠[/]  Could not connect inbox: {e}\n"
+            "  [dim]You can retry later. Continuing with profile setup.[/dim]"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -696,6 +766,10 @@ def run_init(api_key):
     # ── Full fresh wizard ─────────────────────────────────────────────────────
     console.print()
     _print_welcome(console, THEME, rich_box)
+
+    # Step 0 — Connect inbox
+    _step_connect_inbox(console, THEME, INQUIRER_STYLE)
+    print_separator()
 
     # Step 1
     resume_text, linkedin_text = _step_resume(

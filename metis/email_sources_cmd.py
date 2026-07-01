@@ -74,31 +74,145 @@ def _check_inbox(sender: str, gmail_address: str, gmail_app_password: str) -> in
         return -1  # -1 = couldn't check
 
 
-def cmd_email_add() -> None:
+def _preview_jobs(sender: str, gmail_address: str, gmail_app_password: str) -> list[dict]:
+    """Fetch the most recent email from sender and parse jobs from it for preview."""
+    import datetime
+    from .sources.email_alerts import (
+        _fetch_emails_from,
+        detect_format,
+        _parse_wellfound,
+        _parse_ladders,
+        _parse_clinchtalent,
+        _parse_icims,
+        _parse_with_llm,
+        _parse_generic,
+    )
+
+    since = datetime.datetime.now() - datetime.timedelta(days=90)
+    try:
+        with imaplib.IMAP4_SSL("imap.gmail.com") as imap:
+            imap.login(gmail_address, gmail_app_password)
+            imap.select("INBOX")
+            emails = _fetch_emails_from(imap, sender, since)
+    except Exception as e:
+        log.warning("Preview fetch failed: %s", e)
+        return []
+
+    if not emails:
+        return []
+
+    em  = emails[-1]
+    fmt = detect_format(sender)
+
+    if fmt == "wellfound":
+        return _parse_wellfound(em["html"], sender)
+    if fmt == "ladders":
+        return _parse_ladders(em["text"], em["html"], sender)
+    if fmt == "clinchtalent":
+        return _parse_clinchtalent(em["text"], sender)
+    if fmt == "icims":
+        return _parse_icims(em["html"], sender)
+    if fmt == "llm":
+        return _parse_with_llm(em["html"], em["text"], sender)
+    return _parse_generic(em["html"] or em["text"], sender)
+
+
+def cmd_email_add(sender_arg: str | None = None) -> None:
+    """Add an email alert source.
+
+    If sender_arg is provided ('metis sources email add team@hi.wellfound.com'),
+    skips the interactive wizard: fetches a recent email, previews parsed jobs,
+    and asks for a single confirmation.
+
+    Without sender_arg, runs the full interactive wizard.
+    """
+    import os
+    gmail_address      = os.getenv("GMAIL_ADDRESS", "")
+    gmail_app_password = os.getenv("GMAIL_APP_PASSWORD", "")
+
+    # ── Non-interactive path ──────────────────────────────────────────────────
+    if sender_arg:
+        sender = sender_arg.strip()
+        fmt    = detect_format(sender)
+
+        existing = load_email_sources()
+        if any(e["sender"].lower() == sender.lower() for e in existing):
+            console.print(f"\n  [{THEME['warning']}]⚠[/]  {sender} is already configured.")
+            return
+
+        console.print(f"\n  Fetching a recent email from [bold]{sender}[/bold]…")
+
+        jobs: list[dict] = []
+        if gmail_address and gmail_app_password:
+            jobs = _preview_jobs(sender, gmail_address, gmail_app_password)
+
+        if jobs:
+            console.print(f"  Found [bold]{len(jobs)}[/bold] job(s):\n")
+            for j in jobs[:8]:
+                parts = [f"[bold]{j['title']}[/bold]"]
+                if j.get("company"):
+                    parts.append(j["company"])
+                if j.get("location"):
+                    parts.append(j["location"])
+                if j.get("salary"):
+                    parts.append(j["salary"])
+                console.print("    · " + "  —  ".join(parts))
+            if len(jobs) > 8:
+                console.print(f"    … and {len(jobs) - 8} more")
+        else:
+            console.print(
+                f"  [{THEME['warning']}]⚠[/]  No recent emails found from this sender "
+                "(they'll be picked up once they arrive)."
+            )
+
+        console.print(
+            f"\n  Parser: [bold]{format_label(fmt)}[/bold]  |  Sender: [dim]{sender}[/dim]"
+        )
+
+        try:
+            from InquirerPy import inquirer
+            save = inquirer.confirm(message="Register this source?", default=True).execute()
+        except ImportError:
+            ans = input("  Register this source? [Y/n] ").strip().lower()
+            save = ans in ("", "y", "yes")
+
+        if not save:
+            console.print("  [dim]Cancelled.[/dim]")
+            return
+
+        companies = [j.get("company", "") for j in jobs if j.get("company")]
+        label = companies[0] if len(set(companies)) == 1 else format_label(fmt)
+
+        existing.append({"company": label, "sender": sender, "format": fmt})
+        save_email_sources(existing)
+        console.print(
+            f"\n  [{THEME['success']}]✓[/]  Added [bold]{label}[/bold] "
+            f"({format_label(fmt)}, {sender}).\n"
+            f"  Run [bold]metis[/bold] to include these in your next digest.\n"
+        )
+        return
+
+    # ── Interactive wizard ────────────────────────────────────────────────────
     try:
         from InquirerPy import inquirer
     except ImportError:
         print("InquirerPy required. Run: pip install InquirerPy")
         return
 
-    import os
-    gmail_address      = os.getenv("GMAIL_ADDRESS", "")
-    gmail_app_password = os.getenv("GMAIL_APP_PASSWORD", "")
-
     console.print("")
 
     company = inquirer.text(
-        message="Company name:",
+        message="Company or source name:",
         validate=lambda v: len(v.strip()) > 0,
-        invalid_message="Company name is required.",
+        invalid_message="Name is required.",
     ).execute()
     if not company:
         return
     company = company.strip()
 
     sender = inquirer.text(
-        message="Sender address or domain (FROM filter):",
-        long_instruction="  Tip: paste the exact From: address shown in the email, e.g. githubinc@nurture.icims.com",
+        message="Sender address (FROM filter):",
+        long_instruction="  Tip: paste the exact From: address shown in the email, e.g. team@hi.wellfound.com",
         validate=lambda v: len(v.strip()) > 0,
         invalid_message="Sender address is required.",
     ).execute()
@@ -106,41 +220,28 @@ def cmd_email_add() -> None:
         return
     sender = sender.strip()
 
-    # Auto-detect format; let user confirm or override
-    detected = detect_format(sender)
-    fmt_choices = ["ClinchTalent", "iCIMS", "Generic (link scraping)"]
-    fmt_map     = {"ClinchTalent": "clinchtalent", "iCIMS": "icims", "Generic (link scraping)": "generic"}
+    fmt = detect_format(sender)
+    console.print(f"\n  Parser: [bold]{format_label(fmt)}[/bold]")
 
-    detected_label = format_label(detected)
-    console.print(f"\n  Detected format: [bold]{detected_label}[/bold]")
-
-    confirm_fmt = inquirer.confirm(
-        message=f"Use {detected_label} parser?",
-        default=True,
-    ).execute()
-
-    if not confirm_fmt:
-        choice = inquirer.select(
-            message="Select parser:",
-            choices=fmt_choices,
-        ).execute()
-        fmt = fmt_map[choice]
-    else:
-        fmt = detected
-
-    # Check inbox
     if gmail_address and gmail_app_password:
-        console.print(f"\n  Checking inbox for emails from [bold]{sender}[/bold]…")
-        count = _check_inbox(sender, gmail_address, gmail_app_password)
-        if count > 0:
-            console.print(f"  [{THEME['success']}]✓[/]  Found {count} email(s) — looks good!")
-        elif count == 0:
-            console.print(f"  [{THEME['warning']}]⚠[/]  No emails found from this sender yet. "
-                   "They'll be picked up once they arrive.")
+        console.print(f"  Fetching a recent email from [bold]{sender}[/bold]…")
+        jobs = _preview_jobs(sender, gmail_address, gmail_app_password)
+        if jobs:
+            console.print(f"  Found [bold]{len(jobs)}[/bold] job(s):\n")
+            for j in jobs[:5]:
+                parts = [f"[bold]{j['title']}[/bold]"]
+                if j.get("company"):
+                    parts.append(j["company"])
+                if j.get("location"):
+                    parts.append(j["location"])
+                console.print("    · " + "  —  ".join(parts))
+            if len(jobs) > 5:
+                console.print(f"    … and {len(jobs) - 5} more")
         else:
-            console.print("  [dim]Couldn't verify inbox (will try on next run).[/dim]")
+            console.print(
+                f"  [{THEME['warning']}]⚠[/]  No recent emails from this sender yet."
+            )
 
-    # Check duplicate
     existing = load_email_sources()
     if any(e["sender"].lower() == sender.lower() for e in existing):
         console.print(f"\n  [{THEME['warning']}]{company}[/] ({sender}) is already configured.")
@@ -156,7 +257,7 @@ def cmd_email_add() -> None:
     console.print(
         f"\n  [{THEME['success']}]✓[/]  Added [bold]{company}[/bold] "
         f"({format_label(fmt)}, {sender}).\n"
-        f"  Run [bold]scorerole[/bold] to include these in your next digest.\n"
+        f"  Run [bold]metis[/bold] to include these in your next digest.\n"
     )
 
 
@@ -201,13 +302,13 @@ def cmd_email_remove() -> None:
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
-def run_email_sources(action: str | None) -> None:
+def run_email_sources(action: str | None, sender_arg: str | None = None) -> None:
     if action in (None, "list"):
         cmd_email_list()
     elif action == "add":
-        cmd_email_add()
+        cmd_email_add(sender_arg=sender_arg)
     elif action == "remove":
         cmd_email_remove()
     else:
         console.print(f"  Unknown action: {action!r}")
-        console.print("  Usage: scorerole sources email [list | add | remove]")
+        console.print("  Usage: metis sources email [list | add [sender] | remove]")

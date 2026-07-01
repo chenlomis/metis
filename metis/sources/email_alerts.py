@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import datetime
 import email as _email_lib
-import imaplib
 import logging
 import re
 import time
@@ -203,7 +202,7 @@ def _parse_ladders(body_text: str, body_html: str, company: str) -> list[dict]:
 
     # Parse plain-text rows: "Title / Location  /  $NNN - $NNN*  Remote?"
     row_re = re.compile(
-        r'^(?P<title>.+?)\s*/\s*(?P<location>[^/]+?)\s*/\s*(?P<salary>\$[\d,]+\s*[-–]\s*\$?[\d,k*]+.*?)$',
+        r'^(?P<title>.+?)\s*/\s*(?P<location>.+?)\s*/\s*(?P<salary>\$[\d,K]+\s*[-–]\s*\$?[\d,K*]+[^\n]*)',
         re.MULTILINE,
     )
 
@@ -465,10 +464,14 @@ def fetch_email_alerts(
     since_dt: datetime.datetime,
     sources: list[dict],
     *,
-    gmail_address: str,
-    gmail_app_password: str,
+    gmail_address: str = "",
+    gmail_app_password: str = "",
 ) -> list[dict]:
     """Fetch and parse job alerts from non-LinkedIn email sources.
+
+    Uses the active email provider (Gmail OAuth, Outlook OAuth, or IMAP fallback).
+    gmail_address/gmail_app_password are kept for backwards compatibility with the
+    IMAP fallback path but are ignored when an OAuth token is present.
 
     Returns dicts matching the pipeline job schema:
     title, company, location, job_id, url, jd, source.
@@ -476,57 +479,51 @@ def fetch_email_alerts(
     if not sources:
         return []
 
+    from .email_fetcher import fetch_emails_from_sender
+
     all_jobs: list[dict] = []
 
-    try:
-        with imaplib.IMAP4_SSL("imap.gmail.com") as imap:
-            imap.login(gmail_address, gmail_app_password)
-            imap.select("INBOX")
+    for src in sources:
+        company = src.get("company", "")
+        sender  = src.get("sender", "")
+        fmt     = src.get("format") or detect_format(sender)
+        if not sender:
+            continue
 
-            for src in sources:
-                company = src.get("company", "")
-                sender  = src.get("sender", "")
-                fmt     = src.get("format") or detect_format(sender)
-                if not sender:
-                    continue
+        emails = fetch_emails_from_sender(sender, since_dt)
+        log.info("email-alerts: %d email(s) from %s (%s)", len(emails), sender, company)
 
-                emails = _fetch_emails_from(imap, sender, since_dt)
-                log.info("email-alerts: %d email(s) from %s (%s)", len(emails), sender, company)
+        for em in emails:
+            if fmt == "wellfound":
+                parsed = _parse_wellfound(em["html"], company)
+            elif fmt == "ladders":
+                parsed = _parse_ladders(em["text"], em["html"], company)
+            elif fmt == "clinchtalent":
+                parsed = _parse_clinchtalent(em["text"], company)
+            elif fmt == "icims":
+                parsed = _parse_icims(em["html"], company)
+            elif fmt == "llm":
+                parsed = _parse_with_llm(em["html"], em["text"], company)
+            else:
+                parsed = _parse_generic(em["html"] or em["text"], company)
 
-                for em in emails:
-                    if fmt == "wellfound":
-                        parsed = _parse_wellfound(em["html"], company)
-                    elif fmt == "ladders":
-                        parsed = _parse_ladders(em["text"], em["html"], company)
-                    elif fmt == "clinchtalent":
-                        parsed = _parse_clinchtalent(em["text"], company)
-                    elif fmt == "icims":
-                        parsed = _parse_icims(em["html"], company)
-                    elif fmt == "llm":
-                        parsed = _parse_with_llm(em["html"], em["text"], company)
-                    else:
-                        parsed = _parse_generic(em["html"] or em["text"], company)
+            for job in parsed:
+                # Best-effort JD fetch; fall back to synthetic jd from email fields
+                jd = ""
+                if job.get("url"):
+                    jd = _fetch_jd(job["url"])
+                    time.sleep(_FETCH_DELAY_S)
+                if not jd:
+                    jd = _synthetic_jd(job)
 
-                    for job in parsed:
-                        # Best-effort JD fetch; fall back to synthetic jd from email fields
-                        jd = ""
-                        if job.get("url"):
-                            jd = _fetch_jd(job["url"])
-                            time.sleep(_FETCH_DELAY_S)
-                        if not jd:
-                            jd = _synthetic_jd(job)
-
-                        all_jobs.append({
-                            "title":    job["title"],
-                            "company":  job.get("company") or company,
-                            "location": job.get("location", ""),
-                            "job_id":   f"{(job.get('company') or company).lower()}:{job['title'].lower()}",
-                            "url":      job.get("url", ""),
-                            "jd":       jd,
-                            "source":   "email_alert",
-                        })
-
-    except imaplib.IMAP4.error as e:
-        log.error("IMAP error fetching email alerts: %s", e)
+                all_jobs.append({
+                    "title":    job["title"],
+                    "company":  job.get("company") or company,
+                    "location": job.get("location", ""),
+                    "job_id":   f"{(job.get('company') or company).lower()}:{job['title'].lower()}",
+                    "url":      job.get("url", ""),
+                    "jd":       jd,
+                    "source":   "email_alert",
+                })
 
     return all_jobs
