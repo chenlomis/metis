@@ -1,4 +1,4 @@
-"""scorerole/track_imap.py — IMAP fetch layer for candidate emails.
+"""metis/track_imap.py — IMAP fetch layer for candidate emails.
 
 Owns: IMAP connection, email decode helpers, fetch_candidate_emails().
 No classification logic lives here — that belongs in track_parse.py.

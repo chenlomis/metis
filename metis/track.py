@@ -1,4 +1,4 @@
-"""scorerole/track.py — thin orchestrator for the track pipeline stage.
+"""metis/track.py — thin orchestrator for the track pipeline stage.
 
 Usage:
     metis track                   # parse emails from last 7 days
@@ -19,6 +19,7 @@ import email as email_lib
 import html as html_lib
 import imaplib
 import logging
+import os
 import re
 import sys
 import time
@@ -60,7 +61,7 @@ def _infer_company_from_known_apps(email_dict: dict, applied_companies: set[str]
         return None
     return max(matches, key=len)
 
-# Re-exports for backward-compat (tests import from scorerole.track)
+# Re-exports for backward-compat
 from .track_parse import classify_email, _LLM_VALID_CLASSES  # noqa: F401
 from .track_write import update_recruiter_screen              # noqa: F401
 
@@ -617,17 +618,23 @@ No punctuation, no explanation, no quotes."""
 
 
 def _extract_role_llm(subject: str, body: str, client) -> str | None:
-    """Haiku fallback when regex role extraction returns nothing."""
+    """LLM fallback when regex role extraction returns nothing."""
+    from .llm import complete_text, normalize_provider, resolve_stage_models
+
+    provider = normalize_provider(os.getenv("METIS_LLM_PROVIDER", os.getenv("LLM_PROVIDER", "anthropic")))
+    model = resolve_stage_models(provider)["extract_model"]
     try:
-        resp = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+        resp = complete_text(
+            client,
+            model=model,
             max_tokens=30,
-            messages=[{"role": "user", "content": _ROLE_EXTRACT_PROMPT.format(
+            system="Extract the exact job title from the email when present.",
+            user=_ROLE_EXTRACT_PROMPT.format(
                 subject=subject,
                 body=body[:1500],
-            )}],
+            ),
         )
-        result = resp.content[0].text.strip()
+        result = resp.text.strip()
         if result.upper() == "NONE" or not result:
             return None
         return _clean_role(result)
@@ -1138,7 +1145,7 @@ def backfill_from_digests(
 # ---------------------------------------------------------------------------
 
 def _build_llm_client(api_key: str | None):
-    """Return an Anthropic client if profile.yaml has track.llm_fallback: true.
+    """Return a provider-neutral LLM client if profile.yaml has track.llm_fallback: true.
 
     Returns None when the flag is absent, false, or the api_key is missing —
     so classify_email() runs phrase-only (safe for OSS users with no key).
@@ -1153,9 +1160,11 @@ def _build_llm_client(api_key: str | None):
     if not profile.get("track", {}).get("llm_fallback", False):
         return None
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
-        log.info("track: LLM fallback enabled (Haiku) for unknown emails")
+        from .llm import create_llm_client, normalize_provider
+
+        provider = normalize_provider(os.getenv("METIS_LLM_PROVIDER", os.getenv("LLM_PROVIDER", "anthropic")))
+        client = create_llm_client(provider=provider, api_key=api_key)
+        log.info("track: LLM fallback enabled (%s) for unknown emails", provider)
         return client
     except Exception as exc:
         log.warning("track: could not build LLM client (%s) — running phrase-only", exc)

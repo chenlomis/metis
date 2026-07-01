@@ -1,14 +1,14 @@
-# metis — Claude Code context
+# metis — agent context
 
 ## What this project is
-A personal job alert pipeline. It pulls job listings, scores them against a user profile using Claude, and sends a personalized email digest. CLI entry point: `metis` → `metis/cli.py:main`; digest orchestration lives in `metis/pipeline.py`.
+A personal job alert pipeline. It pulls job listings, scores them against a user profile using the configured LLM provider, and sends a personalized email digest. Anthropic is the default; OpenAI is supported across public AI tasks while quality calibration continues. CLI entry point: `metis` → `metis/cli.py:main`; digest orchestration lives in `metis/pipeline.py`.
 
 ## Key commands
 ```
 # Main runner (no subcommand)
 metis                          # pull → score → send digest; incremental (since last run, fallback 3d)
 metis --lookback 7d            # override window; accepts: 3d, 14d, 2026-06-01
-metis --no-limit               # ignore MAX_JOBS_PER_RUN cap; Haiku pre-screens to control cost
+metis --no-limit               # ignore MAX_JOBS_PER_RUN cap; fast model pre-screens to control cost
 metis --dry-run                # full run (fetch + score), zero writes — no email, no seen_roles, no tracker
 
 # init — build/update scoring profile
@@ -33,7 +33,7 @@ metis track --lookback 30d     # accepts same DURATION format as main runner
 metis track --dry-run          # parse + classify, no xlsx write, no open; prints matches to stdout
 
 # feedback — calibration notes that shape future scoring
-metis feedback                 # collect → Claude parse → conflict detect → save to feedback.md
+metis feedback                 # collect → LLM parse → conflict detect → save to feedback.md
 metis feedback list            # show last 5 entries (full history: ~/.job_pipeline/feedback.md)
 
 # debug — dump most recent LinkedIn alert email
@@ -52,15 +52,15 @@ metis/
   init_cmd.py      — interactive profile setup wizard (InquirerPy + Rich)
   theme.py         — ALL colors, styles, and print helpers (single source of truth)
   profile.py       — load/save ~/.job_pipeline/profile.yaml
-  extract.py       — Claude extraction of structured profile from resume text
-  score.py         — scoring logic against profile
+  extract.py       — LLM extraction of structured profile from resume text
+  score.py         — LLM scoring logic against profile
   render.py        — builds DigestPayload, renders HTML via React Email or Python fallback
   schedule_cmd.py  — cron scheduling wizard
   state.py         — run state / seen-jobs tracking
   track.py         — job tracking
   xlsx.py          — applications.xlsx write helpers
   track_write.py   — tracker status update helpers
-  feedback.py      — feedback collection: collect → parse (Haiku) → save to feedback.md + feedback_log.jsonl
+  feedback.py      — feedback collection: collect → parse with fast model → save to feedback.md + feedback_log.jsonl
   sources/         — job source scrapers (proactive company career pages)
 
 emails/
@@ -237,7 +237,7 @@ Not safe without migration: adding a column in the middle, removing a column, re
 ### 8. pipeline.py stage order is load-bearing — do not reorganize without explicit instruction
 `pipeline.py` is the orchestration layer. The stage sequence is:
 1. Dedup check (`load_seen_roles`) → before scoring so unseen roles don't waste API calls
-2. Score (`_stage_score`) → Haiku pre-screen, then Sonnet full score
+2. Score (`_stage_score`) → fast-model pre-screen, then full scoring model
 3. Deal-breaker split (`_stage_split_filtered`) → **after** `new_role_timestamps` is built, **before** `render_html`
 4. Skipped metadata saved → before SMTP so it survives delivery failure
 5. Render → `scored_jobs` only (filtered excluded), `deal_breaker_count` passed as footer note
@@ -265,7 +265,8 @@ All interactive prompts in `init_cmd.py` use five helpers — do not use `questi
 `schedule_cmd.py` still uses `questionary` (not migrated — fine to leave as-is).
 
 ## Dependencies
-- `anthropic` — Claude API (profile extraction + job scoring)
+- `anthropic` — Anthropic API client; default and best-tested provider
+- `openai` — OpenAI API client; supported provider pending score-parity calibration
 - `rich>=13.0` — terminal formatting
 - `questionary>=2.0` — used by `schedule_cmd.py` only
 - `InquirerPy>=0.3.4` — prompt library for `init_cmd.py` `_ask*` helpers; in `requirements.txt`

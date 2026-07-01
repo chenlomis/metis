@@ -8,6 +8,7 @@ import sys
 
 from .pipeline import (
     ANTHROPIC_API_KEY,
+    LLM_API_KEY,
     GMAIL_ADDRESS,
     GMAIL_APP_PASSWORD,
     DATA_DIR,
@@ -208,7 +209,7 @@ def main(argv: list[str] | None = None):
     if args.command == "init":
         _validate_env(require_gmail=False)
         from .init_cmd import run_init
-        run_init(api_key=ANTHROPIC_API_KEY)
+        run_init(api_key=LLM_API_KEY)
 
     elif args.command == "reset":
         targets = [SEEN_FILE]
@@ -266,7 +267,7 @@ def main(argv: list[str] | None = None):
                 app_password=GMAIL_APP_PASSWORD,
                 since_dt=since_dt,
                 dry_run=False,
-                api_key=ANTHROPIC_API_KEY,
+                api_key=LLM_API_KEY,
             )
         else:
             show_schedule()
@@ -283,7 +284,7 @@ def main(argv: list[str] | None = None):
             app_password=GMAIL_APP_PASSWORD,
             since_dt=since_dt,
             dry_run=getattr(args, "dry_run", False),
-            api_key=ANTHROPIC_API_KEY,
+            api_key=LLM_API_KEY,
         )
 
     elif args.command == "sources":
@@ -303,7 +304,7 @@ def main(argv: list[str] | None = None):
             run_feedback_list()
         else:
             from .feedback import run_feedback
-            run_feedback(api_key=ANTHROPIC_API_KEY)
+            run_feedback(api_key=LLM_API_KEY)
 
     elif args.command == "debug":
         _validate_env()

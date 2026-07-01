@@ -1,10 +1,10 @@
-"""scorerole sources email — manage non-LinkedIn email alert sources.
+"""metis sources email — manage non-LinkedIn email alert sources.
 
 Commands:
-  scorerole sources email         list email alert sources
-  scorerole sources email list    list email alert sources
-  scorerole sources email add     interactive wizard: add a source
-  scorerole sources email remove  interactive removal
+  metis sources email         list email alert sources
+  metis sources email list    list email alert sources
+  metis sources email add     interactive wizard: add a source
+  metis sources email remove  interactive removal
 """
 from __future__ import annotations
 
@@ -55,8 +55,8 @@ def cmd_email_list() -> None:
 
     console.print(table)
     console.print(
-        "  [dim]scorerole sources email add     add an email alert source\n"
-        "  scorerole sources email remove  remove a source[/dim]\n"
+        "  [dim]metis sources email add     add an email alert source\n"
+        "  metis sources email remove  remove a source[/dim]\n"
     )
 
 
@@ -156,7 +156,7 @@ def cmd_email_add() -> None:
     console.print(
         f"\n  [{THEME['success']}]✓[/]  Added [bold]{company}[/bold] "
         f"({format_label(fmt)}, {sender}).\n"
-        f"  Run [bold]scorerole[/bold] to include these in your next digest.\n"
+        f"  Run [bold]metis[/bold] to include these in your next digest.\n"
     )
 
 
@@ -210,4 +210,4 @@ def run_email_sources(action: str | None) -> None:
         cmd_email_remove()
     else:
         console.print(f"  Unknown action: {action!r}")
-        console.print("  Usage: scorerole sources email [list | add | remove]")
+        console.print("  Usage: metis sources email [list | add | remove]")

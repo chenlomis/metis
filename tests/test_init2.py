@@ -4,7 +4,7 @@ Tests for metis init (init_cmd.py).
 Coverage:
   - _apply_guardrails: all four followup kinds, priority ordering, cap at 3
   - _apply_clarification_answer: all three handled kinds
-  - _extract_with_claude_v2: markdown fence stripping, YAML parse, _followups pop
+  - _extract_with_llm_v2: markdown fence stripping, YAML parse, _followups pop
   - run_init subcommand registration: 'init' routes to run_init
   - Regression: existing init / schedule / core tests unaffected
 """
@@ -202,7 +202,7 @@ class TestApplyClarificationAnswer:
 
 
 # ---------------------------------------------------------------------------
-# _extract_with_claude_v2 (mocked API)
+# _extract_with_llm_v2 (mocked API)
 # ---------------------------------------------------------------------------
 
 class TestExtractWithClaudeV2:
@@ -218,13 +218,12 @@ class TestExtractWithClaudeV2:
         return client
 
     def _call(self, client, want="looking for PM roles", dontwant=""):
-        from metis.init_cmd import _extract_with_claude_v2
+        from metis.init_cmd import _extract_with_llm_v2
         console = mock.MagicMock()
         console.status.return_value.__enter__ = mock.MagicMock(return_value=None)
         console.status.return_value.__exit__ = mock.MagicMock(return_value=False)
-        # anthropic is imported inside the function, so patch at the anthropic module level
-        with mock.patch("anthropic.Anthropic", return_value=client):
-            return _extract_with_claude_v2("sk-fake", "resume text", "", want, dontwant, console)
+        with mock.patch("metis.init_cmd.create_llm_client", return_value=client):
+            return _extract_with_llm_v2("sk-fake", "resume text", "", want, dontwant, console)
 
     def test_clean_yaml_parsed(self):
         yaml_str = "candidate:\n  name: Test\nstrengths: []\n_followups: []\n"

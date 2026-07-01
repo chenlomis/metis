@@ -1,13 +1,14 @@
 """Provider-neutral LLM client boundary for Metis.
 
 The rest of the app should ask for text completions and usage metadata, not
-provider SDK response objects. Anthropic remains the only live provider in this
-first slice; the interface is intentionally small so OpenAI/Gemini/Grok can be
-added without changing scoring or extraction contracts.
+provider SDK response objects. Anthropic is the default provider, and OpenAI is
+supported across public AI tasks. The interface is intentionally small so
+Gemini/Grok can be added without changing scoring or extraction contracts.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from typing import Any, Protocol
 
 
@@ -21,6 +22,93 @@ class LLMTransientError(LLMProviderError):
 
 class LLMAuthError(LLMProviderError):
     """Authentication or permission failure."""
+
+
+_PROVIDER_ALIASES = {
+    "anthropic": "anthropic",
+    "claude": "anthropic",
+    "openai": "openai",
+    "oai": "openai",
+    "chatgpt": "openai",
+}
+
+DEFAULT_MODELS = {
+    "anthropic": {
+        "model": "claude-sonnet-4-6",
+        "prescreen_model": "claude-haiku-4-5",
+        "extract_model": "claude-haiku-4-5",
+    },
+    "openai": {
+        "model": "gpt-4.1",
+        "prescreen_model": "gpt-4.1-mini",
+        "extract_model": "gpt-4.1-mini",
+    },
+}
+
+_STAGE_ENV = {
+    "model": "MODEL",
+    "prescreen_model": "PRESCREEN_MODEL",
+    "extract_model": "EXTRACT_MODEL",
+}
+
+
+def normalize_provider(provider: str | None) -> str:
+    """Normalize user-facing provider names and aliases.
+
+    Accepts common casing/separator variants such as "OpenAI", "open_ai",
+    "open-ai", "Anthropic", and "Claude".
+    """
+    raw = (provider or "anthropic").strip()
+    key = "".join(ch for ch in raw.lower() if ch.isalnum())
+    provider_id = _PROVIDER_ALIASES.get(key)
+    if provider_id:
+        return provider_id
+    supported = ", ".join(sorted(DEFAULT_MODELS))
+    raise LLMProviderError(
+        f"Unsupported LLM provider '{raw}'. Supported values: {supported}. "
+        "Use METIS_LLM_PROVIDER=anthropic or METIS_LLM_PROVIDER=openai. "
+        "Model families such as Haiku/Sonnet belong in PRESCREEN_MODEL/MODEL, not the provider field."
+    )
+
+
+def provider_api_key_env(provider: str) -> str:
+    provider_id = normalize_provider(provider)
+    return "OPENAI_API_KEY" if provider_id == "openai" else "ANTHROPIC_API_KEY"
+
+
+def resolve_stage_models(provider: str, env: dict[str, str] | None = None) -> dict[str, str]:
+    """Resolve per-stage model names with provider-aware defaults.
+
+    Backward-compatible generic vars (`MODEL`, `PRESCREEN_MODEL`, `EXTRACT_MODEL`)
+    still work. Provider-specific vars (`ANTHROPIC_MODEL`, `OPENAI_MODEL`, etc.)
+    win when present. If a generic var is just another provider's built-in default,
+    it is ignored so switching providers does not accidentally pass Claude model
+    names to OpenAI or vice versa.
+    """
+    env_map = env if env is not None else os.environ
+    provider_id = normalize_provider(provider)
+    defaults = DEFAULT_MODELS[provider_id]
+    all_builtin_defaults = {
+        value
+        for provider_defaults in DEFAULT_MODELS.values()
+        for value in provider_defaults.values()
+    }
+
+    resolved: dict[str, str] = {}
+    prefix = provider_id.upper()
+    for stage, generic_env in _STAGE_ENV.items():
+        provider_env = f"{prefix}_{generic_env}"
+        provider_value = (env_map.get(provider_env) or "").strip()
+        generic_value = (env_map.get(generic_env) or "").strip()
+        if provider_value:
+            resolved[stage] = provider_value
+        elif generic_value and (
+            generic_value == defaults[stage] or generic_value not in all_builtin_defaults
+        ):
+            resolved[stage] = generic_value
+        else:
+            resolved[stage] = defaults[stage]
+    return resolved
 
 
 @dataclass(frozen=True)
@@ -254,7 +342,7 @@ def complete_text(
 
 
 def create_llm_client(*, provider: str, api_key: str) -> LLMClient:
-    provider_id = (provider or "anthropic").strip().lower()
+    provider_id = normalize_provider(provider)
     if provider_id == "anthropic":
         return AnthropicLLM(api_key=api_key)
     if provider_id == "openai":

@@ -1,4 +1,4 @@
-"""scorerole/types.py — shared TypedDicts for the eval pipeline.
+"""metis/types.py — shared TypedDicts for the eval pipeline.
 
 Single source of truth for the dict shapes that flow between score.py,
 extract.py, render.py, trace.py, and feedback.py.

@@ -7,12 +7,12 @@ files only when needed.
 
 ## What It Is
 metis is a privacy-first CLI for job search triage. It pulls saved job alerts, optionally
-checks company career pages, scores roles against a local profile with Claude, emails a
-ranked digest, and keeps an application tracker up to date.
+checks company career pages, scores roles against a local profile with the configured
+LLM provider, emails a ranked digest, and keeps an application tracker up to date.
 
 ## Current State (as of 2026-06-30)
 - **Done:** Full pipeline (fetch → dedup → extract → score → digest email → tracker write), `metis init`, proactive sources, non-LinkedIn email alert sources, scheduling (launchd/cron with retry), `metis track`, `metis feedback`, `metis summary`, scoring traceability (`trace.py` → `~/.job_pipeline/runs.jsonl`), React Email digest templates with Python fallback, format regression tests, tracker input validation, and role queueing for capped runs.
-- **In progress:** config-as-parameters cleanup for cleaner library/MCP use, more reliable tracker parsing across ATS templates, and public-launch documentation polish.
+- **In progress:** LLM provider abstraction beyond the digest scoring path, config-as-parameters cleanup for cleaner library/MCP use, more reliable tracker parsing across ATS templates, and public-launch documentation polish.
 - **Near-term backlog:** one-command install, PyPI packaging as `metis-job`, MCP server wrapper, Outlook/Microsoft 365 support, and broader source adapters.
 - **Later:** Docker, employer-lens scoring, evaluation harness, and web/app surfaces only if OSS usage proves demand.
 
@@ -86,8 +86,9 @@ metis/
   init_cmd.py       — metis init profile wizard (InquirerPy + Rich)
   theme.py          — ALL colors, styles, print helpers (single source of truth; never inline colors elsewhere)
   profile.py        — load/save ~/.job_pipeline/profile.yaml
-  extract.py        — Haiku Layer 1: extracts 27 structured fields from JD text
-  score.py          — Haiku pre-screen + Sonnet Layer 2 scoring; rank_jobs()
+  llm/              — provider-neutral LLM clients, provider normalization, stage model resolution
+  extract.py        — Layer 1: extracts 27 structured fields from JD text
+  score.py          — fast pre-screen + full Layer 2 scoring; rank_jobs()
   render.py         — React Email/Python HTML digest rendering
   deliver.py        — SMTP delivery
   schedule_cmd.py   — launchd (macOS) / cron (Linux) scheduling wizard
@@ -127,6 +128,7 @@ logs/                 — daily run logs + scheduled.log
 - Python 3.11+ is required. Modern type syntax is fine; do not add compatibility shims for older Python versions.
 - `trace.py` is the observability layer — `write_trace()` must be called for every job (prescreened, filtered, and scored). Do not remove or skip these calls.
 - Several modules still call `os.getenv()` at import time (score.py, extract.py, linkedin.py). This is a known library hygiene issue — do not make it worse. The config-as-parameters refactor will fix it.
+- Anthropic is the default and best-tested LLM provider. OpenAI is supported across public AI tasks, but still needs score-parity and output-quality calibration before it should be considered equivalent.
 - **`render.py` email format is locked.** Section labels: "Solid Match / Moderate Match / Limited Match". Legend: "Strengths / Caution / Blockers". Stat tiles: "Evaluated / Solid Match / Moderate Match". Buttons: filled with verdict color, white text. Greeting: personalized when `candidate_name` set. Score breakdown must not appear in cards. Skipped section is a flat 2-col table. Enforced by `tests/test_render_format.py` — run after any render.py edit.
 - **`_role_hash()` in `state.py` is frozen.** MD5, `[:12]` slice, same normalization regex. Changing it invalidates `seen_roles.json` and causes a flood re-send.
 - **`_HEADERS` column order in `xlsx.py` is frozen.** Existing `applications.xlsx` data relies on positional column indices. Header text is safe to rename; order is not.
@@ -136,9 +138,9 @@ logs/                 — daily run logs + scheduled.log
 ## Scoring pipeline summary
 ```
 Gmail IMAP → email parse (3-case shift detection) → dedup
-→ [cap / Haiku pre-screen / role queue] → JD fetch (LinkedIn HTTP, 3x retry)
-→ Haiku Layer 1 extract (27 fields) → hard gates (jd_blank, salary_floor)
-→ Sonnet Layer 2 score (6-dim rubric, prompt-cached system prompt)
+→ [cap / fast pre-screen / role queue] → JD fetch (LinkedIn HTTP, 3x retry)
+→ Layer 1 extract (27 fields) → hard gates (jd_blank, salary_floor)
+→ Layer 2 full score (6-dim rubric, prompt-cached system prompt)
 → rank_jobs() → deal-breaker split → write_trace()
 → React Email digest (Python fallback; format locked) → Gmail SMTP
 → save_seen_roles() → tracker write gate → applications.xlsx

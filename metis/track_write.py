@@ -1,4 +1,4 @@
-"""scorerole/track_write.py — tracker fuzzy match and xlsx write operations.
+"""metis/track_write.py — tracker fuzzy match and xlsx write operations.
 
 Owns: find_tracker_row(), update_*(), create_*(), _parse_digest_html().
 No IMAP, no classification logic lives here.
@@ -188,7 +188,7 @@ def _parse_digest_html(html: str, email_date: str) -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
 
     # Prefer embedded JSON data island (added to future digests)
-    tag = soup.find("script", {"type": "application/json", "id": "scorerole-data"})
+    tag = soup.find("script", {"type": "application/json", "id": "metis-data"})
     if tag and tag.string:
         try:
             payload = json.loads(tag.string)

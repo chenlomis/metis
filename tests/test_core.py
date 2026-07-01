@@ -1239,7 +1239,7 @@ class TestHardGates:
     """
 
     def _gate(self, jd_quality, profile=None):
-        from scorerole.extract import check_hard_gates
+        from metis.extract import check_hard_gates
         struct = {"jd_quality": jd_quality}
         return check_hard_gates(struct, profile or {})
 
@@ -1262,7 +1262,7 @@ class TestHardGates:
         assert passes
 
     def test_missing_jd_quality_does_not_fire_gate(self):
-        from scorerole.extract import check_hard_gates
+        from metis.extract import check_hard_gates
         passes, gate = check_hard_gates({}, {})
         assert passes
 

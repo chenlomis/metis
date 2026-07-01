@@ -1,4 +1,4 @@
-"""scorerole/track_parse.py — email classification and entity extraction.
+"""metis/track_parse.py — email classification and entity extraction.
 
 Owns: phrase constants, subject patterns, classify_email(), parse_email(),
 extract_company(), extract_role(). Pure functions — no I/O, no IMAP.
@@ -6,6 +6,7 @@ extract_company(), extract_role(). Pure functions — no I/O, no IMAP.
 from __future__ import annotations
 
 import logging
+import os
 import re
 
 log = logging.getLogger(__name__)
@@ -253,18 +254,22 @@ _LLM_VALID_CLASSES = frozenset(["confirmation", "rejection", "recruiter_screen",
 
 
 def _classify_with_llm(subject: str, body: str, client) -> str:
+    from .llm import complete_text, normalize_provider, resolve_stage_models
     from .prompts import track_classify_system_prompt
 
+    provider = normalize_provider(os.getenv("METIS_LLM_PROVIDER", os.getenv("LLM_PROVIDER", "anthropic")))
+    model = resolve_stage_models(provider)["extract_model"]
     truncated_body = body[:_LLM_BODY_CHAR_LIMIT]
     prompt = _LLM_CLASSIFY_PROMPT.format(subject=subject, body=truncated_body)
     try:
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+        response = complete_text(
+            client,
+            model=model,
             max_tokens=10,
             system=track_classify_system_prompt(),
-            messages=[{"role": "user", "content": prompt}],
+            user=prompt,
         )
-        result = response.content[0].text.strip().lower()
+        result = response.text.strip().lower()
         if result in _LLM_VALID_CLASSES:
             return result
         log.warning("track: LLM returned unexpected class %r — falling back to 'unknown'", result)

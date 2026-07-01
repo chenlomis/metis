@@ -8,7 +8,7 @@ A personal job alert pipeline. It pulls job listings, scores them against a user
 # Main runner (no subcommand)
 metis                          # pull → score → send digest; incremental (since last run, fallback 3d)
 metis --lookback 7d            # override window; accepts: 3d, 14d, 2026-06-01
-metis --no-limit               # ignore MAX_JOBS_PER_RUN cap; Haiku pre-screens to control cost
+metis --no-limit               # ignore MAX_JOBS_PER_RUN cap; fast model pre-screens to control cost
 metis --dry-run                # full run (fetch + score), zero writes — no email, no seen_roles, no tracker
 
 # init — build/update scoring profile
@@ -59,7 +59,7 @@ metis/
   state.py         — run state / seen-jobs tracking
   track.py         — job tracking
   tracker.py       — tracker helpers
-  feedback_cmd.py  — feedback collection: collect → parse (Haiku) → save to feedback.md + feedback_log.jsonl
+  feedback_cmd.py  — feedback collection: collect → parse with fast model → save to feedback.md + feedback_log.jsonl
   sources/         — job source scrapers (proactive company career pages)
 
 emails/
@@ -237,7 +237,7 @@ Not safe without migration: adding a column in the middle, removing a column, re
 ### 8. pipeline.py stage order is load-bearing — do not reorganize without explicit instruction
 `pipeline.py` is the orchestration layer. The stage sequence is:
 1. Dedup check (`load_seen_roles`) → before scoring so unseen roles don't waste API calls
-2. Score (`_stage_score`) → Haiku pre-screen, then Sonnet full score
+2. Score (`_stage_score`) → fast-model pre-screen, then full scoring model
 3. Deal-breaker split (`_stage_split_filtered`) → **after** `new_role_timestamps` is built, **before** `render_html`
 4. Skipped metadata saved → before SMTP so it survives delivery failure
 5. Render → `scored_jobs` only (filtered excluded), `deal_breaker_count` passed as footer note

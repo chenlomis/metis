@@ -13,6 +13,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
+from .llm import normalize_provider, resolve_stage_models
+
 
 @dataclass
 class Config:
@@ -34,8 +36,10 @@ class Config:
     def from_env(cls) -> "Config":
         """Build Config from environment variables (call once after load_dotenv())."""
         gmail = os.getenv("GMAIL_ADDRESS", "")
+        llm_provider = normalize_provider(os.getenv("METIS_LLM_PROVIDER", os.getenv("LLM_PROVIDER", "anthropic")))
+        models = resolve_stage_models(llm_provider)
         return cls(
-            llm_provider      = os.getenv("METIS_LLM_PROVIDER", os.getenv("LLM_PROVIDER", "anthropic")),
+            llm_provider      = llm_provider,
             anthropic_api_key  = os.getenv("ANTHROPIC_API_KEY", ""),
             openai_api_key     = os.getenv("OPENAI_API_KEY", ""),
             gemini_api_key     = os.getenv("GEMINI_API_KEY", ""),
@@ -43,9 +47,9 @@ class Config:
             gmail_address      = gmail,
             gmail_app_password = os.getenv("GMAIL_APP_PASSWORD", ""),
             recipient_email    = os.getenv("RECIPIENT_EMAIL", gmail),
-            model              = os.getenv("MODEL",              "claude-sonnet-4-6"),
-            prescreen_model    = os.getenv("PRESCREEN_MODEL",    "claude-haiku-4-5"),
-            extract_model      = os.getenv("EXTRACT_MODEL",      "claude-haiku-4-5"),
+            model              = models["model"],
+            prescreen_model    = models["prescreen_model"],
+            extract_model      = models["extract_model"],
             max_jobs_per_run   = int(os.getenv("MAX_JOBS_PER_RUN", "40")),
             default_lookback   = os.getenv("DEFAULT_LOOKBACK",   "3d"),
         )

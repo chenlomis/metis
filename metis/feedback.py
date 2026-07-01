@@ -1,11 +1,11 @@
 """metis feedback — interactive calibration feedback capture.
 
 Each confirmed entry is appended to ~/.job_pipeline/feedback.md and logged to
-feedback_log.jsonl. The .md file is injected verbatim into the Layer 2 Sonnet
+feedback_log.jsonl. The .md file is injected verbatim into the Layer 2 scoring
 system prompt on every subsequent run (score.py → build_score_system).
 
 Subcommands (routed by pipeline.py):
-  metis feedback        — collect → Claude parse → confirm → save
+  metis feedback        — collect → LLM parse → confirm → save
   metis feedback list   — show recent entries
 """
 from __future__ import annotations
@@ -269,13 +269,13 @@ Return exactly this shape (empty list [] for fields with no items):
 """
 
 
-def _claude_process(
+def _llm_process(
     raw_text: str,
     existing_feedback: Optional[str],
     api_key: str,
     candidate_name: str = "the candidate",
 ) -> Optional[dict]:
-    """Parse feedback via Haiku. Returns structured dict or None on any failure.
+    """Parse feedback via the configured extraction model. Returns structured dict or None.
 
     Identity and grounding rules are passed as a system prompt (prompts.py).
     The analysis format is the user turn. This separation ensures Claude's
@@ -283,29 +283,27 @@ def _claude_process(
 
     Degrades gracefully: on failure the raw text is still saved unanalysed.
     """
-    try:
-        import anthropic
-    except ImportError:
-        log.warning("anthropic package not available — saving raw text without analysis")
-        return None
-
+    from .llm import complete_text, create_llm_client, normalize_provider, resolve_stage_models
     from .prompts import feedback_system_prompt
 
-    model       = os.getenv("PRESCREEN_MODEL", "claude-haiku-4-5-20251001")
+    provider    = normalize_provider(os.getenv("METIS_LLM_PROVIDER", os.getenv("LLM_PROVIDER", "anthropic")))
+    model       = resolve_stage_models(provider)["extract_model"]
     system_text = feedback_system_prompt(candidate_name)
     user_text   = _ANALYSIS_PROMPT.format(
         existing=existing_feedback or "(none)",
         new=raw_text,
     )
     try:
-        client   = anthropic.Anthropic(api_key=api_key)
-        response = client.messages.create(
+        client   = create_llm_client(provider=provider, api_key=api_key)
+        response = complete_text(
+            client,
             model=model,
             max_tokens=1024,
             system=system_text,
-            messages=[{"role": "user", "content": user_text}],
+            user=user_text,
+            json_mode=True,
         )
-        raw = response.content[0].text.strip()
+        raw = response.text.strip()
         raw = re.sub(r"^```(?:json)?\s*", "", raw)
         raw = re.sub(r"\s*```$",          "", raw)
         result = json.loads(raw)
@@ -315,6 +313,10 @@ def _claude_process(
     except Exception as exc:
         log.warning("Feedback processing failed (%s) — saving raw text without analysis", exc)
         return None
+
+
+# Backward-compatible private alias for existing tests and local imports.
+_claude_process = _llm_process
 
 
 # ---------------------------------------------------------------------------
@@ -414,7 +416,7 @@ def _collect_input() -> str:
 # ---------------------------------------------------------------------------
 
 def run_feedback(api_key: Optional[str] = None) -> None:
-    """Interactive flow: collect → Claude parse → confirm → save."""
+    """Interactive flow: collect → LLM parse → confirm → save."""
     from InquirerPy import inquirer
     from InquirerPy.base.control import Choice
 
@@ -472,7 +474,7 @@ def run_feedback(api_key: Optional[str] = None) -> None:
             conflict_count=conflicts,
         )
 
-    # Claude processing — optional, degrades gracefully
+    # LLM processing — optional, degrades gracefully
     parsed: Optional[dict] = None
     if api_key:
         console.print("  Processing…", style=Style(color=THEME["dim"], italic=True))

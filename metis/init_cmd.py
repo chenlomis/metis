@@ -1,7 +1,7 @@
 """metis init — conversational profile setup wizard.
 
 Conversational alternative to `metis init`. Two freeform prompts replace
-the structured Step 2/3 form. Claude extracts the profile, then asks at most
+the structured Step 2/3 form. The configured LLM extracts the profile, then asks at most
 2–3 targeted clarifications for genuinely ambiguous fields before review.
 
 Flow:
@@ -18,6 +18,7 @@ Writes to the same ~/.job_pipeline/profile.yaml as `metis init`.
 import os, re, sys, shutil, logging
 from pathlib import Path
 
+from .llm import complete_text, create_llm_client, normalize_provider, resolve_stage_models
 from .theme import THEME, INQUIRER_STYLE, console, print_section, print_section_intro, print_eg, print_hint, print_confirmed, print_separator
 
 
@@ -311,14 +312,15 @@ def _step_dontwant(console, THEME, INQUIRER_STYLE, print_section, print_section_
 
 
 # ---------------------------------------------------------------------------
-# Claude extraction (v2)
+# LLM extraction (v2)
 # ---------------------------------------------------------------------------
 
-def _extract_with_claude_v2(api_key, resume_text, linkedin_text, want_text, dontwant_text, console):
-    import anthropic
+def _extract_with_llm_v2(api_key, resume_text, linkedin_text, want_text, dontwant_text, console):
     import yaml
 
-    client = anthropic.Anthropic(api_key=api_key)
+    provider = normalize_provider(os.getenv("METIS_LLM_PROVIDER", os.getenv("LLM_PROVIDER", "anthropic")))
+    model = resolve_stage_models(provider)["model"]
+    client = create_llm_client(provider=provider, api_key=api_key)
 
     user_msg = "\n\n".join(filter(None, [
         f"RESUME:\n{resume_text[:12000]}",
@@ -328,14 +330,15 @@ def _extract_with_claude_v2(api_key, resume_text, linkedin_text, want_text, dont
     ]))
 
     with console.status("  [dim]Extracting profile…[/dim]"):
-        response = client.messages.create(
-            model="claude-sonnet-4-6",
+        response = complete_text(
+            client,
+            model=model,
             max_tokens=4096,
             system=init_extract_system_prompt(),
-            messages=[{"role": "user", "content": user_msg}],
+            user=user_msg,
         )
 
-    raw = response.content[0].text.strip()
+    raw = response.text.strip()
 
     # Strip markdown fences if present
     if raw.startswith("```"):
@@ -639,7 +642,7 @@ def _run_review(profile, console, THEME, INQUIRER_STYLE, api_key=None,
                     lambda text: console.print(f"  [dim italic]{text}[/dim italic]"),
                 )
                 console.print()
-                new_profile, new_followups = _extract_with_claude_v2(
+                new_profile, new_followups = _extract_with_llm_v2(
                     api_key, resume_text, linkedin_text, new_want, new_dontwant, console,
                 )
                 console.print(f"  [{THEME['success']}]✓[/]  Re-extraction complete")
@@ -728,7 +731,7 @@ def run_init(api_key):
 
     # Extract
     console.print()
-    profile, followups = _extract_with_claude_v2(
+    profile, followups = _extract_with_llm_v2(
         api_key, resume_text, linkedin_text, want_text, dontwant_text, console,
     )
     console.print(f"  [{THEME['success']}]✓[/]  Extraction complete")
