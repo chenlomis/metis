@@ -411,17 +411,11 @@ def cmd_off() -> None:
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def run_sources(action: str | None, name: str | None = None, add_all: bool = False,
-                email_action: str | None = None) -> None:
+                email_action: str | None = None, email_sender: str | None = None) -> None:
     if action == "email":
-        from .email_sources_cmd import cmd_email_list, cmd_email_add, cmd_email_remove
-        if email_action in (None, "list"):
-            cmd_email_list()
-        elif email_action == "add":
-            cmd_email_add()
-        elif email_action == "remove":
-            cmd_email_remove()
-        else:
-            console.print(f"  [{THEME['error']}]Unknown email action: {email_action!r}[/]")
+        from .email_sources_cmd import run_email_sources
+        run_email_sources(email_action, sender_arg=email_sender)
+        return
     elif action in (None, "list"):
         cmd_list()
     elif action == "add":

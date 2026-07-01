@@ -124,7 +124,19 @@ def _build_parser() -> argparse.ArgumentParser:
     email_p = sources_sub.add_parser("email", help="Manage email alert sources.")
     email_sub = email_p.add_subparsers(dest="email_action")
     email_sub.add_parser("list", help="List email alert sources.")
-    email_sub.add_parser("add", help="Add an email alert source (interactive).")
+    email_add_p = email_sub.add_parser(
+        "add",
+        help="Add an email alert source.",
+        description=(
+            "Add a new email alert source.\n\n"
+            "  metis sources email add                     interactive wizard\n"
+            "  metis sources email add team@hi.wellfound.com   fetch + preview + confirm"
+        ),
+    )
+    email_add_p.add_argument(
+        "email_sender", nargs="?", default=None,
+        help="Sender address to register directly (skips interactive wizard).",
+    )
     email_sub.add_parser("remove", help="Remove an email alert source (interactive).")
 
     feedback_p = subparsers.add_parser(
@@ -294,7 +306,9 @@ def main(argv: list[str] | None = None):
         name_parts = getattr(args, "source_name", None)
         name = " ".join(name_parts) if name_parts else None
         add_all = getattr(args, "add_all", False)
-        run_sources(action, name or None, add_all=add_all, email_action=email_action)
+        email_sender = getattr(args, "email_sender", None)
+        run_sources(action, name or None, add_all=add_all, email_action=email_action,
+                    email_sender=email_sender)
 
     elif args.command == "feedback":
         _validate_env(require_gmail=False)
