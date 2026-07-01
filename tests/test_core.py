@@ -835,20 +835,16 @@ class TestScoreChunkRetry:
         assert result[0]["eval"]["score"] == 75
 
     def test_retries_on_500_and_succeeds(self):
-        """First call raises InternalServerError; second call succeeds — result is correct."""
+        """First call raises a transient error; second call succeeds — result is correct."""
         from metis.score import score_jobs_batch
+        from metis.llm import LLMTransientError
         import unittest.mock as mock
 
         jobs = self._make_jobs(2)
         good = self._good_response(2)
         fake_client = mock.MagicMock()
         fake_client.messages.create.side_effect = [
-            anthropic.InternalServerError(
-                message="Internal server error",
-                response=mock.MagicMock(status_code=500, headers={}),
-                body={"type": "error", "error": {"type": "api_error",
-                      "message": "Internal server error"}},
-            ),
+            LLMTransientError("Internal server error"),
             good,
         ]
 
@@ -861,19 +857,16 @@ class TestScoreChunkRetry:
         assert result[0]["eval"]["score"] == 75
 
     def test_retries_on_rate_limit_and_succeeds(self):
-        """RateLimitError (429) is also retried."""
+        """Rate-limit transient error is also retried."""
         from metis.score import score_jobs_batch
+        from metis.llm import LLMTransientError
         import unittest.mock as mock
 
         jobs = self._make_jobs(1)
         good = self._good_response(1)
         fake_client = mock.MagicMock()
         fake_client.messages.create.side_effect = [
-            anthropic.RateLimitError(
-                message="rate limited",
-                response=mock.MagicMock(status_code=429, headers={}),
-                body={},
-            ),
+            LLMTransientError("rate limited"),
             good,
         ]
 
@@ -885,22 +878,18 @@ class TestScoreChunkRetry:
         assert result[0]["eval"]["score"] == 75
 
     def test_raises_after_max_retries(self):
-        """Three consecutive 500s must propagate — not silently swallow."""
+        """Three consecutive transient errors must propagate — not silently swallow."""
         from metis.score import score_jobs_batch
+        from metis.llm import LLMTransientError
         import unittest.mock as mock
 
         jobs = self._make_jobs(1)
         fake_client = mock.MagicMock()
-        fake_client.messages.create.side_effect = anthropic.InternalServerError(
-            message="Internal server error",
-            response=mock.MagicMock(status_code=500, headers={}),
-            body={"type": "error", "error": {"type": "api_error",
-                  "message": "Internal server error"}},
-        )
+        fake_client.messages.create.side_effect = LLMTransientError("Internal server error")
 
         with mock.patch("metis.score._build_score_system", return_value="mock"), \
              mock.patch("time.sleep"):
-            with pytest.raises(anthropic.InternalServerError):
+            with pytest.raises(LLMTransientError):
                 score_jobs_batch(fake_client, jobs)
 
         assert fake_client.messages.create.call_count == 3   # all 3 attempts made

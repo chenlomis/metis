@@ -2,8 +2,7 @@ from __future__ import annotations
 import re, json, logging, time
 from pathlib import Path
 from typing import List
-import anthropic
-
+from .llm import LLMTransientError, complete_text
 from .types import EvalResult, JobDict
 
 log = logging.getLogger(__name__)
@@ -554,12 +553,7 @@ def _score_chunk(client: anthropic.Anthropic, jobs: list[dict], system_prompt: s
         for i, j in enumerate(jobs)
     )
 
-    _RETRYABLE = (
-        anthropic.InternalServerError,   # 500 — transient server error
-        anthropic.RateLimitError,        # 429
-        anthropic.APIConnectionError,    # network blip
-        anthropic.APITimeoutError,       # request timed out
-    )
+    _RETRYABLE = (LLMTransientError,)
     _MAX_ATTEMPTS = 3
     response = None
     for attempt in range(_MAX_ATTEMPTS):

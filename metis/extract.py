@@ -10,8 +10,7 @@ as score.py. Extraction failures fall back gracefully — missing structs never 
 """
 import json, logging, os, re, time
 from pathlib import Path
-import anthropic
-
+from .llm import LLMTransientError, complete_text
 from .prompts import JD_EXTRACT_SYSTEM
 
 log = logging.getLogger(__name__)
@@ -24,12 +23,7 @@ _EXTRACT_CHUNK_SIZE = 10
 # Retry constants (mirror score.py)
 # ---------------------------------------------------------------------------
 
-_RETRYABLE = (
-    anthropic.InternalServerError,
-    anthropic.RateLimitError,
-    anthropic.APIConnectionError,
-    anthropic.APITimeoutError,
-)
+_RETRYABLE = (LLMTransientError,)
 _MAX_ATTEMPTS = 3
 
 _REQUIRED_KEYS = {

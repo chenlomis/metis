@@ -372,15 +372,11 @@ class TestExtractChunkRetry:
         return r
 
     def test_retries_on_500_and_succeeds(self):
-        import anthropic
         from metis.extract import _extract_chunk
+        from metis.llm import LLMTransientError
         client = MagicMock()
         client.messages.create.side_effect = [
-            anthropic.InternalServerError(
-                message="server error",
-                response=MagicMock(status_code=500, headers={}),
-                body={},
-            ),
+            LLMTransientError("server error"),
             self._good_response(),
         ]
         with patch("time.sleep"):
@@ -389,16 +385,12 @@ class TestExtractChunkRetry:
         assert result[0]["jd_quality"] == "high"
 
     def test_raises_after_max_retries(self):
-        import anthropic
         from metis.extract import _extract_chunk, _MAX_ATTEMPTS
+        from metis.llm import LLMTransientError
         client = MagicMock()
-        client.messages.create.side_effect = anthropic.InternalServerError(
-            message="server error",
-            response=MagicMock(status_code=500, headers={}),
-            body={},
-        )
+        client.messages.create.side_effect = LLMTransientError("server error")
         with patch("time.sleep"):
-            with pytest.raises(anthropic.InternalServerError):
+            with pytest.raises(LLMTransientError):
                 _extract_chunk(client, [_make_job()])
         assert client.messages.create.call_count == _MAX_ATTEMPTS
 
