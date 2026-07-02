@@ -167,6 +167,8 @@ pytest tests/test_core.py tests/test_schedule.py -q    # fast pass (~60 tests, <
 
 `test_extract.py` is the heavyweight suite (~70+ tests, mocked API). Only run when `extract.py` changes — skip during routine iteration.
 
+When the same feedback, correction, or workflow preference repeats twice, propose promoting it to the narrowest durable layer: test, contract, AGENTS rule, docs checklist, or reusable skill.
+
 ## OAuth email access state
 
 `metis init` and `metis config access` can connect Gmail or Outlook via browser OAuth.
@@ -247,10 +249,11 @@ The profile has these top-level sections (order matters for display):
 The eval dict shape that `score.py` emits is consumed directly by `render.py`. These two files are **locked in lockstep** — changing one requires changing the other in the same edit:
 
 - `verdict`: exactly `"apply" | "consider" | "skipped" | "filtered"` — no other strings
-- `dimensions`: exactly 6, in this order: `seniority_scope`, `experience_relevance`, `compensation_fit`, `culture_values`, `domain_background`, `company_stage`
-- `leveragePoints`: always exactly 2 items (array of strings)
-- `frictionPoints`: always exactly 1 item (array of strings) — shown as the skip reason in the skipped section
+- `dimensions`: exactly 6 for scored roles, in this order: `seniority_scope`, `experience_relevance`, `compensation_fit`, `culture_values`, `domain_background`, `company_stage`; `[]` for filtered roles
+- `leveragePoints`: exactly 2 items for scored roles; `[]` for filtered roles
+- `frictionPoints`: 0 or 1 item for apply/consider roles; exactly 1 skip reason for skipped roles; `[]` for filtered roles
 - `tags`: array of `{text, sentiment}` where sentiment is `"green" | "amber" | "red"`
+- Shared contract validator: `metis/contracts.py`; regression coverage: `tests/test_score_render_contract.py`
 
 **Bullet style rule (enforced in score.py prompt, must stay):** No em-dash constructions. One clause only, 15–20 words, no pronouns, no "strong", "proven", "deep", "robust", "at scale", "directly". Violations in output are a prompt regression — fix the prompt, not the downstream rendering.
 

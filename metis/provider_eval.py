@@ -9,23 +9,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-
-REQUIRED_DIMENSIONS = [
-    "seniority_scope",
-    "experience_relevance",
-    "compensation_fit",
-    "culture_values",
-    "domain_background",
-    "company_stage",
-]
-VALID_VERDICTS = {"apply", "consider", "skipped", "filtered"}
-VALID_SENTIMENTS = {"green", "amber", "red"}
-
-
-@dataclass(frozen=True)
-class EvalSchemaResult:
-    valid: bool
-    errors: list[str]
+from .contracts import (
+    REQUIRED_DIMENSIONS,
+    VALID_SENTIMENTS,
+    VALID_VERDICTS,
+    validate_eval_schema,
+)
 
 
 @dataclass(frozen=True)
@@ -36,44 +25,6 @@ class ProviderComparison:
     avg_score_delta: float
     max_score_delta: int
     top_n_overlap: int
-
-
-def validate_eval_schema(eval_obj: dict[str, Any]) -> EvalSchemaResult:
-    errors: list[str] = []
-
-    verdict = eval_obj.get("verdict")
-    if verdict not in VALID_VERDICTS:
-        errors.append(f"invalid verdict: {verdict!r}")
-
-    score = eval_obj.get("score")
-    if not isinstance(score, int) or not 0 <= score <= 100:
-        errors.append("score must be an integer from 0 to 100")
-
-    dims = eval_obj.get("dimensions", [])
-    dim_names = [d.get("name") for d in dims if isinstance(d, dict)]
-    if dim_names != REQUIRED_DIMENSIONS:
-        errors.append("dimensions must match the canonical order")
-
-    leverage = eval_obj.get("leveragePoints", [])
-    if not isinstance(leverage, list) or len(leverage) != 2:
-        errors.append("leveragePoints must contain exactly 2 items")
-
-    friction = eval_obj.get("frictionPoints", [])
-    if not isinstance(friction, list) or len(friction) != 1:
-        errors.append("frictionPoints must contain exactly 1 item")
-
-    tags = eval_obj.get("tags", [])
-    if not isinstance(tags, list):
-        errors.append("tags must be a list")
-    else:
-        for tag in tags:
-            if not isinstance(tag, dict):
-                errors.append("tags must contain objects")
-                continue
-            if tag.get("sentiment") not in VALID_SENTIMENTS:
-                errors.append(f"invalid tag sentiment: {tag.get('sentiment')!r}")
-
-    return EvalSchemaResult(valid=not errors, errors=errors)
 
 
 def _bucket(score: int, *, apply_threshold: int, consider_threshold: int) -> str:
@@ -133,4 +84,3 @@ def compare_provider_runs(
         max_score_delta=max(score_deltas),
         top_n_overlap=len(base_top & cand_top),
     )
-

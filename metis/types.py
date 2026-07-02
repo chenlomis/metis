@@ -31,7 +31,7 @@ class Dimension(TypedDict):
 
 class Tag(TypedDict):
     text: str
-    sentiment: Literal["green", "yellow", "red"]
+    sentiment: Literal["green", "amber", "red"]
 
 
 # ---------------------------------------------------------------------------

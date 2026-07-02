@@ -75,19 +75,20 @@ New job sources belong in `sources/`. Each source module must:
 Do not add source-specific logic to `pipeline.py`.
 
 ### Eval schema
-The dict that `score.py` emits and `render.py` consumes is a coupled contract. Changes to one require changes to the other. Use the `EvalResult` TypedDict in `types.py` so mismatches are type errors, not silent render failures.
+The dict that `score.py` emits and `render.py` consumes is a coupled contract. Changes to one require changes to the other. Keep the runtime validator in `metis/contracts.py`, the `EvalResult` / `Tag` TypedDicts in `metis/types.py`, and the regression coverage in `tests/test_score_render_contract.py` aligned.
 
 ```python
-# target: metis/types.py
-from typing import TypedDict, Literal
-
-class EvalResult(TypedDict):
-    verdict: Literal["apply", "consider", "skip", "filtered", "prescreened"]
-    score: int
-    dimensions: dict[str, int]       # exactly 6 named dimensions
-    leveragePoints: list[str]         # exactly 2
-    frictionPoints: list[str]         # exactly 1
-    summary: str
+# target: metis/contracts.py
+REQUIRED_DIMENSIONS = [
+    "seniority_scope",
+    "experience_relevance",
+    "compensation_fit",
+    "culture_values",
+    "domain_background",
+    "company_stage",
+]
+VALID_VERDICTS = {"apply", "consider", "skipped", "filtered"}
+VALID_SENTIMENTS = {"green", "amber", "red"}
 ```
 
 ### Render vs deliver

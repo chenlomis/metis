@@ -411,6 +411,10 @@ Good signs: subject lines like "Your job alert for X" or "Job recommendations," 
 
 Less useful signs: promotional emails, in-app notification summaries, or generic "Company is hiring" messages without role links.
 
+**I received two digest emails**
+
+Check for duplicate OS schedules. On macOS, `metis schedule set` installs `~/Library/LaunchAgents/com.metis.digest.plist`; older installs may also have a legacy `com.scorerole.digest.plist`. Current Metis removes both when changing or removing schedules, but if you installed before the rename, remove the stale schedule with `metis schedule remove`, then run `metis schedule set` again.
+
 **A company appeared in my LinkedIn notifications but not in my digest**
 
 LinkedIn has two separate channels: **email job alerts** (what metis reads) and **in-app push notifications** (what you see in the LinkedIn app's notification bell). These are different systems. Push notification types that do NOT produce emails:

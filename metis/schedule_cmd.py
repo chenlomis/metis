@@ -24,7 +24,10 @@ from .state import DATA_DIR
 SCHEDULE_FILE  = DATA_DIR / "schedule.json"
 LAUNCHD_LABEL  = "com.metis.digest"
 LAUNCHD_PLIST  = Path.home() / "Library/LaunchAgents" / f"{LAUNCHD_LABEL}.plist"
+LEGACY_LAUNCHD_LABEL = "com.scorerole.digest"
+LEGACY_LAUNCHD_PLIST = Path.home() / "Library/LaunchAgents" / f"{LEGACY_LAUNCHD_LABEL}.plist"
 CRONTAB_MARKER = "# metis-digest"
+LEGACY_CRONTAB_MARKER = "# scorerole-digest"
 
 FREQUENCY_OPTIONS: dict[str, dict] = {
     "daily":        {"label": "Daily",         "lookback": "1d",  "cron_dow": "*"},
@@ -258,6 +261,8 @@ def _install_launchd(config: dict, metis_bin: str, working_dir: str) -> None:
     plist_content = build_plist(config, metis_bin, working_dir)
     uid = os.getuid()
 
+    _remove_launchd_plist(LEGACY_LAUNCHD_PLIST, uid)
+
     if LAUNCHD_PLIST.exists():
         subprocess.run(
             ["launchctl", "bootout", f"gui/{uid}", str(LAUNCHD_PLIST)],
@@ -279,13 +284,27 @@ def _install_launchd(config: dict, metis_bin: str, working_dir: str) -> None:
         )
 
 
+def _remove_launchd_plist(plist_path: Path, uid: int) -> bool:
+    if not plist_path.exists():
+        return False
+    subprocess.run(
+        ["launchctl", "bootout", f"gui/{uid}", str(plist_path)],
+        capture_output=True,
+    )
+    plist_path.unlink()
+    return True
+
+
 def _install_crontab(config: dict, metis_bin: str, working_dir: str) -> None:
     new_line = build_crontab_line(config, metis_bin, working_dir)
 
     current = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
     lines = current.stdout.splitlines() if current.returncode == 0 else []
 
-    lines = [l for l in lines if CRONTAB_MARKER not in l]
+    lines = [
+        l for l in lines
+        if CRONTAB_MARKER not in l and LEGACY_CRONTAB_MARKER not in l
+    ]
     lines.append(new_line)
 
     new_crontab = "\n".join(lines) + "\n"
@@ -301,17 +320,17 @@ def remove_schedule() -> bool:
 
     if sys_platform == "Darwin":
         uid = os.getuid()
-        if LAUNCHD_PLIST.exists():
-            subprocess.run(
-                ["launchctl", "bootout", f"gui/{uid}", str(LAUNCHD_PLIST)],
-                capture_output=True,
-            )
-            LAUNCHD_PLIST.unlink()
-            removed = True
+        removed = _remove_launchd_plist(LAUNCHD_PLIST, uid) or removed
+        removed = _remove_launchd_plist(LEGACY_LAUNCHD_PLIST, uid) or removed
     elif sys_platform == "Linux":
         current = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
-        if current.returncode == 0 and CRONTAB_MARKER in current.stdout:
-            lines = [l for l in current.stdout.splitlines() if CRONTAB_MARKER not in l]
+        if current.returncode == 0 and (
+            CRONTAB_MARKER in current.stdout or LEGACY_CRONTAB_MARKER in current.stdout
+        ):
+            lines = [
+                l for l in current.stdout.splitlines()
+                if CRONTAB_MARKER not in l and LEGACY_CRONTAB_MARKER not in l
+            ]
             subprocess.run(["crontab", "-"], input="\n".join(lines) + "\n", text=True)
             removed = True
 
@@ -342,10 +361,16 @@ def pause_schedule() -> bool:
                 ["launchctl", "bootout", f"gui/{uid}", str(LAUNCHD_PLIST)],
                 capture_output=True,
             )
+        _remove_launchd_plist(LEGACY_LAUNCHD_PLIST, uid)
     elif sys_platform == "Linux":
         current = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
-        if current.returncode == 0 and CRONTAB_MARKER in current.stdout:
-            lines = [l for l in current.stdout.splitlines() if CRONTAB_MARKER not in l]
+        if current.returncode == 0 and (
+            CRONTAB_MARKER in current.stdout or LEGACY_CRONTAB_MARKER in current.stdout
+        ):
+            lines = [
+                l for l in current.stdout.splitlines()
+                if CRONTAB_MARKER not in l and LEGACY_CRONTAB_MARKER not in l
+            ]
             subprocess.run(["crontab", "-"], input="\n".join(lines) + "\n", text=True)
 
     config["enabled"] = False

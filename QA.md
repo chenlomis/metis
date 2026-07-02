@@ -30,6 +30,7 @@ system does the *right thing*, not just whether it does the *specified thing*.
 
 ```
 tests/test_core.py   — unit + integration tests (pytest)
+tests/test_score_render_contract.py — score.py eval shape consumed by render.py
 ```
 
 Run:
@@ -43,6 +44,7 @@ All tests must pass before merging. The suite covers:
 - **Dedup:** `_role_hash()`, seen-roles gate, 14-day TTL pruning
 - **Pre-screen:** Haiku pass result parsing; function-only filtering; no seniority filtering
 - **Scoring:** `score_jobs_batch()` chunk sizes; merge of chunk results; truncation fallback
+- **Contracts:** score/render eval schema; verdict enum; dimension order; tag sentiments
 - **Rank:** verdict re-derivation from score + thresholds; sort order within tiers
 - **Profile / init:** salary floor single-source-of-truth; salary cleanup from deal_breakers; domain flex note injection
 - **State:** `save_seen_roles()` write + prune; file permission (0o600)
@@ -160,7 +162,8 @@ Not all tests need to run on every change:
 
 | When | Command | Tests | Time |
 |---|---|---|---|
-| Routine change | `pytest tests/test_core.py tests/test_schedule.py -q` | ~60 | <3s |
+| Routine change | `pytest tests/test_core.py tests/test_schedule.py -q` | ~174 | <3s |
+| Score/render contract change | `pytest tests/test_score_render_contract.py tests/test_provider_eval.py tests/test_render_format.py -q` | ~30 | <1s |
 | `extract.py` changed | add `tests/test_extract.py` | +70 | ~10s |
 | Pre-release / big refactor | `pytest tests/ -q` | all | ~4s |
 | Mocked e2e spot-check | `make test-e2e` | bounded persona pipeline, mocked Gmail/API/SMTP | <3s |

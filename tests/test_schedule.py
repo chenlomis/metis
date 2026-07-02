@@ -17,7 +17,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from metis.schedule_cmd import (
     FREQUENCY_OPTIONS,
     LAUNCHD_LABEL,
-    LAUNCHD_PLIST,
     SCHEDULE_FILE,
     WEEKDAY_TO_INT,
     _parse_time,
@@ -40,6 +39,11 @@ def _fake_config(freq="daily", time="08:00", **extra) -> dict:
     cfg = {"frequency": freq, "time": time, "metis_bin": "/venv/bin/metis",
            "working_dir": "/project", "platform": "Darwin", **extra}
     return cfg
+
+
+@pytest.fixture(autouse=True)
+def _isolate_legacy_launchd_plist(tmp_path, monkeypatch):
+    monkeypatch.setattr("metis.schedule_cmd.LEGACY_LAUNCHD_PLIST", tmp_path / "com.scorerole.digest.plist")
 
 
 # ---------------------------------------------------------------------------
@@ -285,6 +289,24 @@ class TestRemoveSchedule:
         assert removed is True
         assert not plist_path.exists()
         assert not schedule_path.exists()
+
+    @pytest.mark.skipif(platform.system() != "Darwin", reason="macOS only")
+    def test_remove_clears_legacy_scorerole_plist(self, tmp_path, monkeypatch):
+        plist_path = tmp_path / "com.metis.digest.plist"
+        legacy_plist_path = tmp_path / "com.scorerole.digest.plist"
+
+        legacy_plist_path.write_text("<plist/>")
+
+        monkeypatch.setattr("metis.schedule_cmd.LAUNCHD_PLIST", plist_path)
+        monkeypatch.setattr("metis.schedule_cmd.LEGACY_LAUNCHD_PLIST", legacy_plist_path)
+        monkeypatch.setattr("metis.schedule_cmd.SCHEDULE_FILE", tmp_path / "schedule.json")
+
+        with mock.patch("subprocess.run") as mock_run:
+            mock_run.return_value = mock.MagicMock(returncode=0)
+            removed = remove_schedule()
+
+        assert removed is True
+        assert not legacy_plist_path.exists()
 
     def test_remove_returns_false_when_nothing_to_remove(self, tmp_path, monkeypatch):
         monkeypatch.setattr("metis.schedule_cmd.LAUNCHD_PLIST",  tmp_path / "nonexistent.plist")
