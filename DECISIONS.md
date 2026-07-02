@@ -52,7 +52,7 @@ Controlled vocabulary (`kind` field) lets Claude decide *whether* to ask; Python
 Pre-screen (pass 1) activates only when role count exceeds `MAX_JOBS_PER_RUN` — it's a cost gate, not always-on. Layer 1 (pass 2) always runs; extracts 27 structured fields at temperature=0. Layer 2 (pass 3) only runs on roles that passed hard gates. Two hard gates run between passes 2 and 3: `jd_blank` and `salary_floor`. Total cost per typical 10-job run: ~$0.02–0.05.
 
 **D-13 · Verdict re-derived in `rank_jobs()` from score + profile thresholds**
-Claude is given score thresholds in the prompt but doesn't guarantee compliance. `rank_jobs()` re-derives verdict from the numeric score. This prevents a score-62 role from being surfaced as "apply" due to Claude drift.
+The scoring model is given score thresholds in the prompt but doesn't guarantee compliance. `rank_jobs()` re-derives verdict from the numeric score. This prevents a score-62 role from being surfaced as "apply" due to model drift.
 
 **D-14 · `seen_roles.json` uses `md5(title+company)[:12]` as key, not email Message-ID**
 Same job can appear in multiple LinkedIn alert emails. Deduping on Message-ID would miss cross-email duplicates. Title+company key survives across email campaigns. 30-day TTL means a role that's still open after a month reappears — intended behavior for a passive job seeker who may want to reconsider. MD5 is intentional: this is a dedup key, not a security primitive. `[:12]` = 48 bits of entropy; collision probability is negligible at personal-use scale.
@@ -280,7 +280,7 @@ Companies that don't expose a public Greenhouse/Lever/Ashby API are scraped via 
 `ARCHITECTURE.md § System Overview` Mermaid diagram uses colors semantically, not decoratively:
 - Blue (`#dbeafe`/`#1d4ed8`) — user-provided data (profile, resume)
 - Purple (`#e9d5ff`/`#7e22ce`) — external sources (LinkedIn, career pages)
-- Amber+✦ (`#fef3c7`/`#92400e`) — AI-driven steps (Haiku extraction, Sonnet scoring)
+- Amber+✦ (`#fef3c7`/`#92400e`) — AI-driven steps (fast extraction, full scoring)
 - Gray — runtime artifacts (files written/read during a run)
 - Green (`#dcfce7`/`#166534`) — output deliverables (digest email, xlsx, runs.jsonl)
 Arrow labels (→ with short verbs) are the command names — not boxed nodes.
@@ -324,11 +324,11 @@ Email digest sections show "Solid Match / Moderate Match / Limited Match" (in `T
 **D-61 · `suggestion_status` values renamed: "Apply" → "Solid Match", "Consider" → "Moderate Match", "Skipped" → "Limited Match", "Pre-tracker" → "External"**
 Tracker (`applications.xlsx`) column E now shows the same friendly labels as the email digest. "External" replaces "Pre-tracker" — "External" is more accurate (these roles were applied to outside the metis digest flow, not necessarily before metis existed). Cell fill: Solid Match = green, Moderate Match = yellow, Limited Match = grey, External = no fill (white).
 
-**D-62 · Claude (Haiku) fallback for role title extraction in `track.py`**
-Regex patterns in `extract_role()` only match when emails use standard phrasing ("applying for the X role at Y"). Many ATS confirmation templates (RealReal, Synopsys, Instacart) mention the title somewhere in the body without using canonical phrasing — regex returns `None`. When `llm_client` is available, `_extract_role_llm()` sends the subject + first 1,500 chars of body to Haiku and asks for the role title only. Returns `None` if Haiku responds "NONE" or the result fails `_clean_role()` validation. Only fires when regex fails — not a replacement for regex.
+**D-62 · LLM fallback for role title extraction in `track.py`**
+Regex patterns in `extract_role()` only match when emails use standard phrasing ("applying for the X role at Y"). Many ATS confirmation templates (RealReal, Synopsys, Instacart) mention the title somewhere in the body without using canonical phrasing — regex returns `None`. When `llm_client` is available, `_extract_role_llm()` sends the subject + first 1,500 chars of body to the configured extraction model and asks for the role title only. Returns `None` if the model responds "NONE" or the result fails `_clean_role()` validation. Only fires when regex fails — not a replacement for regex.
 
 **D-63 · `--no-limit` requires explicit confirmation; blocked silently in cron**
-`--no-limit` bypasses `MAX_JOBS_PER_RUN` and previously triggered unbounded Sonnet scoring with no guard — confirmed to exhaust API credits in production. Fix: when `--no-limit` is passed and `n_found > MAX_JOBS_PER_RUN`: (a) interactive TTY → print cost estimate + prompt `[y/N]`; only proceeds on `y`. (b) non-TTY (cron/scheduled) → log warning and cap to `MAX_JOBS_PER_RUN` automatically. The `--no-limit` flag remains useful for one-off catch-up runs; it just requires intent confirmation.
+`--no-limit` bypasses `MAX_JOBS_PER_RUN` and previously triggered unbounded full-model scoring with no guard — confirmed to exhaust API credits in production. Fix: when `--no-limit` is passed and `n_found > MAX_JOBS_PER_RUN`: (a) interactive TTY → print cost estimate + prompt `[y/N]`; only proceeds on `y`. (b) non-TTY (cron/scheduled) → log warning and cap to `MAX_JOBS_PER_RUN` automatically. The `--no-limit` flag remains useful for one-off catch-up runs; it just requires intent confirmation.
 
 **D-64 · LLM provider boundary is adapter-owned; normalization is provider-agnostic**
 Anthropic and OpenAI are both supported through `metis.llm`, which exposes `complete_text()`,

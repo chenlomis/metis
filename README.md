@@ -146,7 +146,7 @@ Plan for about **5-10 minutes** to get set up, plus up to 24 hours for the first
 
 - macOS and Linux are supported. Windows via WSL2 should work but is untested.
 - Node.js 18+ is optional. It enables the polished React Email renderer; without it, metis uses a simpler Python HTML fallback.
-- Anthropic is the default LLM provider. OpenAI is supported across `metis`, `metis init`, `metis feedback`, and tracker LLM fallback through the same provider boundary. Gemini and Grok/XAI are future adapters.
+- Metis uses a provider-neutral LLM boundary. Anthropic and OpenAI are supported today across `metis`, `metis init`, `metis feedback`, and tracker LLM fallback; Gemini and Grok/XAI are adapter extensions.
 
 <a id="linkedin-alerts"></a>
 
@@ -178,14 +178,12 @@ Your personal config lives here:
 ~/.job_pipeline/.env
 ```
 
-For normal setup, this file only needs your LLM provider and API key:
+For normal setup, this file only needs your chosen LLM provider and API key. Use one of:
 
 ```bash
 METIS_LLM_PROVIDER=anthropic
 ANTHROPIC_API_KEY=sk-ant-...
 ```
-
-Using OpenAI instead:
 
 ```bash
 METIS_LLM_PROVIDER=openai
@@ -220,12 +218,12 @@ pipx install git+https://github.com/chenlomis/metis.git
 ```bash
 mkdir -p ~/.job_pipeline
 cat > ~/.job_pipeline/.env << 'EOF'
-METIS_LLM_PROVIDER=anthropic
-ANTHROPIC_API_KEY=sk-ant-...
+METIS_LLM_PROVIDER=openai       # or anthropic
+OPENAI_API_KEY=sk-...           # or ANTHROPIC_API_KEY=sk-ant-...
 EOF
 ```
 
-Then open `~/.job_pipeline/.env` and replace `sk-ant-...` with your key from [Anthropic Console](https://console.anthropic.com). Using OpenAI instead? See [`.env` configuration](#env-configuration).
+Then open `~/.job_pipeline/.env`, choose `openai` or `anthropic`, and paste the matching key. See [`.env` configuration](#env-configuration) for both examples.
 
 **Step 3 — Build your scoring profile**
 
@@ -343,7 +341,7 @@ Your API keys and OAuth tokens stay local except when used to authenticate with 
 
 ## Cost
 
-Scoring a typical 10-job batch costs roughly $0.05-0.15 with `claude-sonnet-4-6`. Running `metis` daily on a typical alert volume (20-30 roles/week) runs about $0.50-2.00/month. OpenAI cost depends on the `OPENAI_MODEL`, `OPENAI_PRESCREEN_MODEL`, and `OPENAI_EXTRACT_MODEL` choices in `.env`.
+Scoring cost depends on provider, model, and how many roles survive pre-screening. A typical 10-job batch is designed to stay low-cost by using a fast pre-screen pass before full scoring; set provider-specific model variables such as `OPENAI_MODEL` or `ANTHROPIC_MODEL` to control the tradeoff.
 
 Runtime depends on how many roles survive deduplication and pre-screening. A larger run may make several model calls: fast pre-screening, structured JD extraction, then full scoring. metis logs chunk progress while it works so long runs do not look frozen.
 
@@ -357,12 +355,12 @@ Set `MAX_JOBS_PER_RUN=0` in `.env` to remove the cap.
 
 ## Current limits and roadmap
 
-metis is a local, CLI-first v0. It works best today with Gmail or Outlook job-alert emails, an Anthropic or OpenAI key, and a user who wants high-signal triage more than mass-apply automation.
+metis is a local, CLI-first v0. It works best today with Gmail or Outlook job-alert emails, a supported LLM provider key, and a user who wants high-signal triage more than mass-apply automation.
 
 Near-term roadmap:
 
 - More alert sources and company/ATS adapters
-- Better provider abstraction beyond Anthropic/OpenAI
+- Additional LLM adapters, such as Gemini and Grok/XAI
 - MCP server and importable core API
 - PyPI and Docker packaging
 - Output targets beyond email, such as Markdown, Slack, Notion, or webhooks
@@ -481,7 +479,7 @@ npm run email:dev     # live preview at localhost:3000
 - Outlook / Microsoft 365 support
 - New job sources and company/ATS adapters
 - Output targets beyond email, such as chat or local agent surfaces
-- LLM provider abstraction and score-parity tests across providers
+- Additional LLM provider adapters and score-parity tests across providers
 - Resume tailoring and application-assist workflows with human approval
 - Globalization: non-English alerts, international salary/location handling, and regional job boards
 - Tests around state safety, dry-run behavior, scoring contracts, and scheduling

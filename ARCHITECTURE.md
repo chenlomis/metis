@@ -4,9 +4,9 @@
 
 metis is a personal CLI tool that reads job alert emails via OAuth or IMAP fallback, scores
 each role against the user's structured profile using the configured LLM provider, and
-delivers a ranked HTML digest to Gmail. Anthropic is the default provider; OpenAI is
-supported across public AI tasks through the same provider boundary. It runs on demand or
-on a schedule (launchd/cron).
+delivers a ranked HTML digest to Gmail. Anthropic and OpenAI are supported today through
+the same provider boundary; additional model providers are adapter extensions. It runs on
+demand or on a schedule (launchd/cron).
 
 The core value: turn 50+ noisy job alert emails per week into a prioritized shortlist
 of 3–8 roles worth acting on.
@@ -63,7 +63,7 @@ score.py — score_jobs_batch()
     │ returns score (0-100), verdict, leveragePoints, frictionPoints, tags
     ▼
 score.py — rank_jobs()
-    │ re-derives verdict from score + profile thresholds (guards Claude drift)
+    │ re-derives verdict from score + profile thresholds (guards model drift)
     │ sorts: apply → consider → skipped, then by score desc within each tier
     ▼
 render.py — render_html() / build_digest_html()
@@ -107,7 +107,7 @@ feedback.py — write_feedback_log()
     ▼
 score.py — build_score_system()
     │ load_feedback_text() reads all of feedback.md (no TTL)
-    │ injected as CANDIDATE CALIBRATION FEEDBACK block in Sonnet system prompt
+    │ injected as CANDIDATE CALIBRATION FEEDBACK block in scoring system prompt
     │ cached with system prompt — zero marginal cost per role
 ```
 
@@ -154,7 +154,7 @@ All personal data lives outside the repo. The repo has `.env.example` and
 `examples/profile_*.yaml` (fake personas). This is the key security boundary.
 
 ### 6. Verdict re-validation in rank_jobs()
-Claude is instructed on score thresholds but doesn't guarantee compliance. `rank_jobs()`
+The scoring model is instructed on score thresholds but doesn't guarantee compliance. `rank_jobs()`
 re-derives the verdict from the score against the profile's configured thresholds before
 sorting. This prevents a score-62 role from being surfaced as "apply".
 
@@ -244,9 +244,9 @@ and work directly from the ranked `jobs` list that `rank_jobs()` returns.
 ### Extending the profile schema
 
 `profile.yaml` is loaded by `profile.py → load_profile_yaml()` and rendered into the
-Sonnet system prompt by `render_profile()`. The scoring prompt reads whatever is in the
-profile — Claude interprets free-text fields, so adding new fields often *just works*
-without code changes.
+scoring system prompt by `render_profile()`. The scoring prompt reads whatever is in the
+profile — the configured LLM interprets free-text fields, so adding new fields often
+*just works* without code changes.
 
 **For structured new fields** (ones that affect code behavior, not just prompt text):
 
@@ -276,7 +276,7 @@ Key `.env` fields:
 | `METIS_EMAIL_PROVIDER` | auto | Optional override: `gmail_oauth`, `outlook_oauth`, or `imap`; otherwise latest successful OAuth connection wins |
 | `MAX_JOBS_PER_RUN` | `40` | Cap before interactive prompt triggers; `0` = no cap |
 | `DEFAULT_LOOKBACK` | `3d` | How far back IMAP search reaches |
-| `METIS_LLM_PROVIDER` | `anthropic` | Digest scoring provider. Accepts normalized aliases such as `open_ai` and `Claude`. |
+| `METIS_LLM_PROVIDER` | unset uses backward-compatible provider default | LLM provider for scoring, init, feedback, and tracker fallback. Accepts normalized aliases such as `open_ai` and `Claude`. |
 | `ANTHROPIC_MODEL` / `OPENAI_MODEL` | provider default | Full scoring model |
 | `ANTHROPIC_PRESCREEN_MODEL` / `OPENAI_PRESCREEN_MODEL` | provider default | Fast model for pre-screen pass |
 | `ANTHROPIC_EXTRACT_MODEL` / `OPENAI_EXTRACT_MODEL` | provider default | Model for structured JD extraction |
@@ -475,8 +475,8 @@ role, not urgently mass-applying. Key implications:
 - Churn is inherently high (users leave when hired) — acceptable given the use case
 
 **Design consequence:** Scoring precision and filtering quality are more important than
-speed or volume. The two-layer Haiku extraction → Sonnet scoring architecture is the
-right call for this persona.
+speed or volume. The two-layer fast extraction → full scoring architecture is the right
+call for this persona.
 
 ---
 
@@ -653,9 +653,9 @@ Should be configurable or adaptive.
 ### P2 — UX / correctness gaps
 
 **T-04: Pre-screen uses only title+company — no salary, no location**
-The Haiku pre-screen filters on role fit but can't see salary, remote policy, or
+The fast pre-screen filters on role fit but can't see salary, remote policy, or
 location from the title alone. A role that passes pre-screen but is 100% on-site in
-a location the candidate can't work from still gets full Sonnet scoring. Not a bug,
+a location the candidate can't work from still gets full scoring. Not a bug,
 but a known precision gap.
 
 **T-05: metis config subcommand not re-added (resolved)**
