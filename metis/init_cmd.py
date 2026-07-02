@@ -1,7 +1,7 @@
 """metis init — conversational profile setup wizard.
 
 Conversational alternative to `metis init`. Two freeform prompts replace
-the structured Step 2/3 form. Claude extracts the profile, then asks at most
+the structured Step 2/3 form. The configured LLM extracts the profile, then asks at most
 2–3 targeted clarifications for genuinely ambiguous fields before review.
 
 Flow:
@@ -18,6 +18,9 @@ Writes to the same ~/.job_pipeline/profile.yaml as `metis init`.
 import os, re, sys, shutil, logging
 from pathlib import Path
 
+from .llm import complete_text, create_llm_client, normalize_provider, resolve_stage_models
+from .normalization import apply_step_text_backfills
+from .prompt_utils import ask_yes_no
 from .theme import THEME, INQUIRER_STYLE, console, print_section, print_section_intro, print_eg, print_hint, print_confirmed, print_separator
 
 
@@ -31,12 +34,29 @@ from .theme import THEME, INQUIRER_STYLE, console, print_section, print_section_
 # the user sees normal cooked-mode line input.
 # ---------------------------------------------------------------------------
 
+def _drain_stdin() -> None:
+    """Discard any bytes sitting in stdin's buffer (paste overflow, etc.)."""
+    try:
+        import termios, select
+        fd = sys.stdin.fileno()
+        # Flush the kernel input queue
+        termios.tcflush(fd, termios.TCIFLUSH)
+        # Also drain any bytes already delivered to the Python buffer
+        while select.select([sys.stdin], [], [], 0)[0]:
+            sys.stdin.read(4096)
+    except Exception:
+        pass
+
+
 def _read_line() -> str:
     """Read one line of text from stdin in cooked (canonical) mode.
 
     Saves current termios settings, enables ICANON + ECHO + ICRNL, reads a
     line, then restores the original settings so InquirerPy's next prompt
     finds the terminal in the state it left it.
+
+    After reading, drains any remaining buffered input so that pasted text
+    containing newlines cannot bleed into the next prompt.
     """
     try:
         import termios
@@ -52,6 +72,7 @@ def _read_line() -> str:
             line = sys.stdin.readline()
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        _drain_stdin()
         return line.rstrip('\r\n')
     except Exception:
         # Fallback for non-POSIX or environments without termios
@@ -311,14 +332,126 @@ def _step_dontwant(console, THEME, INQUIRER_STYLE, print_section, print_section_
 
 
 # ---------------------------------------------------------------------------
-# Claude extraction (v2)
+# LLM extraction (v2)
 # ---------------------------------------------------------------------------
 
-def _extract_with_claude_v2(api_key, resume_text, linkedin_text, want_text, dontwant_text, console):
-    import anthropic
+def _legacy_parse_profile_yaml(raw: str) -> dict:
+    """Parse the Claude-optimized YAML path without changing existing behavior."""
+    import re as _re
     import yaml
 
-    client = anthropic.Anthropic(api_key=api_key)
+    text = raw.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        close = next((i for i, l in enumerate(lines) if i > 0 and l.strip() == "```"), len(lines))
+        text = "\n".join(lines[1:close])
+
+    try:
+        data = yaml.safe_load(text)
+    except Exception as e:
+        log.warning("YAML parse error: %s — attempting recovery", e)
+        fixed = _re.sub(
+            r'^(\s*[\w_]+:\s*)([^|>\n][^\n]*:[^\n]*)$',
+            lambda m: m.group(1) + '"' + m.group(2).replace('"', '\\"') + '"',
+            text,
+            flags=_re.MULTILINE,
+        )
+        try:
+            data = yaml.safe_load(fixed)
+            log.info("YAML recovery succeeded")
+        except Exception:
+            data = {}
+
+    return data if isinstance(data, dict) else {}
+
+
+def _openai_parse_profile_yaml(raw: str) -> dict:
+    """More tolerant YAML recovery for OpenAI responses."""
+    import re as _re
+    import yaml
+
+    def _candidate_texts(text: str) -> list[str]:
+        texts = [text.strip()]
+        fenced = _re.findall(r"```(?:ya?ml)?\s*(.*?)```", text, flags=_re.IGNORECASE | _re.DOTALL)
+        texts.extend(block.strip() for block in fenced if block.strip())
+        match = _re.search(r"(?m)^(candidate|target|aspirations|preferences|deal_breakers|salary_floor_usd|inferred|notes|_followups|scoring):", text)
+        if match:
+            texts.append(text[match.start():].strip())
+        return list(dict.fromkeys(texts))
+
+    def _repair(text: str) -> str:
+        fixed_lines = []
+        structured_item_keys = {
+            "company", "title", "dates", "institution", "degree", "year",
+            "kind", "field", "question", "from_text",
+        }
+        for line in text.splitlines():
+            item_match = _re.match(r"^(\s*-\s*)(.+)$", line)
+            if item_match:
+                prefix, value = item_match.groups()
+                keyish = value.split(":", 1)[0].strip()
+                if (
+                    ": " in value
+                    and not value.lstrip().startswith(('"', "'", "{", "["))
+                    and keyish not in structured_item_keys
+                ):
+                    line = prefix + '"' + value.replace('"', '\\"') + '"'
+                fixed_lines.append(line)
+                continue
+
+            kv_match = _re.match(r"^(\s*[\w_]+:\s*)(.+)$", line)
+            if kv_match:
+                prefix, value = kv_match.groups()
+                if (
+                    ": " in value
+                    and not value.lstrip().startswith(('"', "'", "{", "[", "|", ">"))
+                ):
+                    line = prefix + '"' + value.replace('"', '\\"') + '"'
+            fixed_lines.append(line)
+        return "\n".join(fixed_lines)
+
+    for text in _candidate_texts(raw):
+        for candidate in (_repair(text), text):
+            try:
+                data = yaml.safe_load(candidate)
+            except Exception:
+                continue
+            if isinstance(data, dict):
+                if "profile" in data and "candidate" not in data and isinstance(data["profile"], dict):
+                    return data["profile"]
+                return data
+    log.warning("OpenAI YAML parse failed after recovery")
+    return {}
+
+
+def _validate_openai_profile(profile: dict, resume_text: str, want_text: str) -> None:
+    """Fail visibly when OpenAI extraction collapses to blanks."""
+    missing = []
+    candidate = profile.get("candidate") if isinstance(profile.get("candidate"), dict) else {}
+    target = profile.get("target") if isinstance(profile.get("target"), dict) else {}
+
+    if resume_text and not candidate.get("name"):
+        missing.append("candidate.name")
+    if want_text and not target.get("roles"):
+        missing.append("target.roles")
+    if want_text and not profile.get("notes"):
+        missing.append("notes")
+    if missing:
+        raise ValueError(
+            "OpenAI profile extraction produced blank required fields: "
+            + ", ".join(missing)
+        )
+
+
+def _apply_step_text_backfills(profile: dict, want_text: str, dontwant_text: str) -> dict:
+    """Compatibility wrapper for tests; implementation lives in normalization.py."""
+    return apply_step_text_backfills(profile, want_text, dontwant_text)
+
+
+def _extract_with_llm_v2(api_key, resume_text, linkedin_text, want_text, dontwant_text, console):
+    provider = normalize_provider(os.getenv("METIS_LLM_PROVIDER", os.getenv("LLM_PROVIDER", "anthropic")))
+    model = resolve_stage_models(provider)["model"]
+    client = create_llm_client(provider=provider, api_key=api_key)
 
     user_msg = "\n\n".join(filter(None, [
         f"RESUME:\n{resume_text[:12000]}",
@@ -328,29 +461,22 @@ def _extract_with_claude_v2(api_key, resume_text, linkedin_text, want_text, dont
     ]))
 
     with console.status("  [dim]Extracting profile…[/dim]"):
-        response = client.messages.create(
-            model="claude-sonnet-4-6",
+        response = complete_text(
+            client,
+            model=model,
             max_tokens=4096,
             system=init_extract_system_prompt(),
-            messages=[{"role": "user", "content": user_msg}],
+            user=user_msg,
         )
 
-    raw = response.content[0].text.strip()
-
-    # Strip markdown fences if present
-    if raw.startswith("```"):
-        lines = raw.splitlines()
-        close = next((i for i, l in enumerate(lines) if i > 0 and l.strip() == "```"), len(lines))
-        raw = "\n".join(lines[1:close])
-
-    try:
-        data = yaml.safe_load(raw)
-    except Exception as e:
-        log.warning("YAML parse error: %s — attempting recovery", e)
-        data = {}
-
-    if not isinstance(data, dict):
-        data = {}
+    raw = response.text.strip()
+    if provider == "openai":
+        data = _openai_parse_profile_yaml(raw)
+        data = _apply_step_text_backfills(data, want_text, dontwant_text)
+        _validate_openai_profile(data, resume_text, want_text)
+    else:
+        data = _legacy_parse_profile_yaml(raw)
+        data = _apply_step_text_backfills(data, want_text, dontwant_text)
 
     followups = data.pop("_followups", []) or []
     return data, followups
@@ -404,6 +530,12 @@ def _apply_guardrails(profile, followups, want_text, dontwant_skipped):
         ))
         if is_location_remote and not is_explicit:
             _add("remote_only_or_preferred", "remote")
+
+    # Location preference used to be collected explicitly. If neither the new
+    # field nor the legacy bool exists, ask instead of saving an ambiguous null.
+    candidate = profile.get("candidate", {}) if isinstance(profile.get("candidate"), dict) else {}
+    if not candidate.get("location_preference") and "open_to_remote" not in candidate:
+        _add("remote_only_or_preferred", "location preference")
 
     # Deal-breakers: Step 3 was not skipped but none extracted
     if not dontwant_skipped and not profile.get("deal_breakers"):
@@ -639,7 +771,7 @@ def _run_review(profile, console, THEME, INQUIRER_STYLE, api_key=None,
                     lambda text: console.print(f"  [dim italic]{text}[/dim italic]"),
                 )
                 console.print()
-                new_profile, new_followups = _extract_with_claude_v2(
+                new_profile, new_followups = _extract_with_llm_v2(
                     api_key, resume_text, linkedin_text, new_want, new_dontwant, console,
                 )
                 console.print(f"  [{THEME['success']}]✓[/]  Re-extraction complete")
@@ -655,45 +787,45 @@ def _run_review(profile, console, THEME, INQUIRER_STYLE, api_key=None,
 # Step 0 — Connect inbox via OAuth
 # ---------------------------------------------------------------------------
 
-def _step_connect_inbox(console, THEME, INQUIRER_STYLE) -> None:
-    """Prompt the user to connect their inbox via OAuth (Gmail or Outlook).
-
-    Metis needs read access to fetch job alert emails and send access to
-    deliver your digest. This step is skipped if a token is already stored.
-    Runs before the profile wizard so email previews work immediately.
-    """
-    from .auth import gmail_oauth, outlook_oauth
+def _step_connect_inbox(console, THEME, INQUIRER_STYLE, print_section, print_section_intro) -> None:
+    from .auth.state import infer_connected_provider, provider_label
+    from .config_access_cmd import _oauth_flow
     from InquirerPy import inquirer
     from InquirerPy.base.control import Choice
 
-    gmail_connected   = gmail_oauth.is_connected()
-    outlook_connected = outlook_oauth.is_connected()
+    connected_provider = infer_connected_provider()
 
-    if gmail_connected or outlook_connected:
-        provider = "Gmail" if gmail_connected else "Outlook"
+    # Flow 3: already connected — show status and skip
+    if connected_provider:
+        provider = provider_label(connected_provider)
         console.print(f"\n  [{THEME['success']}]✓[/]  Inbox already connected ({provider})")
         return
 
-    console.print(
-        "\n  [bold]Connect your inbox[/bold]\n"
-        "\n"
-        "  Metis needs read-only access to fetch job alert emails (Wellfound, Ladders,\n"
-        "  Waymo, GitHub, and others), and send access to deliver your digest back to you.\n"
-        "\n"
-        "  Your browser will open — you'll see exactly what's being granted before you approve.\n"
-        "  Metis only reads emails from senders you configure, and only sends your digest.\n"
+    print_section("Step 0", "Connect your inbox", "— read alerts · send digest")
+    console.print()
+    print_section_intro(
+        "Metis reads JD from job alerts (e.g. LinkedIn, Wellfound, GitHub) and company "
+        "career pages you configure and sends your scored digest & summary."
     )
+    console.print(
+        "  [dim]Your browser will open so you can approve exactly what's granted. "
+        "Personal email is never read.[/dim]",
+        soft_wrap=True,
+    )
+    console.print()
 
-    connect = inquirer.confirm(
+    connect = ask_yes_no(
         message="  › Connect your inbox now?",
         default=True,
         style=INQUIRER_STYLE,
-    ).execute()
+    )
 
+    # Flow 2: user says N
     if not connect:
         console.print(
-            "  [dim]Skipped — you can connect later. Without inbox access, Metis will\n"
-            "  fall back to IMAP (requires GMAIL_ADDRESS + GMAIL_APP_PASSWORD in .env).[/dim]"
+            f"\n  [{THEME['warning']}]⚠[/]  Inbox not connected — email alert sources will be skipped.\n"
+            "  [dim]Run [bold]metis config access[/bold] anytime to connect.\n"
+            "  Continuing with profile setup.[/dim]"
         )
         return
 
@@ -701,24 +833,14 @@ def _step_connect_inbox(console, THEME, INQUIRER_STYLE) -> None:
         message="  › Which inbox?",
         choices=[
             Choice(value="gmail",   name="Gmail"),
-            Choice(value="outlook", name="Outlook / Hotmail / Live"),
+            Choice(value="outlook", name="Outlook (includes Hotmail/Live)"),
         ],
         style=INQUIRER_STYLE,
     ).execute()
 
-    console.print("\n  Opening your browser…\n")
-    try:
-        if provider_choice == "gmail":
-            email_addr = gmail_oauth.connect()
-            console.print(f"  [{THEME['success']}]✓[/]  Gmail connected ({email_addr})")
-        else:
-            email_addr = outlook_oauth.connect()
-            console.print(f"  [{THEME['success']}]✓[/]  Outlook connected ({email_addr})")
-    except Exception as e:
-        console.print(
-            f"  [{THEME['warning']}]⚠[/]  Could not connect inbox: {e}\n"
-            "  [dim]You can retry later. Continuing with profile setup.[/dim]"
-        )
+    # Flow 1: browser OAuth with one retry; failure message includes "Continuing with profile setup."
+    _oauth_flow(provider_choice, inquirer)
+    console.print("  [dim]Continuing with profile setup.[/dim]")
 
 
 # ---------------------------------------------------------------------------
@@ -768,7 +890,7 @@ def run_init(api_key):
     _print_welcome(console, THEME, rich_box)
 
     # Step 0 — Connect inbox
-    _step_connect_inbox(console, THEME, INQUIRER_STYLE)
+    _step_connect_inbox(console, THEME, INQUIRER_STYLE, print_section, print_section_intro)
     print_separator()
 
     # Step 1
@@ -802,9 +924,14 @@ def run_init(api_key):
 
     # Extract
     console.print()
-    profile, followups = _extract_with_claude_v2(
-        api_key, resume_text, linkedin_text, want_text, dontwant_text, console,
-    )
+    try:
+        profile, followups = _extract_with_llm_v2(
+            api_key, resume_text, linkedin_text, want_text, dontwant_text, console,
+        )
+    except ValueError as exc:
+        console.print(f"  [{THEME['warning']}]⚠[/]  Profile extraction failed: {exc}")
+        console.print("  [dim]No profile was saved. Try again with Anthropic or simplify the Step 2/3 text.[/dim]")
+        return
     console.print(f"  [{THEME['success']}]✓[/]  Extraction complete")
 
     # Guardrails — add any deterministic follow-ups Claude missed
@@ -844,21 +971,21 @@ def run_init(api_key):
             f"\n  [dim]Automated schedule already active: {label} at {existing_schedule.get('time', '?')}[/dim]"
         )
         from InquirerPy import inquirer as _iq
-        change = _iq.confirm(
+        change = ask_yes_no(
             message="  › Update the schedule?",
             default=False,
             style=INQUIRER_STYLE,
-        ).execute()
+        )
         if change:
             run_schedule_wizard()
     else:
         console.print()
         from InquirerPy import inquirer as _iq
-        setup = _iq.confirm(
+        setup = ask_yes_no(
             message="  › Set up automated digests? metis can email you on a schedule.",
             default=True,
             style=INQUIRER_STYLE,
-        ).execute()
+        )
         if setup:
             run_schedule_wizard()
         else:

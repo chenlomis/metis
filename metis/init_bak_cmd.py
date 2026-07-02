@@ -13,6 +13,7 @@ import os, re, sys, shutil, subprocess, logging
 from pathlib import Path
 from rich.style import Style
 
+from .prompt_utils import ask_yes_no
 from .theme import (
     QUESTIONARY_STYLE,
     INQUIRER_STYLE,
@@ -111,9 +112,8 @@ def _ask_checkbox(label: str, choices: list, hint: str = "Space to toggle  ·  E
 
 def _ask_confirm(label: str, default: bool = True) -> bool:
     """Yes/No confirmation block."""
-    from InquirerPy import inquirer
     console.print()
-    return bool(inquirer.confirm(message=f"  › {label}", default=default, style=INQUIRER_STYLE).execute())
+    return ask_yes_no(message=f"  › {label}", default=default, style=INQUIRER_STYLE)
 
 
 def _ask_filepath(label: str, hint: str = "", examples: str = "") -> str:

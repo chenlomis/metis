@@ -3,8 +3,10 @@
 ## What It Does
 
 metis is a personal CLI tool that reads LinkedIn job alert emails via IMAP, scores
-each role against the user's structured profile using Claude, and delivers a ranked HTML
-digest to Gmail. It runs on demand or on a schedule (launchd/cron).
+each role against the user's structured profile using the configured LLM provider, and
+delivers a ranked HTML digest to Gmail. Anthropic is the default provider; OpenAI is
+supported across public AI tasks while quality calibration continues. It runs on demand
+or on a schedule (launchd/cron).
 
 The core value: turn 50+ noisy job alert emails per week into a prioritized shortlist
 of 3–8 roles worth acting on.
@@ -33,7 +35,7 @@ pipeline.py — cap / prompt decision
     │ > cap, non-TTY      →  silently cap + log warning
     ▼
 score.py — prescreen_jobs_batch()  [only when going beyond cap]
-    │ Haiku pass: title+company only, no JD fetch
+    │ fast-model pass: title+company only, no JD fetch
     │ condensed profile context: target roles, seniority, deal-breakers
     │ returns ~50% of roles; falls back to full list on parse failure
     ▼
@@ -44,18 +46,18 @@ sources/linkedin.py — enrich_jobs()
     │ retries 3x with exponential backoff on 429/5xx/timeout
     ▼
 extract.py — extract_jd_structs()          ← Layer 1 (NEW)
-    │ Haiku call at temperature=0 per chunk (≤10 jobs/chunk)
+    │ extraction-model call at temperature=0 per chunk (≤10 jobs/chunk)
     │ extracts 27 structured fields: salary, work model, domain, seniority,
     │   degree req, visa, company stage, customer type, culture signals, etc.
     │ extraction failure → jd_quality="extraction_failed" structs (jd_blank gate does NOT fire — JD content exists)
     ▼
 extract.py — check_hard_gates()
-    │ jd_blank gate:    no JD text → verdict="filtered", skip Sonnet
+    │ jd_blank gate:    no JD text → verdict="filtered", skip full scorer
     │ salary_floor:     disclosed salary_max < floor*0.9 → filtered
     │ (all other gates handled by Layer 2 — require nuanced judgment)
     ▼
 score.py — score_jobs_batch()
-    │ Sonnet call on gate-surviving jobs only (cost savings)
+    │ full scoring model call on gate-surviving jobs only (cost savings)
     │ each job block includes [EXTRACTED CONTEXT] from Layer 1
     │ profile as cached system prompt; explicit 6-dimension rubric
     │ returns score (0-100), verdict, leveragePoints, frictionPoints, tags
@@ -88,7 +90,7 @@ metis feedback
     │ load last_run.json → display last digest summary
     │ collect free-form text (blank line to finish)
     ▼
-feedback.py — _claude_process()
+feedback.py — _llm_process()
     │ Haiku call: parse roles/dims mentioned, detect real conflicts with
     │   existing feedback.md, flag explicit permanent preferences
     │ conflict resolution: user picks new/both/discard
@@ -118,23 +120,23 @@ Gmail IMAP is the canonical data store. No local DB, no job cache beyond the ded
 Simplifies setup (no Postgres, no Redis) at the cost of re-fetching email metadata on
 every run. Fine for personal use at 1-3 runs/day.
 
-### 2. Batch Sonnet call with cached system prompt
+### 2. Batch full-scoring call with cached system prompt
 All jobs are scored in a single `messages.create()` call. The profile is sent as a
 `cache_control: ephemeral` system prompt block, so subsequent calls within the 5-minute
 cache window pay reduced input token costs. Trade-off: one large call is more fragile
 than N small calls (partial-JSON recovery in `_recover_partial_json()` mitigates this).
 
-### 3. Three-pass scoring: Haiku pre-screen → Haiku extraction → Sonnet
-Pass 1 (pre-screen): activated when role count exceeds `MAX_JOBS_PER_RUN`. Haiku sees
+### 3. Three-pass scoring: pre-screen → extraction → full scoring
+Pass 1 (pre-screen): activated when role count exceeds `MAX_JOBS_PER_RUN`. The fast model sees
 only title+company, returns Y/N. Reduces catch-up run cost by ~40–60%.
 
-Pass 2 (Layer 1 extraction): always runs on enriched jobs. Haiku at temperature=0
+Pass 2 (Layer 1 extraction): always runs on enriched jobs. The extraction model at temperature=0
 extracts 27 structured fields from each JD. Two Python hard gates run here:
-`jd_blank` (no JD text → skip Sonnet) and `salary_floor` (disclosed salary_max < floor * 0.9).
+`jd_blank` (no JD text → skip full scoring) and `salary_floor` (disclosed salary_max < floor * 0.9).
 Extraction failures fall back to blank structs — scoring is never blocked.
-Cost: ~$0.005 per 10 jobs; partially offset by gate filtering savings on Sonnet.
+Cost depends on provider/model choice and is partially offset by gate filtering savings.
 
-Pass 3 (Layer 2 Sonnet): only runs on roles that passed hard gates. Each job block
+Pass 3 (Layer 2 full scoring): only runs on roles that passed hard gates. Each job block
 includes the Layer 1 `[EXTRACTED CONTEXT]` as grounding. The scoring prompt includes
 an explicit 6-dimension rubric (seniority_scope, experience_relevance, compensation_fit,
 culture_values, domain_background, company_stage) with weights and multipliers.
@@ -172,6 +174,29 @@ The three most likely extension points, and how to use them.
 
 The `sources/` package is the only layer that knows about email providers or HTTP feeds.
 Everything downstream (dedup, scoring, rendering) works on a list of `Job` dicts.
+
+#### Email alert sources
+
+Email alert sources are registered via `metis sources email add <sender>`. The system
+dispatches by sender address to a format-specific parser in `sources/email_alerts.py`:
+
+| Format | Sender pattern | Parser |
+|---|---|---|
+| Wellfound | `wellfound` / `angellist` | `_parse_wellfound` — structured HTML cards |
+| Ladders | `theladders` | `_parse_ladders` — plain-text rows |
+| ClinchTalent | `clinchtalent` | `_parse_clinchtalent` — tracking link extraction |
+| iCIMS | `icims` | `_parse_icims` — job URL anchor scraping |
+| Unknown | anything else | `_parse_with_llm` — LLM extraction, no code change needed |
+
+To add a dedicated parser for a new known sender:
+1. Add a parser function `_parse_<name>(body_html, body_text, company) -> list[dict]` in `sources/email_alerts.py`
+2. Add a detection case in `detect_format()` keyed on sender domain substring
+3. Add the format label in `format_label()`
+4. Add a dispatch case in `fetch_email_alerts()`
+
+Unknown senders automatically use `_parse_with_llm` — no steps needed for one-off sources.
+
+#### Proactive career-page sources
 
 **Steps:**
 
@@ -246,10 +271,16 @@ profiles don't break on upgrade. Document the new field in `README.md § Configu
 Key `.env` fields:
 | Variable | Default | Effect |
 |---|---|---|
+| `GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET` | unset | Gmail OAuth desktop-app credentials for `metis config access` / `metis init` inbox connection |
+| `OUTLOOK_CLIENT_ID` | unset | Microsoft Graph public-client ID for Outlook OAuth |
+| `METIS_EMAIL_PROVIDER` | auto | Optional override: `gmail_oauth`, `outlook_oauth`, or `imap`; otherwise latest successful OAuth connection wins |
 | `MAX_JOBS_PER_RUN` | `40` | Cap before interactive prompt triggers; `0` = no cap |
 | `DEFAULT_LOOKBACK` | `3d` | How far back IMAP search reaches |
-| `MODEL` | `claude-sonnet-4-6` | Sonnet model for full scoring |
-| `PRESCREEN_MODEL` | `claude-haiku-4-5` | Haiku model for pre-screen pass |
+| `METIS_LLM_PROVIDER` | `anthropic` | Digest scoring provider. Accepts normalized aliases such as `open_ai` and `Claude`. |
+| `ANTHROPIC_MODEL` / `OPENAI_MODEL` | provider default | Full scoring model |
+| `ANTHROPIC_PRESCREEN_MODEL` / `OPENAI_PRESCREEN_MODEL` | provider default | Fast model for pre-screen pass |
+| `ANTHROPIC_EXTRACT_MODEL` / `OPENAI_EXTRACT_MODEL` | provider default | Model for structured JD extraction |
+| `MODEL`, `PRESCREEN_MODEL`, `EXTRACT_MODEL` | provider default | Backward-compatible generic model variables |
 
 Dev-only env vars (never put in `.env`):
 | Variable | Effect |
@@ -263,21 +294,52 @@ Dev-only env vars (never put in `.env`):
 ```
 ~/.job_pipeline/
   profile.yaml       — structured candidate profile (generated by metis init)
+  gmail_token.json   — Gmail OAuth token cache (owner-only, never committed)
+  outlook_token.json — Outlook OAuth token cache (owner-only, never committed)
+  email_provider.json — active OAuth provider marker; latest successful connection wins
   seen_roles.json    — {role_hash: iso_timestamp} — 30-day TTL dedup store
   logs/YYYY-MM-DD.log
   debug_email.txt    — written by metis debug
 ```
 
 **File permissions:** `~/.job_pipeline/` is created with `mode=0o700` (owner-only directory).
-`profile.yaml` and `seen_roles.json` are created with `mode=0o600` (owner-only read/write).
+`profile.yaml`, OAuth token files, `email_provider.json`, and `seen_roles.json` are created
+with `mode=0o600` (owner-only read/write).
 Log files use the system default (typically 644) and may contain job titles/companies from
 warning messages — avoid sharing raw log output in bug reports without redaction.
 
-**What leaves the machine:** Resume text (during `metis init`) and the full profile
-(as a scoring system prompt on every run) are sent to the Anthropic API over HTTPS.
-Job titles, company names, and JD snippets (≤1,500 chars each) are sent with each scoring
-batch. Gmail credentials stay local — IMAP and SMTP connections go directly to Gmail (SSL).
+**What leaves the machine:** Resume text during `metis init`, feedback notes during
+`metis feedback`, and scoring inputs during `metis` runs go to the selected LLM provider.
+OAuth tokens and legacy Gmail credentials stay local. Browser OAuth goes directly to Google
+or Microsoft; token exchange uses `state` validation and PKCE (`S256`) before saving tokens.
 See README § Privacy for the full data flow table.
+
+### Email OAuth and Provider State
+
+`metis init` and `metis config access` can connect Gmail or Outlook via OAuth. Provider code
+lives in `metis/auth/gmail_oauth.py` and `metis/auth/outlook_oauth.py`; shared security
+helpers live in `metis/auth/oauth_security.py`.
+
+Security invariants:
+
+- Authorization URLs include a random `state` value and PKCE `code_challenge` with
+  `code_challenge_method=S256`.
+- Callback handling must reject missing or mismatched `state` before exchanging the code.
+- Token exchange must include the matching `code_verifier`.
+- Reconnect flows force account selection (`prompt=consent select_account` for Gmail,
+  `prompt=select_account` for Outlook).
+- Token files and `email_provider.json` are local-only runtime state and must never be
+  committed.
+
+Provider selection is deterministic: `METIS_EMAIL_PROVIDER` overrides everything; otherwise
+`email_provider.json` identifies the latest successful OAuth provider; without that marker,
+the newest OAuth token file is used for backward compatibility; if no OAuth token exists,
+the legacy Gmail IMAP fallback is used.
+
+Current rollout boundary: non-LinkedIn email alert sources use the provider-neutral
+`sources/email_fetcher.py`. Some older workflows still contain Gmail IMAP/SMTP-specific
+call sites (`sources/linkedin.py`, tracker/backfill, and main digest delivery) until the
+provider abstraction is wired through end-to-end.
 
 ---
 
@@ -286,11 +348,14 @@ See README § Privacy for the full data flow table.
 | Module | Responsibility |
 |---|---|
 | `cli.py` | CLI parsing, subcommand registration, and command routing |
+| `auth/` | Gmail/Outlook OAuth, active provider state, PKCE/state helpers |
+| `config_access_cmd.py` | `metis config access`: connect/reconnect Gmail or Outlook via browser OAuth |
 | `pipeline.py` | Digest pipeline orchestration and cap/prompt logic — stage order is load-bearing, do not reorder |
 | `sources/linkedin.py` | IMAP fetch, email parsing (3-case positional shift detection), JD enrichment, IMAP retry |
 | `sources/__init__.py` | Routing between alert modes (lookback vs. seen-ID gate) |
-| `extract.py` | Layer 1 Haiku extraction (27 structured fields), hard gate checker, context formatter |
-| `score.py` | Haiku pre-screen, Sonnet scoring (Layer 2), JSON recovery, rank — eval schema is a locked contract with render.py |
+| `llm/` | Provider-neutral LLM boundary, provider normalization, per-stage model resolution |
+| `extract.py` | Layer 1 structured extraction (27 fields), hard gate checker, context formatter |
+| `score.py` | Fast pre-screen, full scoring (Layer 2), JSON recovery, rank — eval schema is a locked contract with render.py |
 | `render.py` | HTML digest building, SMTP delivery — output format locked; see CLAUDE.md constraint #0 |
 | `profile.py` | Profile YAML loader + `render_profile()` for scoring prompt |
 | `state.py` | `seen_roles.json` read/write/prune, `_role_hash()` — hash function frozen, do not change |
@@ -299,7 +364,7 @@ See README § Privacy for the full data flow table.
 | `trace.py` | `write_trace()` → `runs.jsonl`; called for every job regardless of verdict |
 | `init_cmd.py` | `metis init` wizard (4-step, re-runnable); offers schedule setup at end |
 | `schedule_cmd.py` | Schedule install/remove/show; builds launchd plist (macOS) or crontab line (Linux) |
-| `feedback.py` | `metis feedback`: collect → Haiku parse → confirm → append to `feedback.md` |
+| `feedback.py` | `metis feedback`: collect → configured LLM parse → confirm → append to `feedback.md` |
 
 ---
 

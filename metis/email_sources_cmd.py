@@ -1,10 +1,10 @@
-"""scorerole sources email — manage non-LinkedIn email alert sources.
+"""metis sources email — manage non-LinkedIn email alert sources.
 
 Commands:
-  scorerole sources email         list email alert sources
-  scorerole sources email list    list email alert sources
-  scorerole sources email add     interactive wizard: add a source
-  scorerole sources email remove  interactive removal
+  metis sources email         list email alert sources
+  metis sources email list    list email alert sources
+  metis sources email add     interactive wizard: add a source
+  metis sources email remove  interactive removal
 """
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from .sources.email_alerts import (
 from rich import box as rich_box
 from rich.table import Table
 
+from .prompt_utils import ask_yes_no
 from .theme import THEME, console
 
 log = logging.getLogger(__name__)
@@ -55,8 +56,8 @@ def cmd_email_list() -> None:
 
     console.print(table)
     console.print(
-        "  [dim]scorerole sources email add     add an email alert source\n"
-        "  scorerole sources email remove  remove a source[/dim]\n"
+        "  [dim]metis sources email add     add an email alert source\n"
+        "  metis sources email remove  remove a source[/dim]\n"
     )
 
 
@@ -170,8 +171,7 @@ def cmd_email_add(sender_arg: str | None = None) -> None:
         )
 
         try:
-            from InquirerPy import inquirer
-            save = inquirer.confirm(message="Register this source?", default=True).execute()
+            save = ask_yes_no(message="Register this source?", default=True)
         except ImportError:
             ans = input("  Register this source? [Y/n] ").strip().lower()
             save = ans in ("", "y", "yes")
@@ -247,7 +247,7 @@ def cmd_email_add(sender_arg: str | None = None) -> None:
         console.print(f"\n  [{THEME['warning']}]{company}[/] ({sender}) is already configured.")
         return
 
-    save = inquirer.confirm(message="Save this source?", default=True).execute()
+    save = ask_yes_no(message="Save this source?", default=True)
     if not save:
         console.print("  [dim]Cancelled.[/dim]")
         return

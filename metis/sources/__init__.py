@@ -43,8 +43,6 @@ def fetch_alerts(
             email_jobs = fetch_email_alerts(
                 since_dt,
                 email_sources,
-                gmail_address=gmail_address,
-                gmail_app_password=gmail_app_password,
             )
             if email_jobs:
                 log.info("email-alerts: %d new role(s) from %d source(s)",
