@@ -8,10 +8,11 @@ Token stored at ~/.job_pipeline/outlook_token.json (chmod 600).
 Required Azure setup (one-time, developer-side):
   - Register an app at portal.azure.com → App registrations
   - Supported account types: "Personal Microsoft accounts only"
-  - Add redirect URI: http://localhost:8766/oauth/callback (Mobile and desktop applications)
+  - Add redirect URI: http://127.0.0.1:8766/oauth/callback (Mobile and desktop applications)
   - Set OUTLOOK_CLIENT_ID in .env (no client secret needed for public desktop apps)
 
 Scopes requested:
+  - User.Read    — read the signed-in user's profile/email for connection status
   - Mail.Read    — read job alert emails
   - Mail.Send    — send digest back to the user
   - offline_access — required to get a refresh token
@@ -32,6 +33,8 @@ from urllib.parse import parse_qs, urlencode, urlparse
 
 import requests
 
+from .oauth_security import extract_callback_code, generate_pkce_pair, generate_state
+
 log = logging.getLogger(__name__)
 
 TOKEN_PATH = Path.home() / ".job_pipeline" / "outlook_token.json"
@@ -39,9 +42,9 @@ TOKEN_PATH = Path.home() / ".job_pipeline" / "outlook_token.json"
 _AUTH_URL      = "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize"
 _TOKEN_URL     = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token"
 _GRAPH_BASE    = "https://graph.microsoft.com/v1.0"
-_SCOPES        = ["Mail.Read", "Mail.Send", "offline_access"]
+_SCOPES        = ["User.Read", "Mail.Read", "Mail.Send", "offline_access"]
 _REDIRECT_PORT = 8766
-_REDIRECT_URI  = f"http://localhost:{_REDIRECT_PORT}/oauth/callback"
+_REDIRECT_URI  = f"http://127.0.0.1:{_REDIRECT_PORT}/oauth/callback"
 
 
 # ── Token storage ─────────────────────────────────────────────────────────────
@@ -90,6 +93,36 @@ def get_access_token() -> str:
 
 # ── OAuth flow ────────────────────────────────────────────────────────────────
 
+def _build_auth_url(client_id: str, state: str, code_challenge: str) -> str:
+    auth_params = {
+        "client_id":     client_id,
+        "redirect_uri":  _REDIRECT_URI,
+        "response_type": "code",
+        "scope":         " ".join(_SCOPES),
+        "response_mode": "query",
+        "prompt":        "select_account",
+        "state":         state,
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256",
+    }
+    return f"{_AUTH_URL}?{urlencode(auth_params)}"
+
+
+def _exchange_code_for_token(code: str, client_id: str, code_verifier: str) -> dict:
+    resp = requests.post(_TOKEN_URL, data={
+        "code":          code,
+        "client_id":     client_id,
+        "redirect_uri":  _REDIRECT_URI,
+        "grant_type":    "authorization_code",
+        "scope":         " ".join(_SCOPES),
+        "code_verifier": code_verifier,
+    }, timeout=10)
+    resp.raise_for_status()
+    token = resp.json()
+    _save_token(token)
+    return token
+
+
 def _run_oauth_flow() -> dict:
     """Open browser, run localhost callback server, exchange code for tokens."""
     client_id = os.getenv("OUTLOOK_CLIENT_ID", "")
@@ -99,23 +132,20 @@ def _run_oauth_flow() -> dict:
             "Register an app at portal.azure.com → App registrations."
         )
 
-    auth_params = {
-        "client_id":     client_id,
-        "redirect_uri":  _REDIRECT_URI,
-        "response_type": "code",
-        "scope":         " ".join(_SCOPES),
-        "response_mode": "query",
-    }
-    auth_url = f"{_AUTH_URL}?{urlencode(auth_params)}"
+    state = generate_state()
+    code_verifier, code_challenge = generate_pkce_pair()
+    auth_url = _build_auth_url(client_id, state, code_challenge)
 
     received: dict = {}
     server_ready = threading.Event()
+    callback_received = threading.Event()
 
     class _Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             qs = parse_qs(urlparse(self.path).query)
-            if "code" in qs:
-                received["code"] = qs["code"][0]
+            try:
+                received["code"] = extract_callback_code(qs, state)
+                callback_received.set()
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html")
                 self.end_headers()
@@ -125,19 +155,32 @@ def _run_oauth_flow() -> dict:
                     b"<p>You can close this tab and return to the terminal.</p>"
                     b"</body></html>"
                 )
-            else:
-                received["error"] = qs.get("error", ["unknown"])[0]
+            except Exception as e:
+                received["error"] = str(e)
+                callback_received.set()
                 self.send_response(400)
+                self.send_header("Content-Type", "text/html")
                 self.end_headers()
+                self.wfile.write(
+                    b"<html><body style='font-family:sans-serif;padding:40px'>"
+                    b"<h2>Metis could not connect to Outlook</h2>"
+                    b"<p>You can close this tab and return to the terminal.</p>"
+                    b"</body></html>"
+                )
 
         def log_message(self, *_):
             pass
 
     httpd = HTTPServer(("127.0.0.1", _REDIRECT_PORT), _Handler)
+    httpd.socket.settimeout(1.0)  # poll every 1s so Ctrl+C and browser-close are responsive
 
     def _serve():
         server_ready.set()
-        httpd.handle_request()
+        while not callback_received.is_set():
+            try:
+                httpd.handle_request()
+            except Exception:
+                pass
 
     t = threading.Thread(target=_serve, daemon=True)
     t.start()
@@ -145,27 +188,23 @@ def _run_oauth_flow() -> dict:
 
     webbrowser.open(auth_url)
 
-    t.join(timeout=120)
-    if "error" in received:
-        raise RuntimeError(f"OAuth error: {received['error']}")
-    if "code" not in received:
-        raise RuntimeError("OAuth timed out — no response from browser.")
+    try:
+        if not callback_received.wait(timeout=300):
+            raise TimeoutError("OAuth timed out — no response from browser.")
+        if "error" in received:
+            raise RuntimeError(received["error"])
+        if "code" not in received:
+            raise TimeoutError("OAuth timed out — no authorization code from browser.")
+    finally:
+        httpd.server_close()
 
-    resp = requests.post(_TOKEN_URL, data={
-        "code":          received["code"],
-        "client_id":     client_id,
-        "redirect_uri":  _REDIRECT_URI,
-        "grant_type":    "authorization_code",
-        "scope":         " ".join(_SCOPES),
-    }, timeout=10)
-    resp.raise_for_status()
-    token = resp.json()
-    _save_token(token)
-    return token
+    return _exchange_code_for_token(received["code"], client_id, code_verifier)
 
 
 def connect() -> str:
     """Run OAuth flow and return the authenticated email address."""
+    from .state import set_active_provider
+
     token = _run_oauth_flow()
     resp = requests.get(
         f"{_GRAPH_BASE}/me",
@@ -174,7 +213,12 @@ def connect() -> str:
     )
     resp.raise_for_status()
     data = resp.json()
-    return data.get("mail") or data.get("userPrincipalName", "")
+    email = data.get("mail") or data.get("userPrincipalName", "")
+    if email:
+        token["email"] = email
+        _save_token(token)
+    set_active_provider("outlook_oauth")
+    return email
 
 
 def is_connected() -> bool:
@@ -232,7 +276,7 @@ def send_digest(html: str, subject: str, recipient: str) -> None:
             "body": {"contentType": "HTML", "content": html},
             "toRecipients": [{"emailAddress": {"address": recipient}}],
         },
-        "saveToSentItems": "true",
+        "saveToSentItems": True,
     }
 
     resp = requests.post(

@@ -24,6 +24,7 @@ from rich.padding import Padding
 from rich.style import Style
 from rich.text import Text
 
+from .prompt_utils import ask_yes_no
 from .state import DATA_DIR, LAST_RUN_FILE, FEEDBACK_FILE, FEEDBACK_LOG_FILE
 from .theme import (
     THEME, INQUIRER_STYLE, console,
@@ -566,12 +567,11 @@ def run_feedback(api_key: Optional[str] = None) -> None:
                 console.print()
 
     # Confirm + save
-    confirmed = inquirer.confirm(
+    confirmed = ask_yes_no(
         message="Save this feedback?",
-        qmark="?",
         default=True,
         style=INQUIRER_STYLE,
-    ).execute()
+    )
 
     if not confirmed:
         console.print("  (cancelled)\n", style=Style(color=THEME["dim"]))

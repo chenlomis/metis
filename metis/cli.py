@@ -49,13 +49,23 @@ def _build_parser() -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(
         dest="command",
-        metavar="{init,reset,schedule,track,sources,feedback,debug,summary}",
+        metavar="{init,config,reset,schedule,track,sources,feedback,debug,summary}",
     )
 
     subparsers.add_parser(
         "init",
         help="Conversational profile setup — freeform prompts instead of a form.",
     )
+
+    config_p = subparsers.add_parser(
+        "config",
+        help="Manage Metis configuration.",
+        description=(
+            "  metis config access    connect Gmail or Outlook inbox via OAuth"
+        ),
+    )
+    config_sub = config_p.add_subparsers(dest="config_action")
+    config_sub.add_parser("access", help="Connect or reconnect your inbox via Gmail or Outlook OAuth.")
 
     reset_p = subparsers.add_parser("reset", help="Clear seen-role state so all roles reprocess.")
     reset_p.add_argument("--force", action="store_true", help="Skip confirmation prompt.")
@@ -218,7 +228,15 @@ def main(argv: list[str] | None = None):
     args = parser.parse_args(raw_argv)
     _configure_logging()
 
-    if args.command == "init":
+    if args.command == "config":
+        action = getattr(args, "config_action", None)
+        if action == "access":
+            from .config_access_cmd import run_config_access
+            run_config_access()
+        else:
+            parser.parse_args(["config", "--help"])
+
+    elif args.command == "init":
         _validate_env(require_gmail=False)
         from .init_cmd import run_init
         run_init(api_key=LLM_API_KEY)
@@ -300,13 +318,18 @@ def main(argv: list[str] | None = None):
         )
 
     elif args.command == "sources":
-        from .sources_cmd import run_sources
         action = getattr(args, "sources_action", None)
-        email_action = getattr(args, "email_action", None)
         name_parts = getattr(args, "source_name", None)
+        email_action = getattr(args, "email_action", None)
+        email_sender = getattr(args, "email_sender", None)
+        if action == "add" and name_parts and name_parts[0].lower() == "email":
+            action = "email"
+            email_action = "add"
+            email_sender = name_parts[1] if len(name_parts) > 1 else None
+            name_parts = []
+        from .sources_cmd import run_sources
         name = " ".join(name_parts) if name_parts else None
         add_all = getattr(args, "add_all", False)
-        email_sender = getattr(args, "email_sender", None)
         run_sources(action, name or None, add_all=add_all, email_action=email_action,
                     email_sender=email_sender)
 

@@ -48,6 +48,8 @@ METIS_THEME=dark  metis [...]
 ```
 metis/
   cli.py           — CLI parsing and subcommand routing
+  auth/            — Gmail/Outlook OAuth, active provider marker, PKCE/state helpers
+  config_access_cmd.py — `metis config access` inbox connect/reconnect flow
   pipeline.py      — digest pipeline orchestration
   init_cmd.py      — interactive profile setup wizard (InquirerPy + Rich)
   theme.py         — ALL colors, styles, and print helpers (single source of truth)
@@ -162,6 +164,33 @@ pytest tests/test_core.py tests/test_schedule.py -q    # fast pass (~60 tests, <
 ```
 
 `test_extract.py` is the heavyweight suite (~70+ tests, mocked API). Only run when `extract.py` changes — skip during routine iteration.
+
+## OAuth email access state
+
+`metis init` and `metis config access` can connect Gmail or Outlook via browser OAuth.
+
+Local runtime files, never committed:
+- `~/.job_pipeline/gmail_token.json`
+- `~/.job_pipeline/outlook_token.json`
+- `~/.job_pipeline/email_provider.json`
+
+Provider selection order:
+1. `METIS_EMAIL_PROVIDER=gmail_oauth|outlook_oauth|imap` override
+2. `email_provider.json` latest successful OAuth connection
+3. newest OAuth token file for old dual-token installs
+4. legacy Gmail IMAP fallback
+
+OAuth security invariants:
+- Use `metis/auth/oauth_security.py` for random `state` and PKCE (`S256`) helpers.
+- Auth URLs must include `state`, `code_challenge`, and `code_challenge_method=S256`.
+- Callback handlers must reject missing/mismatched `state` before token exchange.
+- Token exchange must include the matching `code_verifier`.
+- Reconnect should force account selection (`prompt=consent select_account` for Gmail, `prompt=select_account` for Outlook).
+- Token files and `email_provider.json` must be written owner-only (`0600`).
+
+Current rollout boundary: non-LinkedIn email alert sources use the provider-neutral fetcher.
+LinkedIn alert fetching, tracker/backfill, and main digest delivery still have legacy Gmail
+call sites until explicitly wired through the provider abstraction.
 
 ## Critical constraints
 

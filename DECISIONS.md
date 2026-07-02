@@ -86,6 +86,22 @@ Companies that don't expose a public Greenhouse/Lever/Ashby API are scraped via 
 
 ## Interface & extensibility
 
+**D-55 · OAuth-first email access uses local tokens, active-provider state, state validation, and PKCE**
+Gmail and Outlook OAuth are local desktop/browser flows, not hosted web sessions. Tokens are
+stored under `~/.job_pipeline/` with `0600` permissions and never belong in the repo. The latest
+successful OAuth connection writes `email_provider.json`; `METIS_EMAIL_PROVIDER` remains an
+explicit override; newest-token fallback exists only for old dual-token states.
+
+Security baseline: every auth URL includes random `state` and PKCE `code_challenge` (`S256`);
+callbacks must reject missing/mismatched `state`; token exchange must include the matching
+`code_verifier`. This follows Microsoft auth-code guidance for desktop/mobile apps and
+Google installed-app guidance. Do not remove these to simplify tests.
+
+Reconnect flows force account selection so users can replace one Gmail/Outlook account with
+another. Current implementation scope is provider-neutral non-LinkedIn email alert fetching;
+legacy Gmail paths remain in LinkedIn alert fetching, tracker/backfill, and main digest
+delivery until the provider abstraction is wired through those surfaces.
+
 **D-19 · Interface roadmap: CLI → MCP → PyPI package → Docker → Web app**
 Each stage gates on the previous. MCP server is next and requires a "config as parameters" refactor so core functions don't read from `.env` at import time. Web app is not planned speculatively — only if OSS adoption demonstrates demand.
 

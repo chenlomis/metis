@@ -22,20 +22,17 @@ log = logging.getLogger(__name__)
 
 def get_provider() -> str:
     """Return the active email provider based on what's configured/connected."""
-    from pathlib import Path
-    gmail_token   = Path.home() / ".job_pipeline" / "gmail_token.json"
-    outlook_token = Path.home() / ".job_pipeline" / "outlook_token.json"
+    from ..auth.state import infer_connected_provider
 
     # Explicit override
     override = os.getenv("METIS_EMAIL_PROVIDER", "").lower()
     if override in ("gmail_oauth", "outlook_oauth", "imap"):
         return override
 
-    # Auto-detect from stored tokens
-    if gmail_token.exists():
-        return "gmail_oauth"
-    if outlook_token.exists():
-        return "outlook_oauth"
+    # Latest successful OAuth connection wins; fall back to newest token for old installs.
+    connected = infer_connected_provider()
+    if connected:
+        return connected
 
     # Fallback: legacy IMAP
     return "imap"
@@ -50,11 +47,25 @@ def fetch_emails_from_sender(sender: str, since_dt: datetime.datetime) -> list[d
 
     if provider == "gmail_oauth":
         from ..auth import gmail_oauth
-        return gmail_oauth.fetch_emails(sender, since_dt)
+        try:
+            return gmail_oauth.fetch_emails(sender, since_dt)
+        except Exception as e:
+            log.warning(
+                "Could not refresh Gmail token — email alert sources skipped. "
+                "Run 'metis config access' to reconnect. (%s)", e
+            )
+            return []
 
     if provider == "outlook_oauth":
         from ..auth import outlook_oauth
-        return outlook_oauth.fetch_emails(sender, since_dt)
+        try:
+            return outlook_oauth.fetch_emails(sender, since_dt)
+        except Exception as e:
+            log.warning(
+                "Could not refresh Outlook token — email alert sources skipped. "
+                "Run 'metis config access' to reconnect. (%s)", e
+            )
+            return []
 
     # IMAP fallback
     return _fetch_via_imap(sender, since_dt)

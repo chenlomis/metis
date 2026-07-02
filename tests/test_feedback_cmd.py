@@ -381,10 +381,10 @@ def _make_inquirer_stub(confirm=True, conflict_choice=None, routing_choice=None)
     is the `.inquirer` attribute of the module — not the module itself.
     """
     inquirer_obj = MagicMock()
-    inquirer_obj.confirm.return_value.execute.return_value = confirm
     inquirer_obj.select.return_value.execute.side_effect = [
         v for v in [conflict_choice, routing_choice] if v is not None
     ]
+    inquirer_obj.text.return_value.execute.return_value = "y" if confirm else "n"
     module_stub = MagicMock()
     module_stub.inquirer = inquirer_obj
     return module_stub
@@ -451,7 +451,7 @@ def test_run_feedback_empty_input_exits(fb_mocks, monkeypatch):
         fb_mod.run_feedback(api_key="fake-key")
 
     assert not (fb_mocks / "feedback.md").exists()
-    inq.confirm.assert_not_called()
+    inq.text.assert_not_called()
 
 
 # (a) No API key — skips Claude, goes straight to confirm+save
