@@ -65,6 +65,35 @@ def test_feedback_list_routes_without_gmail_validation(monkeypatch):
     assert calls["listed"] is True
 
 
+def test_sources_add_email_alias_routes_to_email_add(monkeypatch):
+    from metis import cli
+    import metis.sources_cmd as sources_cmd
+
+    calls = {}
+    monkeypatch.setattr(cli, "_configure_logging", lambda: None)
+    monkeypatch.setattr(
+        sources_cmd,
+        "run_sources",
+        lambda *args, **kwargs: calls.update(
+            action=args[0],
+            name=args[1],
+            add_all=kwargs.get("add_all"),
+            email_action=kwargs.get("email_action"),
+            email_sender=kwargs.get("email_sender"),
+        ),
+    )
+
+    cli.main(["sources", "add", "email", "team@hi.wellfound.com"])
+
+    assert calls == {
+        "action": "email",
+        "name": None,
+        "add_all": False,
+        "email_action": "add",
+        "email_sender": "team@hi.wellfound.com",
+    }
+
+
 def test_summary_sends_real_report_by_default(monkeypatch):
     from metis import cli
     import metis.report_cmd as report_cmd

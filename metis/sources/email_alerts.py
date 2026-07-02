@@ -188,28 +188,53 @@ def _parse_ladders(body_text: str, body_html: str, company: str) -> list[dict]:
     jobs: list[dict] = []
     seen: set[str] = set()
 
-    # Try HTML first — gives us the actual job URLs from anchor hrefs
+    # Try HTML first — gives us job/tracking URLs from anchor hrefs.
     url_map: dict[str, str] = {}  # title_lower → url
+    ordered_urls: list[str] = []
     if body_html:
         soup = BeautifulSoup(body_html, "html.parser")
         for a in soup.find_all("a", href=True):
             href = a["href"]
-            if "theladders.com" not in href and "job" not in href.lower():
+            if (
+                "theladders.com" not in href
+                and "t.ladders.co" not in href
+                and "job" not in href.lower()
+            ):
                 continue
             t = a.get_text(strip=True)
+            if href not in ordered_urls:
+                ordered_urls.append(href)
             if t and len(t) > 6:
                 url_map[t.lower()] = href
 
-    # Parse plain-text rows: "Title / Location  /  $NNN - $NNN*  Remote?"
-    row_re = re.compile(
-        r'^(?P<title>.+?)\s*/\s*(?P<location>.+?)\s*/\s*(?P<salary>\$[\d,K]+\s*[-–]\s*\$?[\d,K*]+[^\n]*)',
-        re.MULTILINE,
-    )
+    # Parse plain-text rows: "Title / Location / $NNN - $NNN* Remote".
+    # Use spaced slash delimiters so titles like "Product Manager/Sr. Product Manager"
+    # are not split in the middle.
+    salary_re = re.compile(r'\$[\d,K]+\s*[-–]\s*\$?[\d,K*]+[^\n]*')
+    rows: list[str] = []
+    pending = ""
+    for raw_line in body_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if salary_re.search(line):
+            rows.append(f"{pending} {line}".strip() if pending else line)
+            pending = ""
+            continue
+        if re.search(r'\b(product|manager|director|lead|principal|technical)\b', line, re.IGNORECASE):
+            pending = f"{pending} {line}".strip() if pending else line
 
-    for m in row_re.finditer(body_text):
-        title    = m.group("title").strip()
-        location = m.group("location").strip()
-        salary   = m.group("salary").strip()
+    for row in rows:
+        salary_m = salary_re.search(row)
+        if not salary_m:
+            continue
+        salary = salary_m.group(0).strip()
+        prefix = row[:salary_m.start()].strip(" /")
+        parts = [p.strip() for p in re.split(r'\s+/\s+', prefix) if p.strip()]
+        if len(parts) < 2:
+            continue
+        title = parts[0]
+        location = " / ".join(parts[1:])
 
         if not title or len(title) < 6 or len(title) > 140:
             continue
@@ -219,6 +244,8 @@ def _parse_ladders(body_text: str, body_html: str, company: str) -> list[dict]:
         seen.add(key)
 
         url = url_map.get(key, "")
+        if not url and len(ordered_urls) > len(jobs):
+            url = ordered_urls[len(jobs)]
 
         jobs.append({
             "title":    title,
@@ -426,7 +453,18 @@ def _parse_generic(body_html: str, company: str) -> list[dict]:
 def _fetch_jd(url: str) -> str:
     try:
         r = requests.get(url, headers=_HEADERS, timeout=_JD_TIMEOUT_S, allow_redirects=True)
+        if r.status_code >= 400:
+            log.warning("JD fetch returned HTTP %s for %s", r.status_code, url)
+            return ""
         soup = BeautifulSoup(r.text, "html.parser")
+        page_text = soup.get_text(" ", strip=True)
+        if (
+            "cf-mitigated" in {k.lower(): v for k, v in r.headers.items()}
+            or "attention required" in page_text[:500].lower()
+            or "cloudflare" in page_text[:500].lower()
+        ):
+            log.warning("JD fetch blocked by anti-bot page for %s", url)
+            return ""
         for el in soup(["script", "style", "nav", "header", "footer"]):
             el.decompose()
         return soup.get_text(" ", strip=True)[:8000]

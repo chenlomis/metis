@@ -641,7 +641,7 @@ def _render_comp(comp_by_level: list, pct_withheld: int) -> str:
             f"<tr>"
             + _td(c["level"], align="left")
             + _td(c["range"], align="center", muted=True)
-            + _td(c["note"], align="left", muted=True, size=12)
+            + _td(c["note"], align="center", muted=True, size=12)
             + "</tr>"
         )
     note = (
@@ -810,8 +810,8 @@ def render_html(data: dict, first_name: str = "", lookback_days: int = 30) -> st
 <tr><td style="padding:0 28px 0;">
 {_section_h("Comp Snapshot")}
 <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;border:1px solid {BORDER};table-layout:fixed;">
-<colgroup><col style="width:25%"><col style="width:20%"><col style="width:55%"></colgroup>
-{_green_th(["Level", "Base Range", "Notes"], ["left","center","left"])}
+<colgroup><col style="width:30%"><col style="width:25%"><col style="width:45%"></colgroup>
+{_green_th(["Level", "Base Range", "Notes"], ["left","center","center"])}
 {_render_comp(intel["comp_by_level"], intel["comp_pct_withheld"])}
 </table>
 </td></tr>
