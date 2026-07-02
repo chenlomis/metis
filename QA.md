@@ -95,6 +95,8 @@ Each pass has:
 - Are hardware-adjacent or domain-gap roles handled correctly (friction, not disqualifier)?
 - Does the deal-breaker section in the digest accurately reflect actual hard-no criteria?
 - Would the top 3 "apply" roles be ones the user would actually apply to?
+- Are there zero visible "Scoring parse error" rows after provider retry?
+- If the digest was scheduled, is there exactly one OS job and does it use the intended `METIS_DATA_DIR`, `METIS_PROFILE`, provider, and renderer?
 
 **Synthesis prompt (run at end of User pass):**
 > "What are the 3 things most likely to make a real user give up on metis in the first 10 minutes?"

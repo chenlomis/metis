@@ -23,6 +23,7 @@ from metis.schedule_cmd import (
     _schedule_label,
     build_crontab_line,
     build_plist,
+    install_schedule,
     load_schedule,
     pause_schedule,
     remove_schedule,
@@ -179,6 +180,17 @@ class TestBuildPlist:
         plist = self._plist("daily")
         assert "scheduled.log" in plist
 
+    def test_state_env_pinned_in_plist(self):
+        cfg = {
+            "frequency": "daily",
+            "time": "08:00",
+            "data_dir": "/tmp/metis-data",
+            "profile_path": "/tmp/metis-data/profile.yaml",
+        }
+        plist = build_plist(cfg, "/venv/bin/metis", "/project")
+        assert "<key>METIS_DATA_DIR</key><string>/tmp/metis-data</string>" in plist
+        assert "<key>METIS_PROFILE</key><string>/tmp/metis-data/profile.yaml</string>" in plist
+
 
 # ---------------------------------------------------------------------------
 # build_crontab_line
@@ -235,6 +247,18 @@ class TestBuildCrontabLine:
         assert parts[0] == "30"   # minute
         assert parts[1] == "14"   # hour
 
+    def test_state_env_pinned_in_crontab_command(self):
+        cfg = {
+            "frequency": "daily",
+            "time": "08:00",
+            "data_dir": "/tmp/metis-data",
+            "profile_path": "/tmp/metis-data/profile.yaml",
+        }
+        line = build_crontab_line(cfg, "/venv/bin/metis", "/project")
+        assert "METIS_DATA_DIR=/tmp/metis-data" in line
+        assert "METIS_PROFILE=/tmp/metis-data/profile.yaml" in line
+        assert "METIS_PROFILE=/tmp/metis-data/profile.yaml /venv/bin/metis schedule run" in line
+
 
 # ---------------------------------------------------------------------------
 # schedule.json persistence
@@ -264,6 +288,22 @@ class TestSchedulePersistence:
         sf.write_text("[1, 2, 3]")
         monkeypatch.setattr("metis.schedule_cmd.SCHEDULE_FILE", sf)
         assert load_schedule() is None
+
+    def test_install_persists_pinned_state_env(self, tmp_path, monkeypatch):
+        sf = tmp_path / "schedule.json"
+        monkeypatch.setattr("metis.schedule_cmd.SCHEDULE_FILE", sf)
+        monkeypatch.setattr("metis.schedule_cmd.DATA_DIR", tmp_path)
+        monkeypatch.setattr("metis.schedule_cmd._metis_bin", lambda: "/venv/bin/metis")
+        monkeypatch.setattr("metis.schedule_cmd._find_project_root", lambda: "/project")
+        monkeypatch.setattr("platform.system", lambda: "Darwin")
+        monkeypatch.setenv("METIS_PROFILE", str(tmp_path / "profile.yaml"))
+
+        with mock.patch("metis.schedule_cmd._install_launchd"):
+            install_schedule({"frequency": "daily", "time": "08:00"})
+
+        saved = json.loads(sf.read_text())
+        assert saved["data_dir"] == str(tmp_path)
+        assert saved["profile_path"] == str(tmp_path / "profile.yaml")
 
 
 # ---------------------------------------------------------------------------

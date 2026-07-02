@@ -517,6 +517,29 @@ class TestScoreNormalization:
         assert evals[0]["tags"][0]["sentiment"] == "green"
         assert evals[0]["tags"][1]["sentiment"] == "red"
 
+    def test_comp_undisclosed_removed_when_salary_is_aspirational(self):
+        from metis.score import _normalize_tag_sentiments
+
+        evals = [{
+            "tags": [
+                {"text": "comp: undisclosed", "sentiment": "amber"},
+                {"text": "stage: growth fit", "sentiment": "amber"},
+            ]
+        }]
+
+        _normalize_tag_sentiments(evals, salary_is_hard_floor=False)
+
+        assert evals[0]["tags"] == [{"text": "stage: growth fit", "sentiment": "green"}]
+
+    def test_comp_undisclosed_kept_when_salary_is_hard_floor(self):
+        from metis.score import _normalize_tag_sentiments
+
+        evals = [{"tags": [{"text": "comp: undisclosed", "sentiment": "green"}]}]
+
+        _normalize_tag_sentiments(evals, salary_is_hard_floor=True)
+
+        assert evals[0]["tags"] == [{"text": "comp: undisclosed", "sentiment": "amber"}]
+
 
 # ---------------------------------------------------------------------------
 # sources/linkedin.py — edge cases in email parsing
@@ -659,31 +682,38 @@ class TestScoreJobsBatchEdgeCases:
             "eval": {},
         }
 
-    def test_claude_returns_fewer_objects_than_jobs(self):
-        """If Claude returns 1 eval for 3 jobs, the missing 2 must be marked
-        skipped with a parse-error friction note — not raise IndexError."""
+    def test_short_chunk_response_retries_missing_jobs(self):
+        """If the scorer returns too few evals, retry missing jobs before using
+        parse-error placeholders."""
         from metis.score import score_jobs_batch
         import unittest.mock as mock
 
         jobs = [self._make_job(f"Job {i}") for i in range(3)]
-        fake_response = mock.MagicMock()
-        fake_response.content = [mock.MagicMock(
-            text='[{"score": 80, "verdict": "apply", "leveragePoints": [], "frictionPoints": [], "tags": []}]'
-        )]
-        fake_response.usage = mock.MagicMock(
-            input_tokens=100, output_tokens=20,
-            cache_creation_input_tokens=0, cache_read_input_tokens=0,
-        )
+
+        def response_for(scores):
+            fake_response = mock.MagicMock()
+            fake_response.content = [mock.MagicMock(text=json.dumps([
+                {"score": score, "verdict": "consider", "leveragePoints": [], "frictionPoints": [], "tags": []}
+                for score in scores
+            ]))]
+            fake_response.usage = mock.MagicMock(
+                input_tokens=100, output_tokens=20,
+                cache_creation_input_tokens=0, cache_read_input_tokens=0,
+            )
+            return fake_response
 
         with mock.patch("metis.score._build_score_system", return_value="mock profile"):
             fake_client = mock.MagicMock()
-            fake_client.messages.create.return_value = fake_response
+            fake_client.messages.create.side_effect = [
+                response_for([80]),
+                response_for([61]),
+                response_for([62]),
+            ]
             result = score_jobs_batch(fake_client, jobs)
 
         assert len(result) == 3
-        assert result[0]["eval"]["score"] == 80          # got a real eval
-        assert result[1]["eval"]["verdict"] == "skipped" # filled with error eval
-        assert result[2]["eval"]["verdict"] == "skipped"
+        assert [job["eval"]["score"] for job in result] == [80, 61, 62]
+        assert fake_client.messages.create.call_count == 3
 
     def test_provider_wrapper_results_are_unwrapped(self):
         """OpenAI JSON mode may wrap the requested array in a top-level results key."""
@@ -755,6 +785,26 @@ def test_domain_foreign_tag_demotes_without_hard_barrier():
     assert evals[0]["tags"][0] == {"text": "domain: adjacent", "sentiment": "amber"}
 
 
+def test_domain_foreign_tag_preserved_for_hard_networking_barrier():
+    from metis.score import _normalize_tag_sentiments
+
+    evals = [{
+        "dimensions": [
+            {
+                "name": "domain_background",
+                "score": 30,
+                "rationale": "RDMA and InfiniBand datacenter fabric expertise required",
+            }
+        ],
+        "frictionPoints": ["Networking protocol domain is mandatory for first-quarter roadmap."],
+        "tags": [{"text": "domain: foreign", "sentiment": "amber"}],
+    }]
+
+    _normalize_tag_sentiments(evals)
+
+    assert evals[0]["tags"][0] == {"text": "domain: foreign", "sentiment": "red"}
+
+
 # ---------------------------------------------------------------------------
 # score.py — chunking behaviour
 # ---------------------------------------------------------------------------
@@ -824,24 +874,21 @@ class TestScoreJobsBatchChunking:
         assert len(result) == n
         assert all(j["eval"]["score"] == 70 for j in result)
 
-    def test_chunk_truncation_fills_remainder_with_error_eval(self):
-        """If a chunk response is truncated (fewer evals than jobs), the missing
-        slots must get _error_eval — not IndexError."""
+    def test_chunk_truncation_fills_remainder_after_retry_failure(self):
+        """If retries still fail to return evals, missing slots get _error_eval."""
         from metis.score import score_jobs_batch, _SCORE_CHUNK_SIZE
         import unittest.mock as mock
 
         jobs = self._make_jobs(5)
-        # API returns only 2 evals for a 5-job chunk
         fake_client = mock.MagicMock()
-        fake_client.messages.create.return_value = self._fake_response(2)
+        fake_client.messages.create.return_value = self._fake_response(0)
 
         with mock.patch("metis.score._build_score_system", return_value="mock"):
             result = score_jobs_batch(fake_client, jobs)
 
-        assert result[0]["eval"]["score"] == 70   # real eval
-        assert result[1]["eval"]["score"] == 70   # real eval
-        assert result[2]["eval"]["verdict"] == "skipped"  # error eval
-        assert "parse error" in result[2]["eval"]["frictionPoints"][0].lower()
+        assert fake_client.messages.create.call_count == 6
+        assert result[0]["eval"]["verdict"] == "skipped"
+        assert "parse error" in result[0]["eval"]["frictionPoints"][0].lower()
 
 
 # ---------------------------------------------------------------------------

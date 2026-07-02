@@ -45,6 +45,14 @@ DEFAULT_MODELS = {
     },
 }
 
+
+def _llm_timeout_seconds() -> float:
+    raw = os.getenv("METIS_LLM_TIMEOUT_SECONDS", "120").strip()
+    try:
+        return max(10.0, float(raw))
+    except ValueError:
+        return 120.0
+
 _STAGE_ENV = {
     "model": "MODEL",
     "prescreen_model": "PRESCREEN_MODEL",
@@ -200,7 +208,7 @@ class AnthropicLLM:
         import anthropic
 
         self._anthropic = anthropic
-        self._client = anthropic.Anthropic(api_key=api_key)
+        self._client = anthropic.Anthropic(api_key=api_key, timeout=_llm_timeout_seconds())
 
     def complete(
         self,
@@ -256,7 +264,10 @@ class OpenAILLM:
             ) from exc
 
         self._openai = openai
-        self._client = OpenAI(api_key=api_key)
+        try:
+            self._client = OpenAI(api_key=api_key, timeout=_llm_timeout_seconds())
+        except TypeError:
+            self._client = OpenAI(api_key=api_key)
 
     def _retryable_errors(self) -> tuple[type[BaseException], ...]:
         return tuple(

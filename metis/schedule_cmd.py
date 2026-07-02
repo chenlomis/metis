@@ -119,6 +119,14 @@ def build_plist(config: dict, metis_bin: str, working_dir: str) -> str:
     nvm_node_bin = Path(home) / ".nvm" / "versions" / "node"
     node_bin_dirs = sorted(nvm_node_bin.glob("*/bin")) if nvm_node_bin.exists() else []
     node_path    = f"{node_bin_dirs[-1]}:" if node_bin_dirs else ""
+    env_xml = (
+        f"        <key>HOME</key><string>{home}</string>\n"
+        f"        <key>PATH</key><string>{node_path}{bin_dir}:/usr/bin:/bin:/usr/sbin:/sbin</string>"
+    )
+    if config.get("data_dir"):
+        env_xml += f"\n        <key>METIS_DATA_DIR</key><string>{config['data_dir']}</string>"
+    if config.get("profile_path"):
+        env_xml += f"\n        <key>METIS_PROFILE</key><string>{config['profile_path']}</string>"
 
     if freq == "daily":
         interval_xml = (
@@ -170,8 +178,7 @@ def build_plist(config: dict, metis_bin: str, working_dir: str) -> str:
     <key>StandardErrorPath</key><string>{log_path}</string>
     <key>EnvironmentVariables</key>
     <dict>
-        <key>HOME</key><string>{home}</string>
-        <key>PATH</key><string>{node_path}{bin_dir}:/usr/bin:/bin:/usr/sbin:/sbin</string>
+{env_xml}
     </dict>
     <key>KeepAlive</key><false/>
     <key>ThrottleInterval</key><integer>900</integer>
@@ -198,8 +205,17 @@ def build_crontab_line(config: dict, metis_bin: str, working_dir: str) -> str:
     else:  # weekly
         dow = str(config.get("weekday", 1))
 
+    env_parts = []
+    if config.get("data_dir"):
+        env_parts.append(f"METIS_DATA_DIR={config['data_dir']}")
+    if config.get("profile_path"):
+        env_parts.append(f"METIS_PROFILE={config['profile_path']}")
+    env_prefix = " ".join(env_parts)
+    if env_prefix:
+        env_prefix += " "
+
     cmd = (
-        f"cd {working_dir} && {metis_bin} schedule run --lookback {lookback} "
+        f"cd {working_dir} && {env_prefix}{metis_bin} schedule run --lookback {lookback} "
         f">> {log_path} 2>&1"
     )
     return f"{minute} {hour} * * {dow} {cmd}  {CRONTAB_MARKER}"
@@ -240,6 +256,8 @@ def install_schedule(config: dict) -> None:
         "enabled":       True,
         "metis_bin": metis_bin,
         "working_dir":   working_dir,
+        "data_dir":      str(DATA_DIR),
+        "profile_path":  os.getenv("METIS_PROFILE", ""),
         "installed_at":  datetime.datetime.now().isoformat(),
         "platform":      platform.system(),
     }

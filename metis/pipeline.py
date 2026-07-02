@@ -12,6 +12,13 @@ from .llm import (
 )
 
 # Load .env from project root (dev/editable install) or ~/.job_pipeline/.env (pipx/pip install).
+# Preserve scheduler-pinned state paths so a launchd/cron job installed for one
+# data directory cannot silently drift to another because of project .env loading.
+_PINNED_STATE_ENV = {
+    key: os.environ[key]
+    for key in ("METIS_DATA_DIR", "METIS_PROFILE")
+    if key in os.environ
+}
 _dotenv_candidates = [
     Path(__file__).parent.parent / ".env",
     Path(os.environ.get("METIS_DATA_DIR", Path.home() / ".job_pipeline")) / ".env",
@@ -19,6 +26,7 @@ _dotenv_candidates = [
 for _dotenv_path in _dotenv_candidates:
     if load_dotenv(_dotenv_path, override=True):
         break
+os.environ.update(_PINNED_STATE_ENV)
 
 # ---------------------------------------------------------------------------
 # Config

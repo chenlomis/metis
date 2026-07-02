@@ -259,6 +259,11 @@ The eval dict shape that `score.py` emits is consumed directly by `render.py`. T
 
 OSS users who want to customize the schema must change score.py prompt + render.py together. Neither file is standalone.
 
+Scoring reliability rules:
+- If a scoring response returns fewer eval objects than jobs, retry the missing jobs before using `"Scoring parse error"` placeholders. Parse-error rows are a last-resort diagnostic, not acceptable digest content.
+- `comp: undisclosed` is amber only when the profile has a hard salary floor. If salary is aspirational, absence of disclosed comp is neutral and should not appear as an amber tag.
+- Adjacent domain is not automatically a deal-breaker, but hard technical niches are real friction. Roles requiring RDMA/InfiniBand networking, kernel/driver work, hardware architecture, GPU scheduling, regulated credentials, or similar mandatory domain expertise should not be promoted solely because level/company look attractive.
+
 ### 6. state.py `_role_hash()` is a persisted key — do not change
 `_role_hash(title, company)` in `state.py` produces the dedup keys stored in `~/.job_pipeline/seen_roles.json`. Changing the hash function (normalization regex, algorithm, slice length) invalidates all historical keys — every previously seen role re-processes on the next run, causing a flood email. The current implementation (`md5(normalize(title+company))[:12]`) is intentional and sufficient — do not "improve" it.
 
@@ -279,6 +284,9 @@ Not safe without migration: adding a column in the middle, removing a column, re
 7. Tracker write → after send
 
 Do not reorder, merge, or add stages without being asked. When fixing a bug in pipeline.py, touch only the broken call — do not restructure the surrounding flow.
+
+### 9. schedule state is pinned and legacy Scorerole must stay removed
+`metis schedule set` owns exactly one OS job: `com.metis.digest` on launchd or `# metis-digest` in cron. It must also remove legacy `com.scorerole.digest` / `# scorerole-digest` entries. Scheduled jobs must pin `METIS_DATA_DIR` and `METIS_PROFILE` into the OS job environment so launchd/cron cannot mix a schedule file from one data directory with profile, seen-role, or `.env` state from another.
 
 ## init_cmd.py prompt helpers
 

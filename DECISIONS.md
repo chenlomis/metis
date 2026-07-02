@@ -346,3 +346,28 @@ means the user gave a signal outside the current taxonomy.
 
 **D-57 · React Email templates bundled in the Python package; `npm install` runs on first digest**
 React Email requires Node + `node_modules`, which can't be pip-installed. Resolution: ship `render.ts`, `package.json`, `tsconfig.json`, and all `.tsx` files inside `metis/email_templates/` as setuptools package-data. On first `metis` run, `render.py:_resolve_react_dir()` copies these to `~/.job_pipeline/email_templates/` and runs `npm install --prefer-offline` there (one-time, ~30s). Subsequent runs reuse the cached `node_modules`. If Node is absent the Python fallback (`build_digest_html()`) is used silently. Dev workflow unchanged: project-root `node_modules` takes priority when present.
+
+**D-65 · Scheduled jobs pin state paths and remove legacy Scorerole**
+July 2 RCA found two active launchd jobs: `com.metis.digest` and stale `com.scorerole.digest`.
+One used the OpenAI/React path and another used the old Claude/Python fallback path. Current
+schedule install/remove owns both labels and both cron markers. It also writes `METIS_DATA_DIR`
+and `METIS_PROFILE` into the OS job environment so a schedule configured under one data directory
+cannot read profile, dedup, or `.env` state from another.
+
+**D-66 · Incomplete scorer output is retried before any parse-error placeholder**
+Provider JSON can be syntactically valid but shorter than the input job batch. Previously Metis
+filled the missing positions with `Scoring parse error`, which leaked diagnostics into the digest.
+Now missing jobs are retried individually before falling back. Parse-error placeholders remain only
+as a final diagnostic, not normal digest content.
+
+**D-67 · Undisclosed compensation is neutral unless salary is a hard floor**
+The scoring prompt already treats aspirational salary as soft, but provider drift could still emit
+`comp: undisclosed` as amber. Post-processing now drops that tag unless `salary_is_hard_floor` is
+true. When a hard floor exists, undisclosed comp remains amber because the role cannot be verified.
+
+**D-68 · Adjacent domain stays soft; hard technical niche prerequisites stay hard**
+Cross-industry PM work should not be filtered simply because it is outside preferred industries.
+However, a role that explicitly requires niche domain credibility such as RDMA/InfiniBand
+datacenter networking, kernel/driver work, hardware architecture, GPU scheduling, regulated
+credentials, or similar mandatory expertise should create real friction. The scorer should not
+promote such roles solely because company and level look attractive.

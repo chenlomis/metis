@@ -415,6 +415,12 @@ Less useful signs: promotional emails, in-app notification summaries, or generic
 
 Check for duplicate OS schedules. On macOS, `metis schedule set` installs `~/Library/LaunchAgents/com.metis.digest.plist`; older installs may also have a legacy `com.scorerole.digest.plist`. Current Metis removes both when changing or removing schedules, but if you installed before the rename, remove the stale schedule with `metis schedule remove`, then run `metis schedule set` again.
 
+Also check for mixed state directories. A scheduled job should pin `METIS_DATA_DIR` and, when applicable, `METIS_PROFILE` into the OS job environment. If one schedule writes logs under one data directory but reads `profile.yaml` or `seen_roles.json` from another, familiar roles can be evaluated again and the footer may show a different provider or renderer than expected. Re-running `metis schedule set` with current Metis rewrites the job with pinned state paths.
+
+**Digest shows many "Scoring parse error" rows**
+
+This means the scoring provider returned fewer valid evaluation objects than the number of roles in a batch. Current Metis retries the missing roles before falling back to that diagnostic row. If it still happens often, reduce `MAX_JOBS_PER_RUN`, check the run log under `~/.job_pipeline/logs/scheduled.log`, and consider setting `METIS_LLM_TIMEOUT_SECONDS` to a higher value for a slow provider.
+
 **A company appeared in my LinkedIn notifications but not in my digest**
 
 LinkedIn has two separate channels: **email job alerts** (what metis reads) and **in-app push notifications** (what you see in the LinkedIn app's notification bell). These are different systems. Push notification types that do NOT produce emails:

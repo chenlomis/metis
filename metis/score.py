@@ -373,7 +373,8 @@ def _build_score_suffix(name: str, apply_t: int, consider_t: int, salary_is_hard
                                      doesn't hold: healthcare (HIPAA/FDA clearance), financial regulation (SEC/FINRA),
                                      automotive safety (ISO 26262), defense/GovTech (clearance, ITAR).
                                10  — hard technical niche with mandatory domain credentials clearly absent
-                                     (e.g., clinical pharmacology, nuclear safety, air traffic control).
+                                     (e.g., clinical pharmacology, nuclear safety, air traffic control,
+                                     RDMA/InfiniBand datacenter networking, kernel drivers, GPU scheduling).
                                Use extracted customer_type, product_surface, industry as signal.
                                Positive industry_targets (AI infra, dev tools) signal what the candidate PREFERS —
                                they do NOT make all other domains a penalty. Only regulate compliance barriers score low.
@@ -381,8 +382,10 @@ def _build_score_suffix(name: str, apply_t: int, consider_t: int, salary_is_hard
                                a negative. It is only a caution when the JD explicitly requires domain-specific
                                credibility, credentials, buyer relationships, or years of experience.
                                Do not let domain_background alone push a role below the consider threshold unless
-                               the JD states a hard prerequisite domain barrier. If seniority, PM craft, and product
-                               surface fit are strong, adjacent verticals should stay consider-or-better.
+                               the JD states a hard prerequisite domain barrier. Conversely, do not promote a role
+                               solely because the company and level look attractive: a foreign niche such as
+                               networking protocols, hardware architecture, or regulated-domain credentials must
+                               create real friction when the profile lacks that background.
 
   company_stage       (0.10)  Does the company stage match the candidate's stated preference?
                                Use extracted company_stage and company_tier.
@@ -553,8 +556,14 @@ _SCORE_CHUNK_SIZE = 15   # max jobs per Sonnet call (~15 × 300 tok ≈ 4,500 ou
 _MAX_OUTPUT_TOKENS = 8192
 
 
-def _score_chunk(client, jobs: list[dict], system_prompt: str,
-                 *, model: str = _DEFAULT_MODEL) -> list[dict]:
+def _score_chunk(
+    client,
+    jobs: list[dict],
+    system_prompt: str,
+    *,
+    model: str = _DEFAULT_MODEL,
+    salary_is_hard_floor: bool = False,
+) -> list[dict]:
     """Score one chunk of jobs. Returns evals list (may be shorter than jobs on truncation)."""
     from .extract import format_extraction_for_scoring
 
@@ -639,7 +648,7 @@ def _score_chunk(client, jobs: list[dict], system_prompt: str,
             )
     _inject_weights(evals)
     _normalize_list_fields(evals)
-    _normalize_tag_sentiments(evals)
+    _normalize_tag_sentiments(evals, salary_is_hard_floor=salary_is_hard_floor)
     return evals
 
 
@@ -688,29 +697,36 @@ _TAG_SENTIMENTS = {
 }
 
 
-def _normalize_tag_sentiments(evals: list[dict]) -> None:
+def _normalize_tag_sentiments(evals: list[dict], *, salary_is_hard_floor: bool = False) -> None:
     """Keep known tag text aligned with the rubric's canonical sentiment."""
     for ev in evals:
         tags = ev.get("tags", [])
         if not isinstance(tags, list):
             ev["tags"] = []
             continue
+        normalized_tags = []
         for tag in tags:
             if not isinstance(tag, dict):
                 continue
             text = tag.get("text")
+            if text == "comp: undisclosed" and not salary_is_hard_floor:
+                continue
             if text == "domain: foreign" and not _has_hard_domain_barrier(ev):
                 tag["text"] = "domain: adjacent"
                 text = "domain: adjacent"
             if text in _TAG_SENTIMENTS:
                 tag["sentiment"] = _TAG_SENTIMENTS[text]
+            normalized_tags.append(tag)
+        ev["tags"] = normalized_tags
 
 
 _HARD_DOMAIN_TERMS = re.compile(
     r"\b(?:hipaa|fda|clinical|clinician|medical|healthcare regulatory|"
     r"sec|finra|financial regulation|compliance|regulated|"
     r"iso 26262|automotive safety|defense|govtech|government|clearance|itar|"
-    r"export control|nuclear|pharmacology|air traffic|credential|required domain)\b",
+    r"export control|nuclear|pharmacology|air traffic|credential|required domain|"
+    r"rdma|infiniband|datacenter fabric|networking protocol|kernel|driver|"
+    r"hardware architecture|gpu scheduling|hpc cluster|storage firmware)\b",
     re.IGNORECASE,
 )
 
@@ -763,7 +779,16 @@ def score_jobs_batch(
     Pass `profile` (already loaded dict) to avoid a redundant disk read. Falls back to
     loading from disk when called without a profile (backward compat for tests).
     """
-    system_prompt = build_score_system(profile) if profile is not None else _build_score_system()
+    if profile is None:
+        system_prompt = _build_score_system()
+        try:
+            from .profile import load_profile_yaml
+            profile = load_profile_yaml() or {}
+        except Exception:
+            profile = {}
+    else:
+        system_prompt = build_score_system(profile)
+    salary_is_hard_floor = bool(profile.get("salary_is_hard_floor", False))
     _error_eval   = {
         "score": 0, "verdict": "skipped",
         "leveragePoints": [], "frictionPoints": ["Scoring parse error"], "tags": [],
@@ -777,7 +802,36 @@ def score_jobs_batch(
     for idx, chunk in enumerate(chunks, start=1):
         if len(chunks) > 1:
             log.info("Scoring chunk %d/%d — %d role(s); still working…", idx, len(chunks), len(chunk))
-        evals = _score_chunk(client, chunk, system_prompt, model=model)
+        evals = _score_chunk(
+            client,
+            chunk,
+            system_prompt,
+            model=model,
+            salary_is_hard_floor=salary_is_hard_floor,
+        )
+        if len(evals) < len(chunk):
+            missing = chunk[len(evals):]
+            log.warning(
+                "Scoring chunk %d/%d returned %d/%d evals — retrying %d missing role(s) individually",
+                idx,
+                len(chunks),
+                len(evals),
+                len(chunk),
+                len(missing),
+            )
+            for job in missing:
+                try:
+                    retry_evals = _score_chunk(
+                        client,
+                        [job],
+                        system_prompt,
+                        model=model,
+                        salary_is_hard_floor=salary_is_hard_floor,
+                    )
+                except Exception as exc:
+                    log.warning("Scoring retry failed for %s at %s: %s", job.get("title"), job.get("company"), exc)
+                    retry_evals = []
+                evals.extend(retry_evals[:1])
         for i in range(len(chunk)):
             all_evals.append(evals[i] if i < len(evals) else _error_eval)
 
