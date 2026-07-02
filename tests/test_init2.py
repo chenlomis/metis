@@ -476,6 +476,16 @@ class TestInit2SubcommandRegistration:
         source = open(cli.__file__).read()
         assert "from .init_cmd import run_init" in source
         assert "run_init(" in source
+        assert "run_init(api_key=LLM_API_KEY)" in source
+
+    def test_provider_neutral_cli_commands_use_active_llm_key(self):
+        """Provider-neutral commands must not pass Anthropic's key in OpenAI mode."""
+        import metis.cli as cli
+        source = open(cli.__file__).read()
+        assert "LLM_API_KEY" in source
+        assert "run_feedback(api_key=LLM_API_KEY)" in source
+        assert "api_key=ANTHROPIC_API_KEY" in source  # legacy init_bak still uses Anthropic.
+        assert source.count("api_key=ANTHROPIC_API_KEY") == 1
 
 
 # ---------------------------------------------------------------------------
