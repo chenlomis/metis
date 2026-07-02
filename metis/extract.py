@@ -8,7 +8,7 @@ These serve two purposes:
 Temperature=0 for determinism. Batched calls (≤10 jobs/chunk), same retry strategy
 as score.py. Extraction failures fall back gracefully — missing structs never block scoring.
 """
-import json, logging, os, re, time
+import copy, json, logging, os, re, time
 from pathlib import Path
 import anthropic
 
@@ -68,6 +68,13 @@ _BLANK_STRUCT: dict = {
     "government_export_control": False,
     "years_exp_min": None,
     "primary_execution_stack": [],
+    "jd_signals": {
+        "must_haves": [],
+        "nice_to_haves": [],
+        "keywords": [],
+        "screening_signals": [],
+        "evidence_gaps": [],
+    },
 }
 
 
@@ -76,6 +83,13 @@ def _is_valid_struct(obj: object) -> bool:
     if not isinstance(obj, dict):
         return False
     return _REQUIRED_KEYS.issubset(obj.keys())
+
+
+def _blank_struct(**overrides) -> dict:
+    """Return an independent fallback extraction struct."""
+    struct = copy.deepcopy(_BLANK_STRUCT)
+    struct.update(overrides)
+    return struct
 
 
 def _unwrap_extraction_json(value: object) -> list[dict]:
@@ -95,6 +109,31 @@ def _unwrap_extraction_json(value: object) -> list[dict]:
         return [item for item in list_values[0] if isinstance(item, dict)]
 
     return [value]
+
+
+def _normalize_jd_signals(struct: dict) -> dict:
+    """Return a copy with jd_signals present and list-shaped.
+
+    jd_signals is intentionally nested under the existing extraction object so
+    downstream scoring and trace records can consume it without a new artifact.
+    """
+    out = dict(struct)
+    raw = out.get("jd_signals")
+    if not isinstance(raw, dict):
+        raw = {}
+
+    normalized = {}
+    for key in ("must_haves", "nice_to_haves", "keywords", "screening_signals", "evidence_gaps"):
+        value = raw.get(key)
+        if isinstance(value, list):
+            normalized[key] = [str(item).strip() for item in value if str(item).strip()]
+        elif isinstance(value, str) and value.strip():
+            normalized[key] = [value.strip()]
+        else:
+            normalized[key] = []
+
+    out["jd_signals"] = normalized
+    return out
 
 
 def _extract_chunk(client, jobs: list[dict],
@@ -120,7 +159,7 @@ def _extract_chunk(client, jobs: list[dict],
             response = complete_text(
                 client,
                 model=model,
-                max_tokens=max(1024, len(jobs) * 350),
+                max_tokens=max(1024, len(jobs) * 500),
                 temperature=0,
                 system=JD_EXTRACT_SYSTEM,
                 user=(
@@ -155,12 +194,15 @@ def _extract_chunk(client, jobs: list[dict],
 
     try:
         structs = _unwrap_extraction_json(json.loads(raw))
-        return [s if _is_valid_struct(s) else {**_BLANK_STRUCT, "jd_quality": "low"} for s in structs]
+        return [
+            _normalize_jd_signals(s) if _is_valid_struct(s) else _blank_struct(jd_quality="low")
+            for s in structs
+        ]
     except (json.JSONDecodeError, ValueError) as exc:
         log.warning("Extraction JSON parse failed (%s) — using blank structs for %d jobs", exc, len(jobs))
         # Use "extraction_failed" not "blank" — JD content may exist; only "blank" triggers
         # the jd_blank hard gate in check_hard_gates(). Scoring proceeds without grounding.
-        return [{**dict(_BLANK_STRUCT), "jd_quality": "extraction_failed"} for _ in jobs]
+        return [_blank_struct(jd_quality="extraction_failed") for _ in jobs]
 
 
 def extract_jd_structs(client, jobs: list[dict],
@@ -186,11 +228,11 @@ def extract_jd_structs(client, jobs: list[dict],
             structs = _extract_chunk(client, chunk, model=model)
         except Exception as exc:
             log.warning("Extraction chunk failed (%s) — blank structs for %d jobs", exc, len(chunk))
-            structs = [{**dict(_BLANK_STRUCT), "jd_quality": "extraction_failed"} for _ in chunk]
+            structs = [_blank_struct(jd_quality="extraction_failed") for _ in chunk]
 
         # Pad if response was short
         while len(structs) < len(chunk):
-            structs.append({**dict(_BLANK_STRUCT), "jd_quality": "extraction_failed"})
+            structs.append(_blank_struct(jd_quality="extraction_failed"))
         all_structs.extend(structs[: len(chunk)])
 
     return all_structs
@@ -315,6 +357,27 @@ def format_extraction_for_scoring(ext: dict, listing_company: str = "") -> str:
         if auto:
             parts.append(f"autonomy={auto}")
         lines.append(f"  Culture: {', '.join(parts)}")
+
+    # Role requirement signals
+    signals = ext.get("jd_signals") or {}
+    if isinstance(signals, dict):
+        signal_lines = []
+        for label, key in (
+            ("Must-haves", "must_haves"),
+            ("Keywords", "keywords"),
+            ("Screening", "screening_signals"),
+            ("Evidence gaps", "evidence_gaps"),
+        ):
+            values = signals.get(key) or []
+            if isinstance(values, str):
+                values = [values]
+            values = [str(v).strip() for v in values if str(v).strip()]
+            if values:
+                limit = 5 if key == "keywords" else 3
+                signal_lines.append(f"    {label}: " + "; ".join(values[:limit]))
+        if signal_lines:
+            lines.append("  JD signals:")
+            lines.extend(signal_lines)
 
     # Hard gate signals
     deg_req = ext.get("degree_hard_requirement", False)

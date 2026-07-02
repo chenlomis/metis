@@ -62,6 +62,13 @@ def _minimal_struct(**overrides) -> dict:
         "government_export_control": False,
         "years_exp_min": 5,
         "primary_execution_stack": ["roadmap", "technical_specs"],
+        "jd_signals": {
+            "must_haves": ["Own platform roadmap", "Partner with engineering"],
+            "nice_to_haves": ["AI infrastructure experience"],
+            "keywords": ["platform", "API", "technical specs"],
+            "screening_signals": ["Staff-level platform PM scope"],
+            "evidence_gaps": ["Compensation not disclosed"],
+        },
     }
     base.update(overrides)
     return base
@@ -88,11 +95,23 @@ class TestBlankStruct:
 
     def test_blank_struct_is_not_mutated_by_copy(self):
         """dict(_BLANK_STRUCT) must produce independent dicts — not shared state."""
-        from metis.extract import _BLANK_STRUCT
-        a = dict(_BLANK_STRUCT)
-        b = dict(_BLANK_STRUCT)
+        from metis.extract import _blank_struct
+        a = _blank_struct()
+        b = _blank_struct()
         a["jd_quality"] = "high"
+        a["jd_signals"]["keywords"].append("mutated")
         assert b["jd_quality"] == "blank"
+        assert b["jd_signals"]["keywords"] == []
+
+    def test_blank_struct_has_jd_signals_shape(self):
+        from metis.extract import _BLANK_STRUCT
+        assert set(_BLANK_STRUCT["jd_signals"]) == {
+            "must_haves",
+            "nice_to_haves",
+            "keywords",
+            "screening_signals",
+            "evidence_gaps",
+        }
 
 
 class TestIsValidStruct:
@@ -111,6 +130,19 @@ class TestIsValidStruct:
         assert not _is_valid_struct([])
         assert not _is_valid_struct(None)
         assert not _is_valid_struct("string")
+
+
+class TestNormalizeJdSignals:
+    def test_missing_jd_signals_gets_default_shape(self):
+        from metis.extract import _normalize_jd_signals
+        result = _normalize_jd_signals({})
+        assert result["jd_signals"]["must_haves"] == []
+        assert result["jd_signals"]["keywords"] == []
+
+    def test_string_values_are_coerced_to_lists(self):
+        from metis.extract import _normalize_jd_signals
+        result = _normalize_jd_signals({"jd_signals": {"keywords": "agentic AI"}})
+        assert result["jd_signals"]["keywords"] == ["agentic AI"]
 
 
 # ---------------------------------------------------------------------------
@@ -236,6 +268,36 @@ class TestFormatExtractionForScoring:
         assert "unknowns" in out
         assert "org_maturity" in out
 
+    def test_jd_signals_are_shown(self):
+        from metis.extract import format_extraction_for_scoring
+        out = format_extraction_for_scoring(_minimal_struct())
+        assert "JD signals" in out
+        assert "Must-haves: Own platform roadmap; Partner with engineering" in out
+        assert "Keywords: platform; API; technical specs" in out
+        assert "Evidence gaps: Compensation not disclosed" in out
+
+    def test_jd_signals_scoring_context_is_capped(self):
+        from metis.extract import format_extraction_for_scoring
+        s = _minimal_struct(jd_signals={
+            "must_haves": ["one", "two", "three", "four"],
+            "nice_to_haves": ["omitted from scoring context"],
+            "keywords": ["k1", "k2", "k3", "k4", "k5", "k6"],
+            "screening_signals": ["s1", "s2", "s3", "s4"],
+            "evidence_gaps": ["g1", "g2", "g3", "g4"],
+        })
+        out = format_extraction_for_scoring(s)
+        assert "one; two; three" in out
+        assert "four" not in out
+        assert "k1; k2; k3; k4; k5" in out
+        assert "k6" not in out
+        assert "omitted from scoring context" not in out
+
+    def test_missing_jd_signals_do_not_render_empty_section(self):
+        from metis.extract import format_extraction_for_scoring
+        s = _minimal_struct(jd_signals={})
+        out = format_extraction_for_scoring(s)
+        assert "JD signals" not in out
+
     def test_hybrid_days_shown(self):
         from metis.extract import format_extraction_for_scoring
         s = _minimal_struct(work_model="hybrid", hybrid_days_required=3)
@@ -280,6 +342,22 @@ class TestExtractJdStructs:
         result = extract_jd_structs(client, [_make_job()])
         assert len(result) == 1
         assert result[0]["jd_quality"] == "high"
+        assert result[0]["jd_signals"]["must_haves"] == ["Own platform roadmap", "Partner with engineering"]
+
+    def test_legacy_response_without_jd_signals_gets_default_shape(self):
+        from metis.extract import extract_jd_structs
+        legacy = _minimal_struct()
+        del legacy["jd_signals"]
+        client = MagicMock()
+        r = MagicMock()
+        r.content = [MagicMock(text=json.dumps([legacy]))]
+        r.usage = MagicMock(input_tokens=100, output_tokens=50)
+        client.messages.create.return_value = r
+
+        result = extract_jd_structs(client, [_make_job()])
+
+        assert result[0]["jd_signals"]["must_haves"] == []
+        assert result[0]["jd_signals"]["keywords"] == []
 
     def test_result_count_matches_job_count(self):
         from metis.extract import extract_jd_structs

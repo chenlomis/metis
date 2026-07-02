@@ -68,6 +68,6 @@ class JobDict(TypedDict, total=False):
     url: str
     jd: str
     source: str                     # "linkedin" | "proactive"
-    extraction: dict                # 27-field Haiku extraction output
+    extraction: dict                # Layer 1 Haiku extraction output, including optional jd_signals
     eval: EvalResult                # scoring output
     alumni_count: Optional[int]     # injected by proactive source if available

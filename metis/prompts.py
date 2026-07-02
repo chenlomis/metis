@@ -251,7 +251,15 @@ For each job return exactly this schema:
   "government_export_control": false,
 
   "years_exp_min": null,
-  "primary_execution_stack": []
+  "primary_execution_stack": [],
+
+  "jd_signals": {
+    "must_haves": [],
+    "nice_to_haves": [],
+    "keywords": [],
+    "screening_signals": [],
+    "evidence_gaps": []
+  }
 }
 
 Extraction rules:
@@ -263,6 +271,12 @@ Extraction rules:
 - company_tier: infer from known companies (e.g. Google/Meta/Apple = large_public). Unknown = null.
 - product_surface values: use subset of ["web_app","mobile","api","platform","internal_tools","hardware","data","ml_ai"]
 - primary_execution_stack values: use subset of ["roadmap","user_research","data_analysis","technical_specs","gtm","growth","ml_ai","platform"]
+- jd_signals.must_haves: 2-5 concise requirements the scorer should evaluate against the profile
+- jd_signals.nice_to_haves: 0-4 preferred-but-not-required signals
+- jd_signals.keywords: 3-8 role-specific terms useful for later analysis; avoid generic words like "product" or "strategy"
+- jd_signals.screening_signals: 1-4 phrases describing what a recruiter or ATS would likely screen for
+- jd_signals.evidence_gaps: 0-4 missing/unclear facts that affect scoring, such as undisclosed compensation or hard-to-verify domain depth
+- Keep jd_signals factual and JD-grounded. Do not compare to the candidate profile here.
 - unknown_fields: list field names where you lacked enough signal (NOT salary — use salary_disclosed=false for that)
 - Return ONLY a valid JSON array. No markdown fences, no commentary.\
 """

@@ -46,6 +46,25 @@ MINIMAL_PROFILE: dict = {}
 
 
 # ---------------------------------------------------------------------------
+# JD_EXTRACT_SYSTEM
+# ---------------------------------------------------------------------------
+
+class TestJdExtractSystem:
+
+    def test_includes_jd_signals_schema(self):
+        from metis.prompts import JD_EXTRACT_SYSTEM
+        assert '"jd_signals"' in JD_EXTRACT_SYSTEM
+        assert '"must_haves"' in JD_EXTRACT_SYSTEM
+        assert '"screening_signals"' in JD_EXTRACT_SYSTEM
+        assert '"evidence_gaps"' in JD_EXTRACT_SYSTEM
+
+    def test_jd_signals_are_jd_grounded_not_profile_comparison(self):
+        from metis.prompts import JD_EXTRACT_SYSTEM
+        assert "JD-grounded" in JD_EXTRACT_SYSTEM
+        assert "Do not compare to the candidate profile" in JD_EXTRACT_SYSTEM
+
+
+# ---------------------------------------------------------------------------
 # build_candidate_context
 # ---------------------------------------------------------------------------
 
