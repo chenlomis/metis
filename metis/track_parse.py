@@ -1,4 +1,4 @@
-"""scorerole/track_parse.py — email classification and entity extraction.
+"""metis/track_parse.py — email classification and entity extraction.
 
 Owns: phrase constants, subject patterns, classify_email(), parse_email(),
 extract_company(), extract_role(). Pure functions — no I/O, no IMAP.
@@ -6,6 +6,7 @@ extract_company(), extract_role(). Pure functions — no I/O, no IMAP.
 from __future__ import annotations
 
 import logging
+import os
 import re
 
 log = logging.getLogger(__name__)
@@ -155,6 +156,7 @@ _SUBJECT_IMPLIES_REJECTION = re.compile(
 # ---------------------------------------------------------------------------
 
 _COMPANY_FROM_SUBJECT = [
+    re.compile(r"thanks for applying to the .+? role at ([A-Za-z0-9][^!,\n]+?)(?:[!,]|$)", re.IGNORECASE),
     re.compile(r"applying (?:to|at) ([A-Za-z0-9][^!,\n]+?)(?:[!,]|$)", re.IGNORECASE),
     re.compile(r"application to the .+? (?:role|position) at ([A-Za-z0-9][^!,\n]+?)(?:[!,]|$)", re.IGNORECASE),
     re.compile(r"your application to ([A-Za-z0-9][^!,\n]+?)(?:[!,]|$)", re.IGNORECASE),
@@ -189,6 +191,7 @@ _ROLE_TITLE_WORDS = re.compile(
 )
 
 _COMPANY_FROM_BODY = [
+    re.compile(r"career opportunities at ([A-Z][A-Za-z0-9 &.]+?)(?:!|\n)", re.IGNORECASE),
     re.compile(r"applying (?:for|to) .+? (?:role|position)(?: here)? at ([A-Z][A-Za-z0-9 &.,]+?)[\.\!,\n]"),
     re.compile(r"apply for .+ (?:role|position) at ([A-Z][A-Za-z0-9 &.,]+?)[\.\!,\n]"),
     re.compile(r"interest in ([A-Z][A-Za-z0-9 &.,]+?) and"),
@@ -210,6 +213,9 @@ _GENERIC_SENDER_DOMAINS = {
 # ---------------------------------------------------------------------------
 
 _ROLE_FROM_BODY = [
+    re.compile(r"our role:\s*(.+?)(?:\.|\n|$)", re.IGNORECASE),
+    re.compile(r"following position:\s*(.+?)(?:\s+[—–-]\s+|\(|\n|$)", re.IGNORECASE),
+    re.compile(r"complete your application for\s+(.+?)(?:\s+-\s+[A-Z][A-Za-z0-9 &.]+?\s*,|\s*,\s+and|\s+and\s+we|\.)", re.IGNORECASE | re.DOTALL),
     re.compile(r"apply(?:ing)? (?:for|to) the (.+?) (?:role|position)", re.IGNORECASE),
     re.compile(r"your application for the (.+?) (?:role|position)", re.IGNORECASE),
     re.compile(r"application for the (.+?) (?:role|position)", re.IGNORECASE),
@@ -253,18 +259,22 @@ _LLM_VALID_CLASSES = frozenset(["confirmation", "rejection", "recruiter_screen",
 
 
 def _classify_with_llm(subject: str, body: str, client) -> str:
+    from .llm import complete_text, normalize_provider, resolve_stage_models
     from .prompts import track_classify_system_prompt
 
+    provider = normalize_provider(os.getenv("METIS_LLM_PROVIDER", os.getenv("LLM_PROVIDER", "anthropic")))
+    model = resolve_stage_models(provider)["extract_model"]
     truncated_body = body[:_LLM_BODY_CHAR_LIMIT]
     prompt = _LLM_CLASSIFY_PROMPT.format(subject=subject, body=truncated_body)
     try:
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=10,
+        response = complete_text(
+            client,
+            model=model,
+            max_tokens=16,
             system=track_classify_system_prompt(),
-            messages=[{"role": "user", "content": prompt}],
+            user=prompt,
         )
-        result = response.content[0].text.strip().lower()
+        result = response.text.strip().lower()
         if result in _LLM_VALID_CLASSES:
             return result
         log.warning("track: LLM returned unexpected class %r — falling back to 'unknown'", result)
@@ -412,7 +422,7 @@ _ROLE_TITLE_SIGNAL = re.compile(
 
 
 def _clean_role(raw: str) -> str | None:
-    role = raw.strip()
+    role = " ".join(raw.split())
     role = re.sub(r"\s*[\(\[]?(?:ID|JR|REQ)[:\s]\S+[\)\]]?", "", role, flags=re.IGNORECASE)
     role = re.sub(r"^\w{2,}\d{6,}\s+", "", role)
     role = re.sub(r"\s+\d{6,}$", "", role)
@@ -475,6 +485,7 @@ def parse_email(email_dict: dict, llm_client=None) -> dict:
         "classification": classification,
         "company":        company,
         "role":           role,
+        "url":            email_dict.get("url"),
         "date":           email_dict["date"],
         "subject":        subject,
         "sender":         email_dict["sender"],

@@ -10,6 +10,8 @@ as score.py. Extraction failures fall back gracefully — missing structs never 
 """
 import json, logging, os, re, time
 from pathlib import Path
+import anthropic
+
 from .llm import LLMTransientError, complete_text
 from .prompts import JD_EXTRACT_SYSTEM
 
@@ -23,7 +25,13 @@ _EXTRACT_CHUNK_SIZE = 10
 # Retry constants (mirror score.py)
 # ---------------------------------------------------------------------------
 
-_RETRYABLE = (LLMTransientError,)
+_RETRYABLE = (
+    anthropic.InternalServerError,
+    anthropic.RateLimitError,
+    anthropic.APIConnectionError,
+    anthropic.APITimeoutError,
+    LLMTransientError,
+)
 _MAX_ATTEMPTS = 3
 
 _REQUIRED_KEYS = {
@@ -70,7 +78,26 @@ def _is_valid_struct(obj: object) -> bool:
     return _REQUIRED_KEYS.issubset(obj.keys())
 
 
-def _extract_chunk(client: anthropic.Anthropic, jobs: list[dict],
+def _unwrap_extraction_json(value: object) -> list[dict]:
+    """Return extraction structs from a bare array or provider wrapper object."""
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    if not isinstance(value, dict):
+        raise ValueError("Expected JSON array")
+
+    for key in ("results", "extractions", "jobs", "structs"):
+        wrapped = value.get(key)
+        if isinstance(wrapped, list):
+            return [item for item in wrapped if isinstance(item, dict)]
+
+    list_values = [v for v in value.values() if isinstance(v, list)]
+    if len(list_values) == 1:
+        return [item for item in list_values[0] if isinstance(item, dict)]
+
+    return [value]
+
+
+def _extract_chunk(client, jobs: list[dict],
                    *, model: str = _DEFAULT_EXTRACT_MODEL) -> list[dict]:
     """Extract structured fields for one chunk of jobs. Returns list of structs."""
     job_blocks = "\n\n---\n\n".join(
@@ -90,19 +117,18 @@ def _extract_chunk(client: anthropic.Anthropic, jobs: list[dict],
     response = None
     for attempt in range(_MAX_ATTEMPTS):
         try:
-            response = client.messages.create(
+            response = complete_text(
+                client,
                 model=model,
                 max_tokens=max(1024, len(jobs) * 350),
                 temperature=0,
                 system=JD_EXTRACT_SYSTEM,
-                messages=[{
-                    "role": "user",
-                    "content": (
-                        f"Extract structured fields for all {len(jobs)} jobs. "
-                        f"Return a JSON array of exactly {len(jobs)} objects.\n\n"
-                        f"{job_blocks}"
-                    ),
-                }],
+                user=(
+                    f"Extract structured fields for all {len(jobs)} jobs. "
+                    f"Return a JSON array of exactly {len(jobs)} objects.\n\n"
+                    f"{job_blocks}"
+                ),
+                json_mode=True,
             )
             break
         except _RETRYABLE as exc:
@@ -124,15 +150,11 @@ def _extract_chunk(client: anthropic.Anthropic, jobs: list[dict],
     )
 
     raw = re.sub(
-        r"^```(?:json)?\s*|\s*```$", "", response.content[0].text.strip(), flags=re.MULTILINE
+        r"^```(?:json)?\s*|\s*```$", "", response.text.strip(), flags=re.MULTILINE
     ).strip()
 
     try:
-        structs = json.loads(raw)
-        if isinstance(structs, dict):
-            structs = [structs]
-        if not isinstance(structs, list):
-            raise ValueError("Expected JSON array")
+        structs = _unwrap_extraction_json(json.loads(raw))
         return [s if _is_valid_struct(s) else {**_BLANK_STRUCT, "jd_quality": "low"} for s in structs]
     except (json.JSONDecodeError, ValueError) as exc:
         log.warning("Extraction JSON parse failed (%s) — using blank structs for %d jobs", exc, len(jobs))
@@ -141,7 +163,7 @@ def _extract_chunk(client: anthropic.Anthropic, jobs: list[dict],
         return [{**dict(_BLANK_STRUCT), "jd_quality": "extraction_failed"} for _ in jobs]
 
 
-def extract_jd_structs(client: anthropic.Anthropic, jobs: list[dict],
+def extract_jd_structs(client, jobs: list[dict],
                        *, model: str = _DEFAULT_EXTRACT_MODEL) -> list[dict]:
     """Extract Layer 1 structured fields for all jobs. Returns one dict per job, same order.
 
@@ -274,7 +296,7 @@ def format_extraction_for_scoring(ext: dict, listing_company: str = "") -> str:
         lines.append(f"  Domain: {' | '.join(dom_parts)}")
 
     # Company
-    stage = ext.get("company_stage", "unknown")
+    stage = ext.get("company_stage") or "unknown"
     tier  = ext.get("company_tier")
     co_str = stage + (f" / {tier}" if tier else "")
     # When stage is unknown but the listing has a known company name, surface it so

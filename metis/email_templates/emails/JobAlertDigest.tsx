@@ -47,7 +47,7 @@ export default function JobAlertDigest({ payload }: Props) {
                 </tr>
                 <tr>
                   <td style={{ paddingTop: '12px', fontSize: '11px', color: C_SUBTLE, textAlign: 'center', fontFamily: FONT }}>
-                    Metis &middot; powered by Claude &middot;{' '}
+                    Metis &middot; powered by {payload.providerLabel || 'AI'} &middot;{' '}
                     {payload.totalEvaluated} roles evaluated
                   </td>
                 </tr>

@@ -471,8 +471,7 @@ class TestPipelineScheduleRegression:
         monkeypatch.setattr(pipeline, "load_seen_roles", lambda: set())
 
         import datetime
-        import anthropic
-        with mock.patch.object(anthropic, "Anthropic"):
+        with mock.patch.object(pipeline, "create_llm_client", return_value=mock.MagicMock()):
             pipeline.run_pipeline(datetime.datetime.now())
 
     def test_no_schedule_json(self, tmp_path, monkeypatch):

@@ -7,11 +7,11 @@ files only when needed.
 
 ## What It Is
 metis is a privacy-first CLI for job search triage. It pulls saved job alerts, optionally
-checks company career pages, scores roles against a local profile with Claude, emails a
-ranked digest, and keeps an application tracker up to date.
+checks company career pages, scores roles against a local profile with the configured LLM
+provider, emails a ranked digest, and keeps an application tracker up to date.
 
 ## Current State (as of 2026-06-30)
-- **Done:** Full pipeline (fetch → dedup → extract → score → digest email → tracker write), `metis init`, proactive sources, non-LinkedIn email alert sources, scheduling (launchd/cron with retry), `metis track`, `metis feedback`, `metis summary`, scoring traceability (`trace.py` → `~/.job_pipeline/runs.jsonl`), React Email digest templates with Python fallback, format regression tests, tracker input validation, and role queueing for capped runs.
+- **Done:** Full pipeline (fetch → dedup → extract → score → digest email → tracker write), `metis init`, Anthropic/OpenAI provider boundary, deterministic profile normalization, proactive sources, non-LinkedIn email alert sources, scheduling (launchd/cron with retry), `metis track`, `metis feedback`, `metis summary`, scoring traceability (`trace.py` → `~/.job_pipeline/runs.jsonl`), React Email digest templates with Python fallback, format regression tests, tracker input validation, and role queueing for capped runs.
 - **In progress:** config-as-parameters cleanup for cleaner library/MCP use, more reliable tracker parsing across ATS templates, and public-launch documentation polish.
 - **Near-term backlog:** one-command install, PyPI packaging as `metis-job`, MCP server wrapper, Outlook/Microsoft 365 support, and broader source adapters.
 - **Later:** Docker, employer-lens scoring, evaluation harness, and web/app surfaces only if OSS usage proves demand.

@@ -1,7 +1,7 @@
 """Bounded mocked end-to-end tests for the public pipeline.
 
 These tests exercise the real run_pipeline orchestration against example
-persona profiles without touching Gmail, Anthropic, SMTP, tracker files, or
+persona profiles without touching Gmail, provider APIs, SMTP, tracker files, or
 the user's ~/.job_pipeline state.
 """
 from __future__ import annotations
@@ -80,7 +80,7 @@ def test_bounded_mocked_pipeline_e2e_for_personas(profile_path, monkeypatch):
             )
         return jobs
 
-    def fake_score_jobs(_client, jobs, _profile_data):
+    def fake_score_jobs(_client, jobs, _profile_data, **_kwargs):
         scored_batches.append(len(jobs))
         return _attach_mock_evals(jobs)
 
@@ -95,13 +95,13 @@ def test_bounded_mocked_pipeline_e2e_for_personas(profile_path, monkeypatch):
     monkeypatch.setattr(pipeline, "save_last_run", MagicMock())
     monkeypatch.setattr(pipeline, "render_html", MagicMock(return_value="<html>digest</html>"))
     monkeypatch.setattr(pipeline, "send_digest", MagicMock())
-    monkeypatch.setattr(pipeline.anthropic, "Anthropic", MagicMock(return_value=MagicMock()))
+    monkeypatch.setattr(pipeline, "create_llm_client", MagicMock(return_value=MagicMock()))
 
-    monkeypatch.setattr("metis.score.prescreen_jobs_batch", lambda _client, jobs: jobs)
+    monkeypatch.setattr("metis.score.prescreen_jobs_batch", lambda _client, jobs, **_kwargs: jobs)
     monkeypatch.setattr("metis.sources.linkedin.enrich_jobs", fake_enrich)
     monkeypatch.setattr(
         "metis.extract.extract_jd_structs",
-        lambda _client, jobs: [{"jd_quality": "complete"} for _ in jobs],
+        lambda _client, jobs, **_kwargs: [{"jd_quality": "complete"} for _ in jobs],
     )
     monkeypatch.setattr(pipeline, "score_jobs_batch", fake_score_jobs)
     monkeypatch.setattr("metis.trace.write_trace", MagicMock())

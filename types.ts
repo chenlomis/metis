@@ -33,5 +33,6 @@ export interface DigestPayload {
   candidateName: string;
   greeting: string;       // salutation line: "Good morning, Alex 👋"
   greetingSub?: string;   // body line: "We evaluated N roles today…"
+  providerLabel?: string;
   jobs: Job[];
 }

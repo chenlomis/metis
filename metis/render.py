@@ -40,6 +40,18 @@ _TAG_THEME = {
 }
 
 
+def _provider_label() -> str:
+    try:
+        from .llm import normalize_provider
+        provider = normalize_provider(os.getenv("METIS_LLM_PROVIDER", os.getenv("LLM_PROVIDER", "anthropic")))
+    except Exception:
+        provider = "ai"
+    return {
+        "anthropic": "Claude",
+        "openai": "OpenAI",
+    }.get(provider, "AI")
+
+
 def _tag(text: str, sentiment: str, size: int = 11) -> str:
     bg, fg = _TAG_THEME.get(sentiment, ("#f5f5f3", _C_BODY))
     return (
@@ -282,6 +294,7 @@ def build_digest_payload(
         "candidateName":    candidate_name,
         "greeting":         greeting,
         "greetingSub":      greeting_sub,
+        "providerLabel":    _provider_label(),
         "dealBreakerCount": deal_breaker_count,
         "jobs":             result_jobs,
     }
@@ -487,11 +500,12 @@ def build_digest_html(jobs: list[dict], run_date: str, deal_breaker_count: int =
         f'{deal_breaker_count} filtered by deal&#8209;breaker</span>'
         if deal_breaker_count else ""
     )
+    provider_label = _provider_label()
     footer = (
         f'<table width="100%" cellpadding="0" cellspacing="0" border="0">'
         f'<tr><td height="1" style="background:{_C_BORDER};font-size:0;line-height:0">&nbsp;</td></tr>'
         f'<tr><td style="padding-top:12px;font-size:11px;color:#aaa;text-align:center;'
-        f'font-family:{_FONT}">Metis &middot; powered by Claude '
+        f'font-family:{_FONT}">Metis &middot; powered by {provider_label} '
         f'&middot; {len(jobs)} roles evaluated{filtered_note}</td></tr>'
         f'</table>'
     )
