@@ -448,6 +448,18 @@ def _apply_step_text_backfills(profile: dict, want_text: str, dontwant_text: str
     return apply_step_text_backfills(profile, want_text, dontwant_text)
 
 
+def _apply_review_want_edit(profile: dict, want_text: str) -> dict:
+    """Update Step 2 text from review and rerun deterministic backfills."""
+    profile["notes"] = want_text
+    return _apply_step_text_backfills(profile, want_text, "")
+
+
+def _apply_review_dontwant_edit(profile: dict, dontwant_text: str) -> dict:
+    """Update Step 3 text from review and rerun deterministic backfills."""
+    profile["deal_breakers"] = [d.strip() for d in dontwant_text.split(",") if d.strip()]
+    return _apply_step_text_backfills(profile, "", dontwant_text)
+
+
 def _extract_with_llm_v2(api_key, resume_text, linkedin_text, want_text, dontwant_text, console):
     provider = normalize_provider(os.getenv("METIS_LLM_PROVIDER", os.getenv("LLM_PROVIDER", "anthropic")))
     model = resolve_stage_models(provider)["model"]
@@ -726,8 +738,7 @@ def _run_review(profile, console, THEME, INQUIRER_STYLE, api_key=None,
             ).execute() or ""
             new_want = new_want.strip()
             if new_want:
-                # Update deal_breakers / salary from quick text edit
-                profile["notes"] = new_want
+                _apply_review_want_edit(profile, new_want)
 
         elif action == "dontwant":
             current_dbs = ", ".join(profile.get("deal_breakers") or [])
@@ -736,7 +747,7 @@ def _run_review(profile, console, THEME, INQUIRER_STYLE, api_key=None,
                 default=current_dbs,
                 style=INQUIRER_STYLE,
             ).execute() or ""
-            profile["deal_breakers"] = [d.strip() for d in new_dbs.split(",") if d.strip()]
+            _apply_review_dontwant_edit(profile, new_dbs)
 
         elif action == "editor":
             console.print(

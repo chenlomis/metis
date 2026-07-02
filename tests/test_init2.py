@@ -208,6 +208,73 @@ class TestApplyClarificationAnswer:
         _apply_clarification_answer("something_new", "value", "ctx", profile)
 
 
+class TestReviewWantEditBackfills:
+
+    def test_review_step_two_edit_backfills_preferences(self):
+        from metis.init_cmd import _apply_review_want_edit
+
+        profile = _base_profile(
+            candidate={"name": "Test User", "location": "SF, CA"},
+            target={"roles": ["Staff PM", "Principal PM"], "level": "staff", "role_family": "product"},
+            aspirations={
+                "track": "ic",
+                "direction": None,
+                "company_types": ["ai-infrastructure", "developer-tools"],
+                "avoid_company_types": [],
+            },
+            preferences={
+                "company_stage": [],
+                "company_scale": None,
+                "team_environment": None,
+                "company_size": None,
+                "industry_targets": [],
+                "industry_avoid": [],
+                "base_salary_target_usd": None,
+            },
+            inferred={"customer_types": ["developer"]},
+            notes="",
+        )
+        want = (
+            "Staff or Principal PM at an AI infrastructure or developer tools\n"
+            "  company. Prefer growth-stage, remote-first, small team. Excited by agentic AI\n"
+            "  or LLM infra"
+        )
+
+        _apply_review_want_edit(profile, want)
+
+        assert profile["preferences"]["company_stage"] == ["growth-stage"]
+        assert profile["preferences"]["team_environment"] == "small-team"
+        assert profile["preferences"]["company_size"] == "small-team"
+        assert profile["candidate"]["location_preference"] == "remote"
+        assert profile["aspirations"]["direction"] == "agentic AI, LLM infrastructure"
+        assert profile["notes"] == want
+
+    def test_review_step_three_edit_backfills_avoid_company_types_and_notes(self):
+        from metis.init_cmd import _apply_review_dontwant_edit
+
+        profile = _base_profile(
+            aspirations={
+                "track": "ic",
+                "direction": None,
+                "company_types": [],
+                "avoid_company_types": [],
+            },
+            deal_breakers=[],
+            notes="Staff PM role",
+        )
+        dontwant = "Pass on AI infrastructure companies, regular onsite travel"
+
+        _apply_review_dontwant_edit(profile, dontwant)
+
+        assert profile["deal_breakers"] == [
+            "Pass on AI infrastructure companies",
+            "regular onsite travel",
+        ]
+        assert profile["aspirations"]["avoid_company_types"] == ["ai-infrastructure"]
+        assert "Staff PM role" in profile["notes"]
+        assert dontwant in profile["notes"]
+
+
 # ---------------------------------------------------------------------------
 # _extract_with_llm_v2 (mocked API)
 # ---------------------------------------------------------------------------
