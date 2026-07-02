@@ -100,6 +100,10 @@ def render_profile(data: dict) -> str:
         lines += ["", "PREFERENCES (soft signals — nudge ranking, don't disqualify):"]
         if pref.get("company_stage"):
             lines.append(f"Stage preference: {', '.join(pref['company_stage'])}")
+        if pref.get("company_scale"):
+            lines.append(f"Company/customer scale: {pref['company_scale']}")
+        if pref.get("team_environment"):
+            lines.append(f"Team environment: {pref['team_environment']}")
         if pref.get("industry_targets"):
             lines.append(f"Move toward: {', '.join(pref['industry_targets'])}")
         if pref.get("industry_avoid"):

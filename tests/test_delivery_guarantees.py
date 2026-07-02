@@ -301,6 +301,59 @@ class TestTrackXlsxIntegration:
         assert ws.cell(2, 3).value == "Docker"
         assert ws.cell(2, 5).value == "External"
 
+    def test_external_backfill_never_uses_company_as_role_title(self, tmp_path):
+        tracker = _make_tracker(tmp_path, [])
+
+        from metis.track_write import create_backfill_row
+        wb = openpyxl.load_workbook(tracker)
+        ws = wb.active
+        create_backfill_row(ws, {
+            "company": "Anthropic",
+            "role": "Anthropic",
+            "date": "2026-06-29",
+        })
+        wb.save(tracker)
+
+        ws = self._reload_ws(tracker)
+        assert ws.cell(2, 2).value == "External application"
+        assert ws.cell(2, 3).value == "Anthropic"
+
+    def test_external_backfill_alignment_matches_tracker_convention(self, tmp_path):
+        tracker = _make_tracker(tmp_path, [])
+
+        from metis.track_write import create_backfill_row
+        wb = openpyxl.load_workbook(tracker)
+        ws = wb.active
+        create_backfill_row(ws, {
+            "company": "Docker",
+            "role": None,
+            "date": "2026-06-29",
+        })
+        wb.save(tracker)
+
+        ws = self._reload_ws(tracker)
+        centered_cols = (1, 4, 5, 6, 7, 8)
+        left_cols = (2, 3, 9)
+        assert all(ws.cell(2, col).alignment.horizontal == "center" for col in centered_cols)
+        assert all(ws.cell(2, col).alignment.horizontal == "left" for col in left_cols)
+
+    def test_external_backfill_uses_parsed_url_as_hyperlink(self, tmp_path):
+        tracker = _make_tracker(tmp_path, [])
+
+        from metis.track_write import create_backfill_row
+        wb = openpyxl.load_workbook(tracker)
+        ws = wb.active
+        create_backfill_row(ws, {
+            "company": "Docker",
+            "role": "Staff Product Manager",
+            "url": "https://www.linkedin.com/jobs/view/123/",
+            "date": "2026-06-29",
+        })
+        wb.save(tracker)
+
+        ws = self._reload_ws(tracker)
+        assert ws.cell(2, 2).hyperlink.target == "https://www.linkedin.com/jobs/view/123/"
+
 
 def test_parse_email_rejects_reply_subject_noise():
     from metis.track_parse import parse_email
@@ -328,6 +381,139 @@ def test_parse_email_drops_company_as_role_title():
 
     assert parsed["company"] == "Weights & Biases"
     assert parsed["role"] is None
+
+
+def test_parse_email_preserves_url_metadata():
+    from metis.track_parse import parse_email
+
+    parsed = parse_email({
+        "subject": "Thanks for applying to Docker",
+        "body": "Thanks for applying to Docker.",
+        "sender": "Docker Talent <careers@docker.com>",
+        "date": "2026-06-29",
+        "url": "https://www.linkedin.com/jobs/view/123/",
+    })
+
+    assert parsed["url"] == "https://www.linkedin.com/jobs/view/123/"
+
+
+def test_parse_email_extracts_ashby_our_role_confirmation():
+    from metis.track_parse import parse_email
+
+    parsed = parse_email({
+        "subject": "Crusoe | Application Received",
+        "body": (
+            "Hi Lomis,\n"
+            "Thank you for applying to our role: Staff Product Manager, Internal AI Solutions. "
+            "We appreciate your interest in joining the team!"
+        ),
+        "sender": "Crusoe Hiring Team <no-reply@ashbyhq.com>",
+        "date": "2026-06-30",
+    })
+
+    assert parsed["classification"] == "confirmation"
+    assert parsed["company"] == "Crusoe"
+    assert parsed["role"] == "Staff Product Manager, Internal AI Solutions"
+
+
+def test_parse_email_extracts_workday_following_position_confirmation():
+    from metis.track_parse import parse_email
+
+    parsed = parse_email({
+        "subject": "Thank you for applying",
+        "body": (
+            "Thanks for your interest in career opportunities at Warner Bros. Discovery!\n"
+            "We've received your application for the following position:\n"
+            "Principal Product Manager, Search — R000104698 Principal Product Manager, Search (Open)"
+        ),
+        "sender": "Workday <warnerbros@myworkday.com>",
+        "date": "2026-06-30",
+    })
+
+    assert parsed["classification"] == "confirmation"
+    assert parsed["company"] == "Warner Bros. Discovery"
+    assert parsed["role"] == "Principal Product Manager, Search"
+
+
+def test_parse_email_extracts_intuit_role_at_company_subject():
+    from metis.track_parse import parse_email
+
+    parsed = parse_email({
+        "subject": (
+            "Application Received! Thanks for applying to the Principal Product Manager: "
+            "AI Platform & Ecosystem, International Markets Role at Intuit"
+        ),
+        "body": (
+            "Thank you for your interest in Intuit and for taking the time to apply for the "
+            "Principal Product Manager: AI Platform & Ecosystem, International Markets position. "
+            "We've successfully received your application."
+        ),
+        "sender": "Intuit Talent Acquisition <do_not_reply@intuit.com>",
+        "date": "2026-06-29",
+    })
+
+    assert parsed["classification"] == "confirmation"
+    assert parsed["company"] == "Intuit"
+    assert parsed["role"] == "Principal Product Manager: AI Platform & Ecosystem, International Markets"
+
+
+def test_parse_email_extracts_greenhouse_complete_application_role():
+    from metis.track_parse import parse_email
+
+    parsed = parse_email({
+        "subject": "Thank you for applying to Weights & Biases",
+        "body": (
+            "Thank you for your interest in Weights & Biases! We appreciate you taking the time "
+            "to complete your application for Staff Product Manager, Training Infrastructure - "
+            "Weights & Biases, and we are delighted that you would consider joining our team."
+        ),
+        "sender": "no-reply@us.greenhouse-mail.io <no-reply@us.greenhouse-mail.io>",
+        "date": "2026-06-29",
+    })
+
+    assert parsed["classification"] == "confirmation"
+    assert parsed["company"] == "Weights & Biases"
+    assert parsed["role"] == "Staff Product Manager, Training Infrastructure"
+
+
+def test_track_llm_classification_uses_openai_minimum_output_tokens(monkeypatch):
+    from types import SimpleNamespace
+    from metis.track_parse import _classify_with_llm
+
+    captured = {}
+
+    def fake_complete_text(*args, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(text="confirmation")
+
+    monkeypatch.setenv("METIS_LLM_PROVIDER", "openai")
+    with patch("metis.llm.complete_text", side_effect=fake_complete_text):
+        result = _classify_with_llm(
+            "Thanks for applying",
+            "We received your application.",
+            MagicMock(),
+        )
+
+    assert result == "confirmation"
+    assert captured["max_tokens"] >= 16
+
+
+def test_track_llm_fallback_defaults_on_when_key_exists():
+    from metis.track import _build_llm_client
+
+    sentinel = object()
+    with patch("metis.profile.load_profile_yaml", return_value={}), \
+         patch("metis.llm.create_llm_client", return_value=sentinel):
+        assert _build_llm_client("sk-test") is sentinel
+
+
+def test_track_llm_fallback_can_be_explicitly_disabled():
+    from metis.track import _build_llm_client
+
+    with patch("metis.profile.load_profile_yaml", return_value={"track": {"llm_fallback": False}}), \
+         patch("metis.llm.create_llm_client") as create_client:
+        assert _build_llm_client("sk-test") is None
+        create_client.assert_not_called()
 
 
 def test_track_decode_header_value_import_path():

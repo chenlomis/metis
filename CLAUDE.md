@@ -1,14 +1,14 @@
 # metis — Claude Code context
 
 ## What this project is
-A personal job alert pipeline. It pulls job listings, scores them against a user profile using Claude, and sends a personalized email digest. CLI entry point: `metis` → `metis/cli.py:main`; digest orchestration lives in `metis/pipeline.py`.
+A personal job alert pipeline. It pulls job listings, scores them against a user profile using the configured LLM provider, and sends a personalized email digest. CLI entry point: `metis` → `metis/cli.py:main`; digest orchestration lives in `metis/pipeline.py`.
 
 ## Key commands
 ```
 # Main runner (no subcommand)
 metis                          # pull → score → send digest; incremental (since last run, fallback 3d)
 metis --lookback 7d            # override window; accepts: 3d, 14d, 2026-06-01
-metis --no-limit               # ignore MAX_JOBS_PER_RUN cap; Haiku pre-screens to control cost
+metis --no-limit               # ignore MAX_JOBS_PER_RUN cap; fast model pre-screens to control cost
 metis --dry-run                # full run (fetch + score), zero writes — no email, no seen_roles, no tracker
 
 # init — build/update scoring profile
@@ -33,7 +33,7 @@ metis track --lookback 30d     # accepts same DURATION format as main runner
 metis track --dry-run          # parse + classify, no xlsx write, no open; prints matches to stdout
 
 # feedback — calibration notes that shape future scoring
-metis feedback                 # collect → Claude parse → conflict detect → save to feedback.md
+metis feedback                 # collect → configured LLM parse → conflict detect → save to feedback.md
 metis feedback list            # show last 5 entries (full history: ~/.job_pipeline/feedback.md)
 
 # debug — dump most recent LinkedIn alert email
@@ -54,7 +54,9 @@ metis/
   init_cmd.py      — interactive profile setup wizard (InquirerPy + Rich)
   theme.py         — ALL colors, styles, and print helpers (single source of truth)
   profile.py       — load/save ~/.job_pipeline/profile.yaml
-  extract.py       — Claude extraction of structured profile from resume text
+  llm/             — provider-neutral LLM boundary (Anthropic/OpenAI adapters)
+  normalization.py — deterministic profile normalization after raw LLM extraction
+  extract.py       — structured JD extraction before scoring
   score.py         — scoring logic against profile
   render.py        — builds DigestPayload, renders HTML via React Email or Python fallback
   schedule_cmd.py  — cron scheduling wizard
@@ -62,7 +64,7 @@ metis/
   track.py         — job tracking
   xlsx.py          — applications.xlsx write helpers
   track_write.py   — tracker status update helpers
-  feedback.py      — feedback collection: collect → parse (Haiku) → save to feedback.md + feedback_log.jsonl
+  feedback.py      — feedback collection: collect → parse with configured extract model → save to feedback.md + feedback_log.jsonl
   sources/         — job source scrapers (proactive company career pages)
 
 emails/
@@ -294,7 +296,8 @@ All interactive prompts in `init_cmd.py` use five helpers — do not use `questi
 `schedule_cmd.py` still uses `questionary` (not migrated — fine to leave as-is).
 
 ## Dependencies
-- `anthropic` — Claude API (profile extraction + job scoring)
+- `anthropic` — Anthropic/Claude API provider
+- `openai` — OpenAI API provider
 - `rich>=13.0` — terminal formatting
 - `questionary>=2.0` — used by `schedule_cmd.py` only
 - `InquirerPy>=0.3.4` — prompt library for `init_cmd.py` `_ask*` helpers; in `requirements.txt`

@@ -499,6 +499,13 @@ class TestScoreNormalization:
         from metis.score import _normalize_tag_sentiments
 
         evals = [{
+            "dimensions": [
+                {
+                    "name": "domain_background",
+                    "score": 40,
+                    "rationale": "Healthcare regulatory compliance requires HIPAA expertise",
+                }
+            ],
             "tags": [
                 {"text": "stage: public co fit", "sentiment": "amber"},
                 {"text": "domain: foreign", "sentiment": "amber"},
@@ -678,6 +685,34 @@ class TestScoreJobsBatchEdgeCases:
         assert result[1]["eval"]["verdict"] == "skipped" # filled with error eval
         assert result[2]["eval"]["verdict"] == "skipped"
 
+    def test_provider_wrapper_results_are_unwrapped(self):
+        """OpenAI JSON mode may wrap the requested array in a top-level results key."""
+        from metis.score import score_jobs_batch
+        import unittest.mock as mock
+
+        jobs = [self._make_job("Job 1"), self._make_job("Job 2")]
+        wrapped = {
+            "results": [
+                {"score": 80, "verdict": "apply", "leveragePoints": [], "frictionPoints": [], "tags": []},
+                {"score": 62, "verdict": "consider", "leveragePoints": [], "frictionPoints": [], "tags": []},
+            ]
+        }
+        fake_response = mock.MagicMock()
+        fake_response.content = [mock.MagicMock(text=json.dumps(wrapped))]
+        fake_response.usage = mock.MagicMock(
+            input_tokens=100, output_tokens=20,
+            cache_creation_input_tokens=0, cache_read_input_tokens=0,
+        )
+
+        with mock.patch("metis.score._build_score_system", return_value="mock profile"):
+            fake_client = mock.MagicMock()
+            fake_client.messages.create.return_value = fake_response
+            result = score_jobs_batch(fake_client, jobs)
+
+        assert result[0]["eval"]["score"] == 80
+        assert result[1]["eval"]["score"] == 62
+        assert result[1]["eval"]["frictionPoints"] == []
+
     def test_claude_returns_completely_broken_json(self):
         """If Claude returns garbage, all jobs must be marked skipped — no crash."""
         from metis.score import score_jobs_batch
@@ -698,6 +733,26 @@ class TestScoreJobsBatchEdgeCases:
 
         assert result[0]["eval"]["verdict"] == "skipped"
         assert "parse error" in result[0]["eval"]["frictionPoints"][0].lower()
+
+
+def test_domain_foreign_tag_demotes_without_hard_barrier():
+    from metis.score import _normalize_tag_sentiments
+
+    evals = [{
+        "dimensions": [
+            {
+                "name": "domain_background",
+                "score": 70,
+                "rationale": "Retail commerce platform, not AI infra-native",
+            }
+        ],
+        "frictionPoints": ["Retail/commerce platform, not AI infra-native."],
+        "tags": [{"text": "domain: foreign", "sentiment": "red"}],
+    }]
+
+    _normalize_tag_sentiments(evals)
+
+    assert evals[0]["tags"][0] == {"text": "domain: adjacent", "sentiment": "amber"}
 
 
 # ---------------------------------------------------------------------------
@@ -835,16 +890,20 @@ class TestScoreChunkRetry:
         assert result[0]["eval"]["score"] == 75
 
     def test_retries_on_500_and_succeeds(self):
-        """First call raises a transient error; second call succeeds — result is correct."""
+        """First call raises InternalServerError; second call succeeds — result is correct."""
         from metis.score import score_jobs_batch
-        from metis.llm import LLMTransientError
         import unittest.mock as mock
 
         jobs = self._make_jobs(2)
         good = self._good_response(2)
         fake_client = mock.MagicMock()
         fake_client.messages.create.side_effect = [
-            LLMTransientError("Internal server error"),
+            anthropic.InternalServerError(
+                message="Internal server error",
+                response=mock.MagicMock(status_code=500, headers={}),
+                body={"type": "error", "error": {"type": "api_error",
+                      "message": "Internal server error"}},
+            ),
             good,
         ]
 
@@ -857,16 +916,19 @@ class TestScoreChunkRetry:
         assert result[0]["eval"]["score"] == 75
 
     def test_retries_on_rate_limit_and_succeeds(self):
-        """Rate-limit transient error is also retried."""
+        """RateLimitError (429) is also retried."""
         from metis.score import score_jobs_batch
-        from metis.llm import LLMTransientError
         import unittest.mock as mock
 
         jobs = self._make_jobs(1)
         good = self._good_response(1)
         fake_client = mock.MagicMock()
         fake_client.messages.create.side_effect = [
-            LLMTransientError("rate limited"),
+            anthropic.RateLimitError(
+                message="rate limited",
+                response=mock.MagicMock(status_code=429, headers={}),
+                body={},
+            ),
             good,
         ]
 
@@ -878,18 +940,22 @@ class TestScoreChunkRetry:
         assert result[0]["eval"]["score"] == 75
 
     def test_raises_after_max_retries(self):
-        """Three consecutive transient errors must propagate — not silently swallow."""
+        """Three consecutive 500s must propagate — not silently swallow."""
         from metis.score import score_jobs_batch
-        from metis.llm import LLMTransientError
         import unittest.mock as mock
 
         jobs = self._make_jobs(1)
         fake_client = mock.MagicMock()
-        fake_client.messages.create.side_effect = LLMTransientError("Internal server error")
+        fake_client.messages.create.side_effect = anthropic.InternalServerError(
+            message="Internal server error",
+            response=mock.MagicMock(status_code=500, headers={}),
+            body={"type": "error", "error": {"type": "api_error",
+                  "message": "Internal server error"}},
+        )
 
         with mock.patch("metis.score._build_score_system", return_value="mock"), \
              mock.patch("time.sleep"):
-            with pytest.raises(LLMTransientError):
+            with pytest.raises(anthropic.InternalServerError):
                 score_jobs_batch(fake_client, jobs)
 
         assert fake_client.messages.create.call_count == 3   # all 3 attempts made
@@ -1044,6 +1110,17 @@ class TestRenderEdgeCases:
         html = build_digest_html(jobs, "June 14, 2026")
         assert "Acme · " not in html  # no trailing separator
         assert "Acme" in html         # company name still present
+
+    def test_footer_uses_active_provider_label(self, monkeypatch):
+        from metis.render import build_digest_html, build_digest_payload
+
+        monkeypatch.setenv("METIS_LLM_PROVIDER", "openai")
+        payload = build_digest_payload([self._job("apply", 80)], "June 14, 2026")
+        html = build_digest_html([self._job("apply", 80)], "June 14, 2026")
+
+        assert payload["providerLabel"] == "OpenAI"
+        assert "powered by OpenAI" in html
+        assert "powered by Claude" not in html
 
 
 class TestSanitizeLocation:
@@ -1228,7 +1305,7 @@ class TestHardGates:
     """
 
     def _gate(self, jd_quality, profile=None):
-        from scorerole.extract import check_hard_gates
+        from metis.extract import check_hard_gates
         struct = {"jd_quality": jd_quality}
         return check_hard_gates(struct, profile or {})
 
@@ -1251,7 +1328,7 @@ class TestHardGates:
         assert passes
 
     def test_missing_jd_quality_does_not_fire_gate(self):
-        from scorerole.extract import check_hard_gates
+        from metis.extract import check_hard_gates
         passes, gate = check_hard_gates({}, {})
         assert passes
 

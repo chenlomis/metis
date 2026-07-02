@@ -242,6 +242,12 @@ class TestFormatExtractionForScoring:
         out = format_extraction_for_scoring(s)
         assert "3d/wk" in out
 
+    def test_null_company_stage_uses_unknown(self):
+        from metis.extract import format_extraction_for_scoring
+        s = _minimal_struct(company_stage=None, company_tier="large_private")
+        out = format_extraction_for_scoring(s, listing_company="Acme")
+        assert "Company: unknown / large_private (listed as: Acme)" in out
+
     def test_none_struct_returns_empty(self):
         from metis.extract import format_extraction_for_scoring
         assert format_extraction_for_scoring(None) == ""
@@ -282,6 +288,23 @@ class TestExtractJdStructs:
         client.messages.create.return_value = self._good_response(n)
         result = extract_jd_structs(client, [_make_job() for _ in range(n)])
         assert len(result) == n
+
+    def test_provider_wrapper_extractions_are_unwrapped(self):
+        """OpenAI JSON mode may wrap the requested array in a top-level key."""
+        from metis.extract import extract_jd_structs
+
+        wrapped = {"extractions": [_minimal_struct(), _minimal_struct(company_stage="growth")]}
+        r = MagicMock()
+        r.content = [MagicMock(text=json.dumps(wrapped))]
+        r.usage = MagicMock(input_tokens=100, output_tokens=50)
+        client = MagicMock()
+        client.messages.create.return_value = r
+
+        result = extract_jd_structs(client, [_make_job(), _make_job()])
+
+        assert len(result) == 2
+        assert result[0]["jd_quality"] == "high"
+        assert result[1]["company_stage"] == "growth"
 
     def test_large_batch_chunks_correctly(self):
         """More than _EXTRACT_CHUNK_SIZE jobs → multiple API calls."""
@@ -372,11 +395,15 @@ class TestExtractChunkRetry:
         return r
 
     def test_retries_on_500_and_succeeds(self):
+        import anthropic
         from metis.extract import _extract_chunk
-        from metis.llm import LLMTransientError
         client = MagicMock()
         client.messages.create.side_effect = [
-            LLMTransientError("server error"),
+            anthropic.InternalServerError(
+                message="server error",
+                response=MagicMock(status_code=500, headers={}),
+                body={},
+            ),
             self._good_response(),
         ]
         with patch("time.sleep"):
@@ -385,12 +412,16 @@ class TestExtractChunkRetry:
         assert result[0]["jd_quality"] == "high"
 
     def test_raises_after_max_retries(self):
+        import anthropic
         from metis.extract import _extract_chunk, _MAX_ATTEMPTS
-        from metis.llm import LLMTransientError
         client = MagicMock()
-        client.messages.create.side_effect = LLMTransientError("server error")
+        client.messages.create.side_effect = anthropic.InternalServerError(
+            message="server error",
+            response=MagicMock(status_code=500, headers={}),
+            body={},
+        )
         with patch("time.sleep"):
-            with pytest.raises(LLMTransientError):
+            with pytest.raises(anthropic.InternalServerError):
                 _extract_chunk(client, [_make_job()])
         assert client.messages.create.call_count == _MAX_ATTEMPTS
 
@@ -601,6 +632,28 @@ class TestRenderProfileInferred:
         from metis.profile import render_profile
         out = render_profile(self._profile_with_inferred())
         assert isinstance(out, str)
+
+
+class TestRenderProfilePreferences:
+    """render_profile must include normalized preference fields used by scoring."""
+
+    def test_company_scale_and_team_environment_rendered(self):
+        from metis.profile import render_profile
+
+        out = render_profile({
+            "candidate": {"name": "Alex", "location": "NYC"},
+            "target": {"level": "staff", "roles": ["Staff PM"]},
+            "preferences": {
+                "company_stage": ["growth-stage"],
+                "company_scale": "enterprise",
+                "team_environment": "small-team",
+            },
+            "scoring": {"apply_threshold": 75, "consider_threshold": 55},
+        })
+
+        assert "Stage preference: growth-stage" in out
+        assert "Company/customer scale: enterprise" in out
+        assert "Team environment: small-team" in out
 
     def test_no_inferred_block_no_section(self):
         """A profile without inferred must not show the INFERRED BACKGROUND header."""

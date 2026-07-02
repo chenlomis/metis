@@ -257,7 +257,8 @@ def test_claude_process_returns_structured(tmp_data):
 
     fb_anthropic = MagicMock()
     fb_anthropic.Anthropic.return_value = mock_client
-    with patch.dict("sys.modules", {"anthropic": fb_anthropic}):
+    with patch.dict("os.environ", {"METIS_LLM_PROVIDER": "anthropic"}, clear=False), \
+         patch.dict("sys.modules", {"anthropic": fb_anthropic}):
         result = _claude_process("GitLab score is right but caution wrong", None, "fake-key")
 
     assert result is not None
@@ -273,7 +274,8 @@ def test_claude_process_returns_none_on_bad_json(tmp_data):
 
     fb_anthropic = MagicMock()
     fb_anthropic.Anthropic.return_value = mock_client
-    with patch.dict("sys.modules", {"anthropic": fb_anthropic}):
+    with patch.dict("os.environ", {"METIS_LLM_PROVIDER": "anthropic"}, clear=False), \
+         patch.dict("sys.modules", {"anthropic": fb_anthropic}):
         result = _claude_process("some feedback", None, "fake-key")
 
     assert result is None
@@ -287,7 +289,8 @@ def test_claude_process_returns_none_on_api_error(tmp_data):
 
     fb_anthropic = MagicMock()
     fb_anthropic.Anthropic.return_value = mock_client
-    with patch.dict("sys.modules", {"anthropic": fb_anthropic}):
+    with patch.dict("os.environ", {"METIS_LLM_PROVIDER": "anthropic"}, clear=False), \
+         patch.dict("sys.modules", {"anthropic": fb_anthropic}):
         result = _claude_process("some feedback", None, "fake-key")
 
     assert result is None
@@ -304,7 +307,8 @@ def test_claude_process_fills_missing_keys(tmp_data):
 
     fb_anthropic = MagicMock()
     fb_anthropic.Anthropic.return_value = mock_client
-    with patch.dict("sys.modules", {"anthropic": fb_anthropic}):
+    with patch.dict("os.environ", {"METIS_LLM_PROVIDER": "anthropic"}, clear=False), \
+         patch.dict("sys.modules", {"anthropic": fb_anthropic}):
         result = _claude_process("note", None, "fake-key")
 
     assert result is not None
@@ -642,7 +646,8 @@ def test_claude_process_with_existing_feedback(tmp_data):
 
     fb_anthropic = MagicMock()
     fb_anthropic.Anthropic.return_value = mock_client
-    with patch.dict("sys.modules", {"anthropic": fb_anthropic}):
+    with patch.dict("os.environ", {"METIS_LLM_PROVIDER": "anthropic"}, clear=False), \
+         patch.dict("sys.modules", {"anthropic": fb_anthropic}):
         result = _claude_process(new_text, existing, "fake-key")
 
     assert result is not None

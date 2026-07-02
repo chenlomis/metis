@@ -48,7 +48,7 @@ Avoid committing the MP4 directly; it is over 100 MB.
 
 ## What it does
 
-**Profile setup (`metis init`).** This interactive wizard builds your profile by reading your resume and LinkedIn profile, then asking about your aspirations, preferences, and deal breakers. Claude uses that context to generate `profile.yaml`, which every future scoring run is evaluated against. You can rerun the wizard or edit the file directly at any time.
+**Profile setup (`metis init`).** This interactive wizard builds your profile by reading your resume and LinkedIn profile, then asking about your aspirations, preferences, and deal breakers. The configured LLM provider uses that context to generate `profile.yaml`, which every future scoring run is evaluated against. You can rerun the wizard or edit the file directly at any time.
 
 On first setup, metis prompts you to connect Gmail or Outlook in the browser so it can read job-alert emails and send digests from your own account. You can also add company career-page sources and enable automated delivery during setup, or reconfigure them later with `metis config access`, `metis sources add`, and `metis schedule set`.
 
@@ -146,7 +146,7 @@ Plan for about **5-10 minutes** to get set up, plus up to 24 hours for the first
 
 - macOS and Linux are supported. Windows via WSL2 should work but is untested.
 - Node.js 18+ is optional. It enables the polished React Email renderer; without it, metis uses a simpler Python HTML fallback.
-- Anthropic is the default and best-tested LLM provider. OpenAI is supported, but score calibration is still catching up.
+- Anthropic is the default LLM provider. OpenAI is supported across `metis`, `metis init`, `metis feedback`, and tracker LLM fallback through the same provider boundary. Gemini and Grok/XAI are future adapters.
 
 <a id="linkedin-alerts"></a>
 

@@ -34,6 +34,8 @@ FULL_PROFILE = {
     },
     "preferences": {
         "company_stage": ["series_b", "series_c"],
+        "company_scale": "enterprise",
+        "team_environment": "small-team",
         "industry_targets": ["AI infrastructure", "developer tools"],
         "industry_avoid": ["adtech", "gaming"],
     },
@@ -111,6 +113,12 @@ class TestBuildCandidateContext:
         result = build_candidate_context(FULL_PROFILE)
         assert "AI infrastructure" in result
         assert "adtech" in result
+
+    def test_company_scale_and_team_environment(self):
+        from metis.prompts import build_candidate_context
+        result = build_candidate_context(FULL_PROFILE)
+        assert "Company/customer scale: enterprise" in result
+        assert "Team environment: small-team" in result
 
 
 # ---------------------------------------------------------------------------

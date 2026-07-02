@@ -133,7 +133,9 @@ aspirations:
 
 preferences:
   company_stage: []
-  company_size: null
+  company_scale: null             # "SMB", "mid-market", "enterprise", or null
+  team_environment: null          # "small-team", "medium-team", "large-org", or null
+  company_size: null              # legacy alias; prefer team_environment for new profiles
   company_environment: null      # e.g. "startup", "enterprise", "mission-driven"
   industry_targets: []
   industry_avoid: []
@@ -373,6 +375,11 @@ def build_candidate_context(profile: dict) -> str:
         parts.append(f"Prefers: {', '.join(prefer)}")
     if avoid:
         parts.append(f"Avoid company types: {', '.join(avoid)}")
+
+    if pref.get("company_scale"):
+        parts.append(f"Company/customer scale: {pref['company_scale']}")
+    if pref.get("team_environment"):
+        parts.append(f"Team environment: {pref['team_environment']}")
 
     # Industry signals
     ind_targets = pref.get("industry_targets", [])

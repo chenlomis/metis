@@ -14,7 +14,7 @@ Design session log — decisions made so future sessions don't re-litigate them.
 - Title: "Metis Digest" (fallback when no candidate name set; replaced by personalized greeting otherwise)
 - Stat tiles: 3 filled colored tiles (Evaluated / Solid Match / Moderate Match)
 - Legend row with colored dots
-- Footer: "Metis · powered by Claude · N roles evaluated"
+- Footer: "Metis · powered by <provider> · N roles evaluated"
 
 **Decided NOT to add:**
 - Unsubscribe link — this is a self-addressed CLI tool; `metis schedule --remove` is the equivalent
@@ -94,9 +94,9 @@ Min 80 cols. Below that: print warning + `sys.exit(1)`. No reflow attempt below 
 ── Constraints     deal-breakers, salary floor
 ── Strengths       differentiators, proof points
 ── Green flags     boost signals, company types drawn to
-── Gaps            yellow flags, red flags (surfaced by Claude, user can correct)
+── Gaps            yellow flags, red flags (surfaced by the configured LLM, user can correct)
 ── Scoring config  apply threshold (default 75), consider threshold (default 55)
-── Scoring overrides  free-text edge cases injected into Claude's scoring prompt
+── Scoring overrides  free-text edge cases injected into the scoring prompt
 ```
 
 ### Quick edit principle

@@ -177,6 +177,56 @@ def _norm_key(title: str, company: str) -> str:
     return re.sub(r"[^a-z0-9]", "", (title + company).lower())
 
 
+def _norm_entity(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
+def _role_matches_company(role_title: str | None, company: str | None) -> bool:
+    """Return True when a parsed role title is just the company name."""
+    if not role_title or not company:
+        return False
+    return _norm_entity(str(role_title)) == _norm_entity(str(company))
+
+
+def _external_role_title(role_title: str | None, company: str | None, suggestion_status: str) -> str:
+    """Normalize role titles for confirmation-email backfill rows.
+
+    External confirmation emails often omit the actual job title. In that path,
+    never let the role_title cell duplicate company; use the explicit placeholder
+    instead so downstream matching and human review remain clear.
+    """
+    title = str(role_title or "").strip()
+    if _role_matches_company(title, company):
+        title = ""
+    if title:
+        return title
+    if suggestion_status in ("External", "Pre-tracker"):
+        return "External application"
+    return ""
+
+
+def _apply_row_alignment(ws, row_idx: int) -> None:
+    """Apply tracker alignment convention to one data row."""
+    from openpyxl.styles import Alignment
+
+    for col_idx in (
+        _COL_DATE_SUGGESTED,
+        _COL_MATCH_SCORE,
+        _COL_SUGGESTION_STATUS,
+        _COL_ACTION_TAKEN,
+        _COL_DATE_APPLIED,
+        _COL_APP_STATUS,
+    ):
+        ws.cell(row_idx, col_idx).alignment = Alignment(horizontal="center", vertical="top")
+
+    for col_idx in (_COL_ROLE_TITLE, _COL_COMPANY, _COL_NOTES):
+        ws.cell(row_idx, col_idx).alignment = Alignment(
+            horizontal="left",
+            vertical="top",
+            wrap_text=(col_idx == _COL_NOTES),
+        )
+
+
 def _make_fill(hex_color: str):
     from openpyxl.styles import PatternFill
     return PatternFill(fill_type="solid", fgColor=hex_color)
@@ -273,14 +323,12 @@ def _existing_keys(ws) -> dict[str, int]:
 
 
 def _append_job_row(ws, job: dict, run_date_str: str) -> None:
-    from openpyxl.styles import Alignment
-
     row_values = _build_row_values(job, run_date_str)
     next_row = ws.max_row + 1
 
     for col_idx, value in enumerate(row_values, start=1):
         cell = ws.cell(next_row, col_idx, value)
-        cell.alignment = Alignment(vertical="top", wrap_text=(col_idx == _COL_NOTES))
+    _apply_row_alignment(ws, next_row)
 
     # Overwrite role_title cell with hyperlink
     url = job.get("url") or job.get("apply_url", "")
@@ -298,36 +346,25 @@ def _append_job_row(ws, job: dict, run_date_str: str) -> None:
 
 def format_tracker_sheet(ws) -> None:
     """Normalize tracker presentation without changing column order or values."""
-    from openpyxl.styles import Alignment
-
     _set_column_widths(ws)
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = ws.dimensions
 
     for row_idx in range(2, ws.max_row + 1):
         ws.cell(row_idx, _COL_MATCH_SCORE).number_format = "0%"
+        _apply_row_alignment(ws, row_idx)
 
-        for col_idx in (
-            _COL_DATE_SUGGESTED,
-            _COL_MATCH_SCORE,
-            _COL_SUGGESTION_STATUS,
-            _COL_ACTION_TAKEN,
-            _COL_DATE_APPLIED,
-            _COL_APP_STATUS,
-        ):
-            ws.cell(row_idx, col_idx).alignment = Alignment(horizontal="center", vertical="top")
-
-        for col_idx in (_COL_ROLE_TITLE, _COL_COMPANY, _COL_NOTES):
-            ws.cell(row_idx, col_idx).alignment = Alignment(
-                horizontal="left",
-                vertical="top",
-                wrap_text=(col_idx == _COL_NOTES),
-            )
+        suggestion_status = str(ws.cell(row_idx, _COL_SUGGESTION_STATUS).value or "")
+        title_cell = ws.cell(row_idx, _COL_ROLE_TITLE)
+        company = str(ws.cell(row_idx, _COL_COMPANY).value or "")
+        normalized_title = _external_role_title(title_cell.value, company, suggestion_status)
+        if normalized_title != str(title_cell.value or ""):
+            title_cell.value = normalized_title
 
         _apply_row_styles(
             ws,
             row_idx,
-            str(ws.cell(row_idx, _COL_SUGGESTION_STATUS).value or ""),
+            suggestion_status,
             str(ws.cell(row_idx, _COL_ACTION_TAKEN).value or ""),
             str(ws.cell(row_idx, _COL_APP_STATUS).value or ""),
         )

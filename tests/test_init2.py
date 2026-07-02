@@ -4,7 +4,7 @@ Tests for metis init (init_cmd.py).
 Coverage:
   - _apply_guardrails: all four followup kinds, priority ordering, cap at 3
   - _apply_clarification_answer: all three handled kinds
-  - _extract_with_claude_v2: markdown fence stripping, YAML parse, _followups pop
+  - _extract_with_llm_v2: markdown fence stripping, YAML parse, _followups pop
   - run_init subcommand registration: 'init' routes to run_init
   - Regression: existing init / schedule / core tests unaffected
 """
@@ -81,6 +81,13 @@ class TestApplyGuardrails:
         result = _apply_guardrails(profile, [], "remote only, no office", dontwant_skipped=True)
         kinds = [f["kind"] for f in result]
         assert "remote_only_or_preferred" not in kinds
+
+    def test_missing_location_preference_adds_followup(self):
+        from metis.init_cmd import _apply_guardrails
+        profile = _base_profile(candidate={"name": "Test User", "location": "SF, CA"})
+        result = _apply_guardrails(profile, [], "looking for PM roles", dontwant_skipped=True)
+        kinds = [f["kind"] for f in result]
+        assert "remote_only_or_preferred" in kinds
 
     def test_dontwant_not_skipped_no_deal_breakers_adds_followup(self):
         from metis.init_cmd import _apply_guardrails
@@ -202,7 +209,7 @@ class TestApplyClarificationAnswer:
 
 
 # ---------------------------------------------------------------------------
-# _extract_with_claude_v2 (mocked API)
+# _extract_with_llm_v2 (mocked API)
 # ---------------------------------------------------------------------------
 
 class TestExtractWithClaudeV2:
@@ -217,14 +224,14 @@ class TestExtractWithClaudeV2:
         client.messages.create.return_value = self._fake_response(text)
         return client
 
-    def _call(self, client, want="looking for PM roles", dontwant=""):
-        from metis.init_cmd import _extract_with_claude_v2
+    def _call(self, client, want="looking for PM roles", dontwant="", provider="anthropic"):
+        from metis.init_cmd import _extract_with_llm_v2
         console = mock.MagicMock()
         console.status.return_value.__enter__ = mock.MagicMock(return_value=None)
         console.status.return_value.__exit__ = mock.MagicMock(return_value=False)
-        # anthropic is imported inside the function, so patch at the anthropic module level
-        with mock.patch("anthropic.Anthropic", return_value=client):
-            return _extract_with_claude_v2("sk-fake", "resume text", "", want, dontwant, console)
+        with mock.patch.dict("os.environ", {"METIS_LLM_PROVIDER": provider}, clear=False), \
+             mock.patch("metis.init_cmd.create_llm_client", return_value=client):
+            return _extract_with_llm_v2("sk-fake", "resume text", "", want, dontwant, console)
 
     def test_clean_yaml_parsed(self):
         yaml_str = "candidate:\n  name: Test\nstrengths: []\n_followups: []\n"
@@ -253,6 +260,181 @@ class TestExtractWithClaudeV2:
         client = self._make_client(fenced)
         profile, _ = self._call(client)
         assert profile.get("candidate", {}).get("name") == "Fenced"
+
+    def test_openai_prefaced_fenced_yaml_is_recovered(self):
+        fenced = (
+            "Here is the extracted profile:\n\n"
+            "```yaml\n"
+            "candidate:\n"
+            "  name: Test User\n"
+            "target:\n"
+            "  roles:\n"
+            "    - \"Principal PM: AI Platform\"\n"
+            "    - Staff PM: Internal AI\n"
+            "notes: looking for PM roles\n"
+            "_followups: []\n"
+            "```"
+        )
+        client = self._make_client(fenced)
+        profile, followups = self._call(client, provider="openai")
+
+        assert profile.get("candidate", {}).get("name") == "Test User"
+        assert profile.get("target", {}).get("roles") == [
+            "Principal PM: AI Platform",
+            "Staff PM: Internal AI",
+        ]
+        assert profile.get("notes") == "looking for PM roles"
+        assert followups == []
+
+    def test_openai_blank_extraction_fails_before_save(self):
+        client = self._make_client("not: valid: yaml: [[[")
+        with pytest.raises(ValueError, match="OpenAI profile extraction produced blank"):
+            self._call(client, provider="openai")
+
+    @pytest.mark.parametrize("provider", ["anthropic", "openai"])
+    def test_step_two_text_backfills_missing_target_and_aspirations(self, provider):
+        sparse = (
+            "candidate:\n"
+            "  name: Test User\n"
+            "target:\n"
+            "  roles: []\n"
+            "  level: null\n"
+            "aspirations:\n"
+            "  track: null\n"
+            "  direction: null\n"
+            "  company_types: []\n"
+            "preferences:\n"
+            "  company_stage: []\n"
+            "  company_size: null\n"
+            "inferred:\n"
+            "  customer_types: []\n"
+            "notes: null\n"
+            "_followups: []\n"
+        )
+        client = self._make_client(sparse)
+        want = (
+            "Staff or Principal PM at an AI infrastructure or developer tools company. "
+            "Prefer growth-stage, remote-first, small team. "
+            "Excited by agentic AI or LLM infra."
+        )
+        profile, _ = self._call(client, want=want, provider=provider)
+
+        assert profile["target"]["roles"] == ["Staff PM", "Principal PM"]
+        assert profile["target"]["level"] == "staff"
+        assert profile["aspirations"]["track"] == "ic"
+        assert profile["aspirations"]["direction"] == "agentic AI or LLM infra"
+        assert profile["target"]["role_family"] == "product"
+        assert profile["aspirations"]["company_types"] == ["ai-infrastructure", "developer-tools"]
+        assert profile["preferences"]["company_stage"] == ["growth-stage"]
+        assert profile["preferences"]["team_environment"] == "small-team"
+        assert profile["preferences"]["company_size"] == "small-team"
+        assert profile["candidate"]["location_preference"] == "remote"
+        assert profile["inferred"]["customer_types"] == ["developer"]
+        assert profile["notes"] == want
+
+    @pytest.mark.parametrize("provider", ["anthropic", "openai"])
+    @pytest.mark.parametrize("want", [
+        (
+            "I have spent the last few years scaling developer-facing platforms, and now I am ready "
+            "for my next big play as an individual contributor. Ideally, I am looking to step into "
+            "a Principal Product Manager role, though I would also consider a Staff PM title if the "
+            "scope is right. I am incredibly passionate about agentic AI and LLM infrastructure. "
+            "Culturally, I thrive best in remote-first environments with a small, tight-knit crew. "
+            "I am targeting growth-stage companies. My primary users should be engineers and developers."
+        ),
+        (
+            "Target Role: Staff / Principal Product Manager (IC Track)\n"
+            "Focus Areas: LLM Infrastructure, Agentic AI Frameworks, Developer Tools\n"
+            "Ideal Company: Growth-stage startup with a small team footprint. Must support 100% remote work.\n"
+            "Core Audience: B2B Developer & Engineering personas."
+        ),
+        (
+            "Honestly, I just want to build cool stuff for devs. I am looking for my next IC gig, "
+            "something at the Staff level or a Principal PM title. It needs to be remote. "
+            "Industry-wise, I am super fascinated by agentic AI and the whole LLM infra stack. "
+            "I would love a growth-stage company where the team is still relatively small."
+        ),
+        (
+            "Right now, the most exciting space in tech is agentic AI and LLM infra. I want to build "
+            "developer tools in that domain. I am looking for a small, growth-stage team that operates "
+            "remotely. My next position should be a Staff or Principal PM slot on the individual contributor track."
+        ),
+        (
+            "Staff/Principal IC PM looking for a remote, small-team, growth-stage AI infra/dev-tools "
+            "company. Obsessed with LLM infra and agentic AI. Building for developers."
+        ),
+        (
+            "Accomplished individual contributor seeking a Staff or Principal Product Manager position "
+            "within a growth-stage developer tools organization. My objective is to advance LLM "
+            "infrastructure and agentic AI capabilities. I require a remote-first environment and prefer "
+            "a small, agile team focused on high-impact developer products."
+        ),
+        (
+            "Devs are struggling with the underlying plumbing of LLMs and autonomous agents. I want to "
+            "solve that problem. I am looking to lead product strategy for these developer tools at the "
+            "Staff PM or Principal level, staying away from people management. I want a small team "
+            "environment where I can work remotely, preferably a company in a solid growth stage."
+        ),
+        (
+            "Remote work is a non-negotiable requirement.\n"
+            "I want to stay on the IC track, aiming for Staff or Principal PM.\n"
+            "The product must be developer-centric, either AI infrastructure or dev tools.\n"
+            "Deeply interested in the agentic AI or LLM infra space.\n"
+            "Company profile: Growth-stage, small team."
+        ),
+    ])
+    def test_step_two_backfills_common_wording_variations(self, provider, want):
+        sparse = (
+            "candidate:\n"
+            "  name: Test User\n"
+            "target:\n"
+            "  roles: []\n"
+            "  level: null\n"
+            "aspirations:\n"
+            "  track: null\n"
+            "  direction: null\n"
+            "  company_types: []\n"
+            "preferences:\n"
+            "  company_stage: []\n"
+            "  company_size: null\n"
+            "inferred:\n"
+            "  customer_types: []\n"
+            "notes: null\n"
+            "_followups: []\n"
+        )
+        client = self._make_client(sparse)
+        profile, _ = self._call(client, want=want, provider=provider)
+
+        assert set(profile["target"]["roles"]) == {"Staff PM", "Principal PM"}
+        assert profile["target"]["level"] == "staff"
+        assert profile["aspirations"]["track"] == "ic"
+        assert profile["aspirations"]["direction"]
+        assert profile["aspirations"]["company_types"]
+        assert profile["preferences"]["company_stage"] == ["growth-stage"]
+        assert profile["preferences"]["team_environment"] == "small-team"
+        assert profile["candidate"]["location_preference"] == "remote"
+        assert "developer" in profile["inferred"]["customer_types"]
+
+    def test_step_three_text_backfills_missing_avoid_company_types(self):
+        sparse = (
+            "candidate:\n"
+            "  name: Test User\n"
+            "target:\n"
+            "  roles:\n"
+            "    - Staff PM\n"
+            "notes: looking for Staff PM roles\n"
+            "aspirations:\n"
+            "  avoid_company_types: []\n"
+            "_followups: []\n"
+        )
+        client = self._make_client(sparse)
+        profile, _ = self._call(
+            client,
+            want="Staff PM at a developer tools company.",
+            dontwant="Pass on AI infrastructure companies and regular onsite travel.",
+        )
+
+        assert profile["aspirations"]["avoid_company_types"] == ["ai-infrastructure"]
 
     def test_invalid_yaml_returns_empty_dict(self):
         client = self._make_client("not: valid: yaml: [[[")

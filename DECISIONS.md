@@ -27,7 +27,7 @@ They are search-criteria, not identity. Keeping them top-level (not under `prefe
 ## Onboarding (`metis init`)
 
 **D-06 · `metis init` is the canonical setup wizard**
-The current flow (resume import → Claude extraction → preference/deal-breaker questions → review + save) proved lower-friction than the older structured form. As of June 2026, `metis init` is the only public onboarding command. Legacy setup code may remain for reference, but it should not appear in public help or docs.
+The current flow (resume import → LLM extraction → preference/deal-breaker questions → review + save) proved lower-friction than the older structured form. As of June 2026, `metis init` is the only public onboarding command. Legacy setup code may remain for reference, but it should not appear in public help or docs.
 
 **D-07 · The init edit menu mirrors wizard steps, not profile fields**
 The review menu offers "Step 2 — What you're looking for" and "Step 3 — What you'd pass on" rather than "Roles + level", "Salary floor", etc. Users entered data through steps, so editing should mirror that mental model. Field-level edits available via "Open profile in editor" for power users.
@@ -100,7 +100,7 @@ Google installed-app guidance. Do not remove these to simplify tests.
 Reconnect flows force account selection so users can replace one Gmail/Outlook account with
 another. Current implementation scope is provider-neutral non-LinkedIn email alert fetching;
 legacy Gmail paths remain in LinkedIn alert fetching, tracker/backfill, and main digest
-delivery until the provider abstraction is wired through those surfaces.
+delivery until the email-provider abstraction is wired through those surfaces.
 
 **D-19 · Interface roadmap: CLI → MCP → PyPI package → Docker → Web app**
 Each stage gates on the previous. MCP server is next and requires a "config as parameters" refactor so core functions don't read from `.env` at import time. Web app is not planned speculatively — only if OSS adoption demonstrates demand.
@@ -329,6 +329,20 @@ Regex patterns in `extract_role()` only match when emails use standard phrasing 
 
 **D-63 · `--no-limit` requires explicit confirmation; blocked silently in cron**
 `--no-limit` bypasses `MAX_JOBS_PER_RUN` and previously triggered unbounded Sonnet scoring with no guard — confirmed to exhaust API credits in production. Fix: when `--no-limit` is passed and `n_found > MAX_JOBS_PER_RUN`: (a) interactive TTY → print cost estimate + prompt `[y/N]`; only proceeds on `y`. (b) non-TTY (cron/scheduled) → log warning and cap to `MAX_JOBS_PER_RUN` automatically. The `--no-limit` flag remains useful for one-off catch-up runs; it just requires intent confirmation.
+
+**D-64 · LLM provider boundary is adapter-owned; normalization is provider-agnostic**
+Anthropic and OpenAI are both supported through `metis.llm`, which exposes `complete_text()`,
+`create_llm_client()`, provider normalization, usage metadata, and per-stage model resolution.
+Scoring, extraction, feedback, init, and tracker fallback should consume provider-neutral
+`LLMResponse.text` instead of SDK-specific response objects. Provider-specific response quirks
+belong in the adapter or in narrow parser recovery functions.
+
+`metis init` follows a two-step contract: raw extraction first, deterministic normalization
+second. `normalization.py` maps free-text evidence into canonical fields such as
+`role_family`, `target.level`, `aspirations.track`, `company_stage`, `company_scale`,
+`team_environment`, `location_preference`, and `customer_types`. This prevents model style
+differences from becoming profile schema drift. `unknown` means no usable signal; `other`
+means the user gave a signal outside the current taxonomy.
 
 **D-57 · React Email templates bundled in the Python package; `npm install` runs on first digest**
 React Email requires Node + `node_modules`, which can't be pip-installed. Resolution: ship `render.ts`, `package.json`, `tsconfig.json`, and all `.tsx` files inside `metis/email_templates/` as setuptools package-data. On first `metis` run, `render.py:_resolve_react_dir()` copies these to `~/.job_pipeline/email_templates/` and runs `npm install --prefer-offline` there (one-time, ~30s). Subsequent runs reuse the cached `node_modules`. If Node is absent the Python fallback (`build_digest_html()`) is used silently. Dev workflow unchanged: project-root `node_modules` takes priority when present.

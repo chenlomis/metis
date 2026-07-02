@@ -1,4 +1,4 @@
-"""scorerole/track.py — thin orchestrator for the track pipeline stage.
+"""metis/track.py — thin orchestrator for the track pipeline stage.
 
 Usage:
     metis track                   # parse emails from last 7 days
@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import datetime
 import email as email_lib
+import html as html_lib
 import imaplib
 import logging
+import os
 import re
 import sys
 import time
@@ -59,7 +61,7 @@ def _infer_company_from_known_apps(email_dict: dict, applied_companies: set[str]
         return None
     return max(matches, key=len)
 
-# Re-exports for backward-compat (tests import from scorerole.track)
+# Re-exports for backward-compat
 from .track_parse import classify_email, _LLM_VALID_CLASSES  # noqa: F401
 from .track_write import update_recruiter_screen              # noqa: F401
 
@@ -105,6 +107,8 @@ _SUBJECT_IMPLIES_REJECTION = re.compile(
 # ---------------------------------------------------------------------------
 
 _COMPANY_FROM_SUBJECT = [
+    # "Thanks for applying to the {ROLE} Role at {COMPANY}" (Intuit)
+    re.compile(r"thanks for applying to the .+? role at ([A-Za-z0-9][^!,\n]+?)(?:[!,]|$)", re.IGNORECASE),
     # "applying to/at {COMPANY}[!, comma, end]"  — Yelp uses "at", most use "to"
     re.compile(r"applying (?:to|at) ([A-Za-z0-9][^!,\n]+?)(?:[!,]|$)", re.IGNORECASE),
     # "application to the {ROLE} role at {COMPANY}" — must come before bare "application to"
@@ -159,6 +163,7 @@ _ROLE_TITLE_WORDS = re.compile(
 )
 
 _COMPANY_FROM_BODY = [
+    re.compile(r"career opportunities at ([A-Z][A-Za-z0-9 &.]+?)(?:!|\n)", re.IGNORECASE),
     re.compile(r"applying (?:for|to) .+? (?:role|position)(?: here)? at ([A-Z][A-Za-z0-9 &.,]+?)[\.\!,\n]"),
     re.compile(r"apply for .+ (?:role|position) at ([A-Z][A-Za-z0-9 &.,]+?)[\.\!,\n]"),
     re.compile(r"interest in ([A-Z][A-Za-z0-9 &.,]+?) and"),
@@ -170,6 +175,9 @@ _COMPANY_FROM_BODY = [
 # ---------------------------------------------------------------------------
 
 _ROLE_FROM_BODY = [
+    re.compile(r"our role:\s*(.+?)(?:\.|\n|$)", re.IGNORECASE),
+    re.compile(r"following position:\s*(.+?)(?:\s+[—–-]\s+|\(|\n|$)", re.IGNORECASE),
+    re.compile(r"complete your application for\s+(.+?)(?:\s+-\s+[A-Z][A-Za-z0-9 &.]+?\s*,|\s*,\s+and|\s+and\s+we|\.)", re.IGNORECASE | re.DOTALL),
     re.compile(r"apply(?:ing)? (?:for|to) the (.+?) (?:role|position)", re.IGNORECASE),
     re.compile(r"your application for the (.+?) (?:role|position)", re.IGNORECASE),
     re.compile(r"application for the (.+?) (?:role|position)", re.IGNORECASE),
@@ -267,6 +275,63 @@ def _extract_body(msg) -> str:
     if html_parts:
         return _strip_html("\n".join(html_parts))
     return ""
+
+
+def _extract_links(msg) -> list[str]:
+    """Extract candidate links from plain/html email parts without fetching them."""
+    links: list[str] = []
+
+    def _add_from_text(text: str) -> None:
+        for url in re.findall(r"https?://[^\s<>\"]+", text):
+            links.append(html_lib.unescape(url).rstrip(").,;"))
+
+    def _add_from_html(text: str) -> None:
+        for raw in re.findall(r'''href=["']([^"']+)["']''', text, flags=re.IGNORECASE):
+            url = html_lib.unescape(raw)
+            if url.startswith("http"):
+                links.append(url.rstrip(").,;"))
+        _add_from_text(text)
+
+    if msg.is_multipart():
+        for part in msg.walk():
+            ct = part.get_content_type()
+            payload = part.get_payload(decode=True)
+            if not payload:
+                continue
+            decoded = _safe_decode(payload, part.get_content_charset())
+            if ct == "text/html":
+                _add_from_html(decoded)
+            elif ct == "text/plain":
+                _add_from_text(decoded)
+    else:
+        payload = msg.get_payload(decode=True)
+        if payload:
+            decoded = _safe_decode(payload, msg.get_content_charset())
+            if msg.get_content_type() == "text/html":
+                _add_from_html(decoded)
+            else:
+                _add_from_text(decoded)
+
+    seen: set[str] = set()
+    unique: list[str] = []
+    for link in links:
+        if link not in seen:
+            seen.add(link)
+            unique.append(link)
+    return unique
+
+
+def _candidate_job_url(links: list[str] | None) -> str | None:
+    """Pick the most useful job URL from email links, preferring LinkedIn JDs."""
+    if not links:
+        return None
+    for link in links:
+        if re.search(r"linkedin\.com/(?:jobs/view|comm/jobs/view)", link, re.IGNORECASE):
+            return link
+    for link in links:
+        if re.search(r"(?:greenhouse|lever|ashbyhq|workday|myworkdayjobs|smartrecruiters)", link, re.IGNORECASE):
+            return link
+    return None
 
 
 def fetch_candidate_emails(
@@ -397,11 +462,13 @@ def fetch_candidate_emails(
                     email_date = _email_date_iso(date_header)
 
                     body = _extract_body(msg)
+                    links = _extract_links(msg)
                     log.debug("track: fetched — %s | from: %s", subject[:80], sender[:50])
                     emails.append({
                         "subject": subject,
                         "sender":  sender,
                         "body":    body,
+                        "links":   links,
                         "date":    email_date,
                     })
             break   # success
@@ -495,7 +562,7 @@ _ROLE_TITLE_SIGNAL = re.compile(
 
 def _clean_role(raw: str) -> str | None:
     """Normalize and validate a raw role string."""
-    role = raw.strip()
+    role = " ".join(raw.split())
     # Drop ATS job IDs: "(ID: 10443018)", "JR2018175 Senior...", "200022543"
     role = re.sub(r"\s*[\(\[]?(?:ID|JR|REQ)[:\s]\S+[\)\]]?", "", role, flags=re.IGNORECASE)
     role = re.sub(r"^\w{2,}\d{6,}\s+", "", role)   # leading alphanumeric job codes
@@ -557,17 +624,23 @@ No punctuation, no explanation, no quotes."""
 
 
 def _extract_role_llm(subject: str, body: str, client) -> str | None:
-    """Haiku fallback when regex role extraction returns nothing."""
+    """LLM fallback when regex role extraction returns nothing."""
+    from .llm import complete_text, normalize_provider, resolve_stage_models
+
+    provider = normalize_provider(os.getenv("METIS_LLM_PROVIDER", os.getenv("LLM_PROVIDER", "anthropic")))
+    model = resolve_stage_models(provider)["extract_model"]
     try:
-        resp = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+        resp = complete_text(
+            client,
+            model=model,
             max_tokens=30,
-            messages=[{"role": "user", "content": _ROLE_EXTRACT_PROMPT.format(
+            system="Extract the exact job title from the email when present.",
+            user=_ROLE_EXTRACT_PROMPT.format(
                 subject=subject,
                 body=body[:1500],
-            )}],
+            ),
         )
-        result = resp.content[0].text.strip()
+        result = resp.text.strip()
         if result.upper() == "NONE" or not result:
             return None
         return _clean_role(result)
@@ -600,6 +673,7 @@ def parse_email(email_dict: dict, llm_client=None) -> dict:
         "classification": classification,
         "company":        company,
         "role":           role,
+        "url":            _candidate_job_url(email_dict.get("links")),
         "date":           email_dict["date"],
         "subject":        subject,
         "sender":         email_dict["sender"],
@@ -797,15 +871,15 @@ def _write_row_from_email(ws, parsed: dict, suggestion_status: str,
                           match_score: float | None = None,
                           url: str = "") -> None:
     """Shared helper: append one row to ws from parsed email data."""
-    from openpyxl.styles import Alignment
-    from .xlsx import _set_hyperlink
+    from .xlsx import _apply_row_alignment, _external_role_title, _set_hyperlink
 
     next_row = ws.max_row + 1
-    role_title = parsed.get("role") or ("External application" if suggestion_status == "External" else "")
+    company = parsed.get("company") or ""
+    role_title = _external_role_title(parsed.get("role"), company, suggestion_status)
     values = [
         date_suggested or parsed["date"],
         role_title,
-        parsed.get("company") or "",
+        company,
         match_score,
         suggestion_status,
         "Applied",
@@ -814,10 +888,12 @@ def _write_row_from_email(ws, parsed: dict, suggestion_status: str,
         None,
     ]
     for col_idx, value in enumerate(values, start=1):
-        ws.cell(next_row, col_idx, value).alignment = Alignment(vertical="top")
+        ws.cell(next_row, col_idx, value)
+    _apply_row_alignment(ws, next_row)
 
-    if url:
-        _set_hyperlink(ws.cell(next_row, 2), url, values[1])
+    link_url = url or parsed.get("url") or ""
+    if link_url:
+        _set_hyperlink(ws.cell(next_row, 2), link_url, values[1])
 
     ws.cell(next_row, 4).number_format = "0%"
     for col, val in [(5, suggestion_status), (6, "Applied"), (8, "Pending")]:
@@ -840,6 +916,8 @@ def create_skipped_row(ws, parsed: dict, skipped_meta: dict) -> None:
         ws.cell(next_row, 2).value = skipped_meta["role_title"]
     if skipped_meta.get("company"):
         ws.cell(next_row, 3).value = skipped_meta["company"]
+    from .xlsx import _apply_row_alignment
+    _apply_row_alignment(ws, next_row)
 
 
 def create_backfill_row(ws, parsed: dict) -> None:
@@ -1073,10 +1151,10 @@ def backfill_from_digests(
 # ---------------------------------------------------------------------------
 
 def _build_llm_client(api_key: str | None):
-    """Return an Anthropic client if profile.yaml has track.llm_fallback: true.
+    """Return a provider-neutral LLM client unless fallback is explicitly disabled.
 
-    Returns None when the flag is absent, false, or the api_key is missing —
-    so classify_email() runs phrase-only (safe for OSS users with no key).
+    Returns None when the api_key is missing or profile.yaml has
+    track.llm_fallback: false, so OSS users without a key still run phrase-only.
     """
     if not api_key:
         return None
@@ -1085,12 +1163,14 @@ def _build_llm_client(api_key: str | None):
         profile = load_profile_yaml() or {}
     except Exception:
         return None
-    if not profile.get("track", {}).get("llm_fallback", False):
+    if profile.get("track", {}).get("llm_fallback", True) is False:
         return None
     try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
-        log.info("track: LLM fallback enabled (Haiku) for unknown emails")
+        from .llm import create_llm_client, normalize_provider
+
+        provider = normalize_provider(os.getenv("METIS_LLM_PROVIDER", os.getenv("LLM_PROVIDER", "anthropic")))
+        client = create_llm_client(provider=provider, api_key=api_key)
+        log.info("track: LLM fallback enabled (%s) for unknown emails", provider)
         return client
     except Exception as exc:
         log.warning("track: could not build LLM client (%s) — running phrase-only", exc)
@@ -1322,7 +1402,8 @@ def run_track(
         elif kind == "recruiter_screen":
             log.info("track: skip recruiter screen (already %s) — %s", current_status, company)
 
-    from .xlsx import _sort_rows_by_date
+    from .xlsx import _sort_rows_by_date, format_tracker_sheet
+    format_tracker_sheet(ws)
     _sort_rows_by_date(ws)
 
     if changed:

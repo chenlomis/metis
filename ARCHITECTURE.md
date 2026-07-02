@@ -2,11 +2,11 @@
 
 ## What It Does
 
-metis is a personal CLI tool that reads LinkedIn job alert emails via IMAP, scores
+metis is a personal CLI tool that reads job alert emails via OAuth or IMAP fallback, scores
 each role against the user's structured profile using the configured LLM provider, and
 delivers a ranked HTML digest to Gmail. Anthropic is the default provider; OpenAI is
-supported across public AI tasks while quality calibration continues. It runs on demand
-or on a schedule (launchd/cron).
+supported across public AI tasks through the same provider boundary. It runs on demand or
+on a schedule (launchd/cron).
 
 The core value: turn 50+ noisy job alert emails per week into a prioritized shortlist
 of 3–8 roles worth acting on.
@@ -282,6 +282,36 @@ Key `.env` fields:
 | `ANTHROPIC_EXTRACT_MODEL` / `OPENAI_EXTRACT_MODEL` | provider default | Model for structured JD extraction |
 | `MODEL`, `PRESCREEN_MODEL`, `EXTRACT_MODEL` | provider default | Backward-compatible generic model variables |
 
+### LLM Provider Boundary
+
+All public AI tasks should go through `metis.llm`:
+
+- `create_llm_client(provider, api_key)` constructs the provider client.
+- `complete_text(...)` returns provider-neutral `LLMResponse(text, usage, raw)`.
+- `normalize_provider(...)` accepts user-facing aliases such as `OpenAI`, `open_ai`,
+  `Claude`, and mixed casing.
+- `resolve_stage_models(...)` chooses full, prescreen, and extract models with
+  provider-specific env vars taking priority over generic `MODEL` variables.
+
+Call sites should not depend on Anthropic or OpenAI SDK response shapes. Provider quirks
+belong in the adapter or in narrow parser recovery functions.
+
+### Profile Normalization
+
+`metis init` intentionally separates raw extraction from deterministic post-processing.
+The LLM captures the candidate's literal resume/profile/Step 2/Step 3 evidence; then
+`normalization.py` maps common free-text signals into canonical profile fields:
+
+- `target.role_family`, `target.roles`, `target.level`
+- `aspirations.track`, `aspirations.direction`, `aspirations.company_types`
+- `preferences.company_stage`, `preferences.company_scale`, `preferences.team_environment`
+- `candidate.location_preference`
+- `inferred.customer_types`
+
+This layer is provider-agnostic and runs for Anthropic, OpenAI, and future adapters once
+their raw output parses into a profile dict. `unknown` means no usable signal was present;
+`other` means the user gave a signal that sits outside the current taxonomy.
+
 Dev-only env vars (never put in `.env`):
 | Variable | Effect |
 |---|---|
@@ -339,7 +369,7 @@ the legacy Gmail IMAP fallback is used.
 Current rollout boundary: non-LinkedIn email alert sources use the provider-neutral
 `sources/email_fetcher.py`. Some older workflows still contain Gmail IMAP/SMTP-specific
 call sites (`sources/linkedin.py`, tracker/backfill, and main digest delivery) until the
-provider abstraction is wired through end-to-end.
+email-provider abstraction is wired through end-to-end.
 
 ---
 
