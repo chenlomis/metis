@@ -4,11 +4,25 @@
 
 Metis is an AI-powered career agent that automates the first round of job discovery by screening and ranking new opportunities against your profile, experience, career goals, and deal breakers. It consolidates roles from job alerts and company career pages, compares them to your background, and delivers a personalized scored digest on a schedule you control. It can also track applications and recruiter responses in a spreadsheet, then generate summaries that show how your search is progressing over time.
 
+Think of it as a personal decision agent for high-volume opportunity triage: it helps you decide what deserves attention, what can wait, and what is not worth your time.
+
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![LLM providers](https://img.shields.io/badge/LLM-Anthropic%20%7C%20OpenAI-blueviolet.svg)](#env-configuration)
 
 ![Metis demo preview](docs/assets/metis-demo-thumbnail.png)
+
+## See it in 60 seconds
+
+```bash
+metis
+```
+
+metis reads new job alerts, scores each role against your profile, and emails a ranked digest. A typical card answers the question you actually care about:
+
+> **Solid Match · 91/100**  
+> Why it fits: your 0-to-1 ML platform work maps to the role.  
+> Watch-out: first 90 days may lean more onsite than your preference.
 
 <!--
 Demo video note:
@@ -104,42 +118,35 @@ metis keeps personal runtime state under `~/.job_pipeline/`:
 
 | File | Purpose |
 |------|---------|
-| `profile.yaml` | Your active scoring profile from `metis init`. |
-| `.env` | Local runtime config, including LLM provider keys and OAuth app credentials. |
-| `gmail_token.json` | Local Gmail OAuth token cache, created after browser login. |
-| `outlook_token.json` | Local Outlook OAuth token cache, created after browser login. |
-| `email_provider.json` | Active inbox provider marker; the latest successful OAuth connection wins. |
-| `seen_roles.json` | Dedup state so recently seen roles are not resent. |
-| `feedback.md` / `feedback_log.jsonl` | Calibration notes from `metis feedback`. |
-| `runs.jsonl` | Local scoring traces and run metadata for debugging. |
-| `applications.xlsx` | Local application tracker. |
+| `profile.yaml` | Your active scoring profile. Edit this when your goals, constraints, or resume story changes. |
+| `.env` | Your local config. Most users only edit the LLM provider/key and optional recipient email. |
+| `applications.xlsx` | Your application tracker. Solid and Moderate matches land here so you can follow up and report on outcomes. |
+| `seen_roles.json` | Dedup memory. This keeps the same role from showing up again and again. |
+| `runs.jsonl` | Scoring trace. Useful when a score feels off or `metis summary` needs history. |
+| `feedback.md` | Calibration notes from `metis feedback`, injected into future scoring runs. |
+| `*_token.json` | Local Gmail/Outlook OAuth tokens created after browser login. |
 
-These files are personal and should not be committed. OAuth token files stay local to your machine.
+These files are personal and should not be committed.
 
 ---
 
 ## Prerequisites
 
-Plan for about **10-15 minutes** to get the required prerequisites in place, plus up to 24 hours for the first LinkedIn alert email to arrive if you just created a new alert.
+Plan for about **5-10 minutes** to get set up, plus up to 24 hours for the first LinkedIn alert email to arrive if you just created a new alert.
 
 | What | Status | Why | How to get it |
 |------|--------|-----|---------------|
-| Python 3.11+ | **Required** | metis will not install or run on older Python versions, including the Python 3.9 that ships with macOS. | [python.org/downloads](https://www.python.org/downloads/) or Homebrew: `brew install python@3.11` |
-| Node.js 18+ | **Optional** | Enables the React Email digest, which is the polished email layout. Without Node, metis falls back to a simpler Python HTML digest. | [nodejs.org](https://nodejs.org) or Homebrew: `brew install node` |
-| LLM API key | **Required, save for [`.env`](#env-configuration)** | The configured provider reads your profile, compares each role against it, and writes the scoring explanations. Without this key, the digest pipeline cannot score jobs. | Anthropic: [console.anthropic.com](https://console.anthropic.com), keys usually start with `sk-ant-...`. OpenAI: [platform.openai.com/api-keys](https://platform.openai.com/api-keys), keys usually start with `sk-...`. |
-| Gmail or Outlook account | **Required** | Gives metis an inbox to read job-alert emails from and an account to send digests from. | Connect in the browser during `metis init` or later with `metis config access`. |
-| OAuth app credentials | **Required for browser login, save for [`.env`](#env-configuration)** | Lets the local CLI complete Gmail or Outlook OAuth without storing your account password. | Gmail: create a Desktop OAuth client in Google Cloud. Outlook: create a Microsoft app registration with redirect URI `http://127.0.0.1:8766/oauth/callback`. |
-| Gmail with IMAP enabled | **Optional fallback** | Legacy Gmail-only access if you skip OAuth. | Gmail > Settings > See all settings > Forwarding and POP/IMAP > Enable IMAP |
-| Gmail App Password | **Optional fallback, save for [`.env`](#env-configuration)** | Legacy Gmail-only access if you skip OAuth. Use an App Password, not your Google password. | Requires 2-Step Verification. [Generate one here](https://myaccount.google.com/apppasswords), choose Mail + your device. |
-| LinkedIn job alerts | **Recommended first source** | The most tested source today. metis can also watch other job-alert senders and company career pages, but LinkedIn saved alerts are the quickest path to a useful first digest. | Set up daily email alerts for your target roles on LinkedIn. See [Setting up LinkedIn alerts](#linkedin-alerts). |
-| Your resume (PDF, DOCX, or TXT) | **Required** | The premise for scoring. Use the most complete, detailed version you have. | Any existing file on your machine. During setup, you can paste a path, tab-complete to it, or drag the file into the terminal. |
+| Python 3.11+ | **Required** | Runs the CLI. macOS ships with 3.9, which is too old. | [python.org/downloads](https://www.python.org/downloads/) or `brew install python@3.11` |
+| LLM API key | **Required, save for [`.env`](#env-configuration)** | Scores roles against your profile. Without this, metis cannot evaluate jobs. | [Anthropic Console](https://console.anthropic.com) or [OpenAI API keys](https://platform.openai.com/api-keys) |
+| Gmail or Outlook account | **Required** | Inbox for job alerts and sender for digests. | Connect in the browser during `metis init`. |
+| Job alerts | **Recommended** | Fastest way to get useful roles into metis. LinkedIn saved alerts are the best-tested source. | See [Setting up LinkedIn alerts](#linkedin-alerts). |
+| Resume | **Required** | The premise for scoring. The richer the resume, the better the profile. | PDF, DOCX, or TXT anywhere on your machine. |
 
 **Notes**
 
-- **Platform support:** macOS and Linux. Windows via WSL2 should work but is untested.
-- **Python versions:** Python 3.11 and 3.12 are tested in CI. Python 3.13 and 3.14 should work if the dependencies support them, but they are not part of the current test matrix yet.
-- **Node.js install issues:** Node.js is the only optional prerequisite above. If `brew install node` gives you trouble, you can skip it and still run metis; the digest will use the Python fallback renderer.
-- **LLM provider support:** Anthropic is the default and best-tested provider. OpenAI is supported across the public AI tasks (`metis`, `metis init`, `metis feedback`, and tracker LLM fallback), but still needs quality calibration for score parity. Gemini and Grok/XAI keys are reserved for future adapters and are not active yet.
+- macOS and Linux are supported. Windows via WSL2 should work but is untested.
+- Node.js 18+ is optional. It enables the polished React Email renderer; without it, metis uses a simpler Python HTML fallback.
+- Anthropic is the default and best-tested LLM provider. OpenAI is supported, but score calibration is still catching up.
 
 <a id="linkedin-alerts"></a>
 
@@ -165,66 +172,35 @@ Both multi-job digests and single-role notifications are supported.
 
 ### `.env` configuration
 
-The Quick start creates your personal config file here:
+Your personal config lives here:
 
 ```bash
 ~/.job_pipeline/.env
 ```
 
-You should not need to create folders or copy templates by hand. Follow the **Configure credentials** step in [Quick start](#quick-start), then open this file and replace the placeholder strings.
+For normal setup, this file only needs your LLM provider and API key:
 
-On macOS, `~` means your home folder, usually `/Users/<your-mac-username>`. To open the config folder in Finder:
-
-1. Click **Go > Go to Folder...**
-2. Paste `~/.job_pipeline`
-3. Open `.env`
-
-If `.env` is missing, rerun the **Configure credentials** command in [Quick start](#quick-start). If you cloned the repo and want the original template, it lives at `.env.example` in the project root.
-
-These prerequisite values become `.env` entries:
-
-| `.env` value | Required? | Comes from |
-|--------------|-----------|------------|
-| `METIS_LLM_PROVIDER` | No | Which provider to use. Defaults to `anthropic`; accepts `anthropic`/`claude` or `openai`/`open_ai`/`oai`/`chatgpt`, case-insensitive. |
-| `ANTHROPIC_API_KEY` | Yes, when using Anthropic | Your Anthropic developer console API key |
-| `OPENAI_API_KEY` | Yes, when using OpenAI | Your OpenAI project API key |
-| `GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET` | Yes, for Gmail OAuth | Google Desktop OAuth client credentials |
-| `OUTLOOK_CLIENT_ID` | Yes, for Outlook OAuth | Microsoft public-client app ID |
-| `METIS_EMAIL_PROVIDER` | No | Optional override: `gmail_oauth`, `outlook_oauth`, or `imap`. Usually leave unset so the latest browser login wins. |
-| `GMAIL_ADDRESS` | Only for IMAP fallback | Gmail address used by the legacy IMAP path |
-| `GMAIL_APP_PASSWORD` | Only for IMAP fallback | The 16-character Google App Password generated for Mail |
-| `RECIPIENT_EMAIL` | No | Where to send the digest. Defaults to the connected account when OAuth is used, or `GMAIL_ADDRESS` for IMAP fallback. |
-
-Python, Node.js, job alerts, and your resume do not go into `.env`. Python and Node are installed on your machine, alerts arrive in your connected inbox, and your resume is selected during `metis init`.
-
-```env
-# Required
+```bash
 METIS_LLM_PROVIDER=anthropic
 ANTHROPIC_API_KEY=sk-ant-...
-# OPENAI_API_KEY=sk-...
-
-# Inbox OAuth (recommended)
-GMAIL_CLIENT_ID=your-client-id.apps.googleusercontent.com
-GMAIL_CLIENT_SECRET=your-client-secret
-OUTLOOK_CLIENT_ID=your-azure-app-client-id
-
-# Legacy Gmail IMAP fallback only
-# GMAIL_ADDRESS=you@gmail.com
-# GMAIL_APP_PASSWORD=xxxx-xxxx-xxxx-xxxx
-
-# Optional (defaults shown)
-RECIPIENT_EMAIL=you@gmail.com       # where to send the digest
-MAX_JOBS_PER_RUN=40                 # cap per run to control API cost; 0 = no cap
-DEFAULT_LOOKBACK=3d                 # how far back to fetch on each run
-ANTHROPIC_MODEL=claude-sonnet-4-6
-ANTHROPIC_PRESCREEN_MODEL=claude-haiku-4-5
-ANTHROPIC_EXTRACT_MODEL=claude-haiku-4-5
-OPENAI_MODEL=gpt-4.1
-OPENAI_PRESCREEN_MODEL=gpt-4.1-mini
-OPENAI_EXTRACT_MODEL=gpt-4.1-mini
 ```
 
-Provider-specific model variables are preferred because they let you keep Anthropic and OpenAI settings side by side. The older generic `MODEL`, `PRESCREEN_MODEL`, and `EXTRACT_MODEL` variables still work for backward compatibility.
+Using OpenAI instead:
+
+```bash
+METIS_LLM_PROVIDER=openai
+OPENAI_API_KEY=sk-...
+```
+
+Optional knobs:
+
+| Value | Use it when |
+|-------|-------------|
+| `RECIPIENT_EMAIL` | You want digests sent somewhere other than the connected inbox. |
+| `MAX_JOBS_PER_RUN` | You want a different per-run scoring cap. Default: `40`; `0` means no cap. |
+| `DEFAULT_LOOKBACK` | You want each run to search farther back than `3d`. |
+
+Open the file in Finder with **Go > Go to Folder...** and paste `~/.job_pipeline`. Browser login handles Gmail/Outlook access during `metis init`, so normal users do not need an app password.
 
 ---
 
@@ -246,14 +222,10 @@ mkdir -p ~/.job_pipeline
 cat > ~/.job_pipeline/.env << 'EOF'
 METIS_LLM_PROVIDER=anthropic
 ANTHROPIC_API_KEY=sk-ant-...
-GMAIL_CLIENT_ID=your-client-id.apps.googleusercontent.com
-GMAIL_CLIENT_SECRET=your-client-secret
-OUTLOOK_CLIENT_ID=your-azure-app-client-id
-RECIPIENT_EMAIL=you@gmail.com
 EOF
 ```
 
-Then open `~/.job_pipeline/.env` and replace the placeholder values. See [`.env` configuration](#env-configuration) for field-by-field guidance.
+Then open `~/.job_pipeline/.env` and replace `sk-ant-...` with your key from [Anthropic Console](https://console.anthropic.com). Using OpenAI instead? See [`.env` configuration](#env-configuration).
 
 **Step 3 — Build your scoring profile**
 
@@ -261,7 +233,7 @@ Then open `~/.job_pipeline/.env` and replace the placeholder values. See [`.env`
 metis init
 ```
 
-On first setup, metis prompts you to choose Gmail or Outlook access. Browser login grants metis permission to read job-alert emails and send digests from your own account. You can switch or reconnect later with `metis config access`.
+On first setup, metis prompts you to choose Gmail or Outlook and connect in the browser. You can switch or reconnect later with `metis config access`.
 
 **Step 4 — Run**
 
@@ -291,16 +263,16 @@ metis
 | `metis`                              | Run full pipeline: ingest, dedupe, score, and email digest. Default: last run or 3d.    |
 | `metis --lookback 7d`                | Same pipeline with a wider window. Accepts `7d`, `14d`, or ISO date like `2026-05-10`.  |
 | `metis --dry-run`                    | Preview a full fetch + score run without sending email or writing state.                |
-| `metis --no-limit`                   | Score everything in the window, bypassing the per-run cap. The fast pre-screen model runs first. |
+| `metis --no-limit`                   | Score everything in the window. The fast pre-screen model runs first.                   |
 | `metis --no-limit --lookback 14d`    | Catch up after a gap by scoring everything from a wider window.                         |
 | `metis init`                         | Build your scoring profile from your resume and preferences.                            |
-| `metis config access`                | Connect, inspect, switch, or reconnect Gmail/Outlook access so metis can read job-alert emails and send digests from your own account. |
+| `metis config access`                | Connect, inspect, switch, or reconnect Gmail/Outlook access.                            |
 
 Each digest role gets a 0-100 score, a Solid Match / Moderate Match / Limited Match verdict, two leverage points, one friction point, and scan-friendly tags. Roles are deduplicated across runs, so the same listing should not reappear within 30 days.
 
 `profile.yaml` is the scoring profile used by every future digest. See [profile.template.yaml](./profile.template.yaml) for the full schema with comments.
 
-### Sources
+### Sources and scheduling
 
 | Command                              | What it does                                                                            |
 |--------------------------------------|-----------------------------------------------------------------------------------------|
@@ -315,18 +287,13 @@ Each digest role gets a 0-100 score, a Solid Match / Moderate Match / Limited Ma
 | `metis sources email add`            | Add an email alert source interactively, or pass a sender address to skip the wizard.   |
 | `metis sources email add <sender>`   | Fetch a recent email from that sender, preview parsed jobs, confirm in one step.        |
 | `metis sources email remove`         | Remove a non-LinkedIn email alert source interactively.                                 |
-
-LinkedIn alert senders are built in. Company sourcing can pull roles directly from Greenhouse, Lever, and Ashby career pages without waiting for a LinkedIn alert email.
-
-### Scheduling
-
-| Command                              | What it does                                                                            |
-|--------------------------------------|-----------------------------------------------------------------------------------------|
 | `metis schedule`                     | Show current digest schedule and OS job status.                                         |
 | `metis schedule set`                 | Set up automated daily or weekly digest delivery.                                       |
 | `metis schedule pause`               | Pause the schedule without deleting it.                                                 |
 | `metis schedule resume`              | Resume a paused schedule.                                                               |
 | `metis schedule remove`              | Remove the scheduled job.                                                               |
+
+LinkedIn alert senders are built in. Company sourcing can pull roles directly from Greenhouse, Lever, and Ashby career pages without waiting for a LinkedIn alert email.
 
 ### Tracking, reporting, and feedback
 
@@ -362,30 +329,15 @@ For explainability, metis keeps more detail locally than it shows in the email. 
 
 ## Privacy
 
-metis runs entirely on your machine. Here is exactly what leaves it:
+metis is local-first. Your profile, tracker, run history, feedback, and OAuth tokens live under `~/.job_pipeline/` on your machine.
 
-| What                                                              | Sent where       | When                    |
-|-------------------------------------------------------------------|------------------|-------------------------|
-| Resume text (up to 12,000 chars)                                  | Selected LLM provider | During `metis init` only |
-| Feedback notes                                                    | Selected LLM provider | During `metis feedback` |
-| Your scoring profile (career history, strengths, deal-breakers)   | Selected LLM provider | Every `metis` run       |
-| Job titles, company names, JD text (up to 1,500 chars per role)   | Selected LLM provider | Every `metis` run       |
-| IMAP login                                                        | Gmail only (SSL) | Every run               |
-| SMTP login and digest HTML                                        | Gmail only (SSL) | Every run               |
+What leaves your machine:
 
-Nothing goes to unconfigured LLM providers. Your Gmail App Password and provider API keys never leave your machine except when used to authenticate with Gmail or the selected LLM provider. Review the selected provider's data-handling policy before running: [Anthropic privacy](https://www.anthropic.com/privacy) or [OpenAI privacy](https://openai.com/policies/privacy-policy).
+- Your selected LLM provider sees the resume/profile text, job descriptions, and feedback needed to score roles.
+- Gmail or Outlook sees the normal OAuth requests needed to read alert emails and send digests from your account.
+- Nothing is sent to unconfigured LLM providers.
 
-Local data stored in `~/.job_pipeline/` (outside the repo, never committed):
-
-| File                  | Contents                                         | Permissions             |
-|-----------------------|--------------------------------------------------|-------------------------|
-| `profile.yaml`        | Your extracted profile                           | 600 (owner-readable)    |
-| `seen_roles.json`     | MD5 hashes of scored roles and timestamps, 30-day TTL | 600 (owner-readable) |
-| `role_queue.json`     | Pre-screened roles waiting for the next capped scoring run | 600 (owner-readable) |
-| `runs.jsonl`          | Append-only scoring trace for debugging and summaries | 600 (owner-readable) |
-| `feedback.md`         | Confirmed calibration notes injected into future scoring | 600 (owner-readable) |
-| `email_sources.yaml`  | Extra non-LinkedIn alert sender rules                 | 600 (owner-readable) |
-| `logs/YYYY-MM-DD.log` | Pipeline run logs (may contain job titles)       | default                 |
+Your API keys and OAuth tokens stay local except when used to authenticate with the service they belong to. Review your provider's policy before running: [Anthropic privacy](https://www.anthropic.com/privacy) or [OpenAI privacy](https://openai.com/policies/privacy-policy).
 
 ---
 
@@ -405,25 +357,18 @@ Set `MAX_JOBS_PER_RUN=0` in `.env` to remove the cap.
 
 ## Current limits and roadmap
 
-metis is intentionally a local, CLI-first v0. It works best today if you receive job-alert emails in Gmail or Outlook and are comfortable using either an Anthropic API key or an OpenAI key while provider quality is calibrated. Those are real constraints, not things the project tries to hide. The tradeoff is that the first version stays cheap, inspectable, and easy to run without hosting your career data somewhere else.
+metis is a local, CLI-first v0. It works best today with Gmail or Outlook job-alert emails, an Anthropic or OpenAI key, and a user who wants high-signal triage more than mass-apply automation.
 
-The source layer is broader than LinkedIn-only: LinkedIn saved alerts are the best-tested default, but `metis sources email add` can watch other job-alert senders. Wellfound (`team@hi.wellfound.com`) and Ladders (`jobs@my.theladders.com`) have dedicated parsers; any other sender falls back to LLM extraction automatically — no code change needed for new sources. `metis sources add` can also pull directly from company career pages on Greenhouse, Lever, and Ashby.
+Near-term roadmap:
 
-- [ ] More alert sources: Indeed, Wellfound/AngelList, Otta, RSS feeds, regional boards, and more non-LinkedIn email formats
-- [ ] More company/ATS adapters and stronger browser-based scraping where APIs are unavailable
-- [x] OAuth-based Gmail access for simpler browser login
-- [x] Outlook / Microsoft 365 inbox support so Gmail is not the only option
-- [x] Account switching and reconnect flow via `metis config access`
-- [ ] Provider-neutral delivery and tracker/backfill paths
-- [ ] Broaden LLM provider abstraction beyond Anthropic and OpenAI, including Gemini and Grok/XAI adapters
-- [ ] Importable core API, with config passed as parameters instead of read at import time
-- [ ] MCP server so metis can be queried from Claude Code and other local agents
-- [ ] PyPI publish (`pip install metis-job`) for a cleaner install path
-- [ ] Output targets beyond email, such as Markdown, Slack, Notion, or webhooks
-- [ ] Deeper analytics over `runs.jsonl`, tracker outcomes, score trends, and market signals
-- [ ] Resume tailoring and application-assist workflows, with human approval before anything is submitted
-- [ ] Docker packaging for users who want to avoid local Python setup
-- [ ] Web UI or local dashboard only if there is clear demand from non-CLI users
+- More alert sources and company/ATS adapters
+- Better provider abstraction beyond Anthropic/OpenAI
+- MCP server and importable core API
+- PyPI and Docker packaging
+- Output targets beyond email, such as Markdown, Slack, Notion, or webhooks
+- Deeper analytics over score trends, tracker outcomes, and market signals
+- Resume tailoring and application-assist workflows, with human approval before anything is submitted
+- Web UI or local dashboard only if there is clear demand from non-CLI users
 
 See [open issues](https://github.com/chenlomis/metis/issues) for the full list.
 
@@ -431,17 +376,17 @@ See [open issues](https://github.com/chenlomis/metis/issues) for the full list.
 
 ## Troubleshooting
 
-Start with the earliest step that matches what you are seeing. Most issues are setup, Gmail access, alert delivery, or local state.
+Start with the earliest step that matches what you are seeing. Most issues are setup, inbox access, alert delivery, or local state.
 
 **`metis: command not found` after install**
 
 Run `pipx ensurepath`, open a new terminal, and try `metis --help`. If that works, your shell can find the CLI.
 
-**`Gmail login failed` / IMAP auth error**
+**Browser login or inbox connection failed**
 
-Two things must both be true: 2-Step Verification is on, and `GMAIL_APP_PASSWORD` is a Google App Password, not your normal Google password.
+Run `metis config access` and reconnect Gmail or Outlook. If the browser opens but the connection fails, check that you are signing into the account that receives your job alerts.
 
-Generate one at [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords). Also confirm IMAP is enabled: Gmail > Settings > See all settings > Forwarding and POP/IMAP > Enable IMAP.
+If you are using the legacy Gmail IMAP fallback, then IMAP must be enabled and `GMAIL_APP_PASSWORD` must be a Google App Password, not your normal Google password.
 
 **`No scoring profile found. Run metis init`**
 
@@ -451,14 +396,14 @@ If you already ran setup, confirm that `~/.job_pipeline/profile.yaml` exists. If
 
 **"No emails in lookback window. Done." on first run**
 
-metis connected to Gmail, but did not find LinkedIn alert emails in the lookback window. Try:
+metis connected to your inbox, but did not find LinkedIn alert emails in the lookback window. Try:
 
 - Run `metis --lookback 14d` to check a wider window.
 - Make sure at least one LinkedIn alert email has arrived. New alerts can take up to 24 hours.
 - Check that alerts land in INBOX. Gmail filters that archive or "Skip Inbox" will hide them from metis.
 - Run `metis debug` to dump the most recent LinkedIn alert email and inspect what metis is seeing.
 
-`metis debug` writes `~/.job_pipeline/debug_email.txt` and prints the first chunk in the terminal. It is useful when you want to confirm whether Gmail contains a real job-alert email or just a promotional/recommendation email that metis cannot parse.
+`metis debug` writes `~/.job_pipeline/debug_email.txt` and prints the first chunk in the terminal. It is useful when you want to confirm whether your inbox contains a real job-alert email or just a promotional/recommendation email that metis cannot parse.
 
 **"No roles to evaluate" despite having alert emails**
 
