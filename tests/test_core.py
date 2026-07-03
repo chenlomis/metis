@@ -542,6 +542,44 @@ class TestScoreNormalization:
 
 
 # ---------------------------------------------------------------------------
+# score.py — cost / rate-limit knobs
+# ---------------------------------------------------------------------------
+
+class TestCostAndRetryKnobs:
+    def test_cost_estimate_is_provider_aware(self, monkeypatch):
+        from metis.score import estimate_cost, estimate_cost_hi
+
+        monkeypatch.delenv("METIS_COST_PER_ROLE_LOW", raising=False)
+        monkeypatch.delenv("METIS_COST_PER_ROLE_HIGH", raising=False)
+
+        assert estimate_cost(10, provider="anthropic") == "$0.05–$0.15"
+        assert estimate_cost(10, provider="openai") == "$0.03–$0.12"
+        assert estimate_cost_hi(10, provider="openai") == pytest.approx(0.12)
+
+    def test_cost_estimate_accepts_env_override(self, monkeypatch):
+        from metis.score import estimate_cost, estimate_cost_hi
+
+        monkeypatch.setenv("METIS_COST_PER_ROLE_LOW", "0.01")
+        monkeypatch.setenv("METIS_COST_PER_ROLE_HIGH", "0.02")
+
+        assert estimate_cost(5, provider="openai") == "$0.05–$0.10"
+        assert estimate_cost_hi(5, provider="openai") == pytest.approx(0.10)
+
+    def test_retry_settings_are_bounded_and_overridable(self, monkeypatch):
+        from metis.score import _retry_settings
+
+        monkeypatch.setenv("METIS_LLM_MAX_ATTEMPTS", "5")
+        monkeypatch.setenv("METIS_LLM_RETRY_BASE_SECONDS", "0.25")
+
+        assert _retry_settings() == (5, 0.25)
+
+        monkeypatch.setenv("METIS_LLM_MAX_ATTEMPTS", "0")
+        monkeypatch.setenv("METIS_LLM_RETRY_BASE_SECONDS", "-1")
+
+        assert _retry_settings() == (1, 0.0)
+
+
+# ---------------------------------------------------------------------------
 # sources/linkedin.py — edge cases in email parsing
 # ---------------------------------------------------------------------------
 

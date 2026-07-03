@@ -371,3 +371,11 @@ However, a role that explicitly requires niche domain credibility such as RDMA/I
 datacenter networking, kernel/driver work, hardware architecture, GPU scheduling, regulated
 credentials, or similar mandatory expertise should create real friction. The scorer should not
 promote such roles solely because company and level look attractive.
+
+**D-69 · Cost estimates and retry knobs are provider-aware but conservative**
+Metis supports Anthropic and OpenAI through the same LLM boundary, so user-facing cost prompts
+must not imply a specific model family. `estimate_cost()` uses conservative per-role defaults by
+provider and supports `METIS_COST_PER_ROLE_LOW` / `METIS_COST_PER_ROLE_HIGH` overrides for custom
+models or pricing. Transient scoring retries are bounded by `METIS_LLM_MAX_ATTEMPTS`,
+`METIS_LLM_RETRY_BASE_SECONDS`, and `METIS_LLM_TIMEOUT_SECONDS`; scheduled runs still cap
+`--no-limit` in non-interactive mode to prevent runaway spend.

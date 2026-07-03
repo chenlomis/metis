@@ -42,7 +42,7 @@ All tests must pass before merging. The suite covers:
 
 - **Parsing:** `extract_jobs()`, `extract_jobs_html()` — job extraction from raw email bodies
 - **Dedup:** `_role_hash()`, seen-roles gate, 14-day TTL pruning
-- **Pre-screen:** Haiku pass result parsing; function-only filtering; no seniority filtering
+- **Pre-screen:** fast-model pass result parsing; function-only filtering; no seniority filtering
 - **Scoring:** `score_jobs_batch()` chunk sizes; merge of chunk results; truncation fallback
 - **Contracts:** score/render eval schema; verdict enum; dimension order; tag sentiments
 - **Rank:** verdict re-derivation from score + thresholds; sort order within tiers

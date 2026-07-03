@@ -39,7 +39,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-limit", dest="score_all", action="store_true",
         help="Score every role in the lookback window, ignoring MAX_JOBS_PER_RUN. "
-             "A Haiku pre-screen runs first to keep API costs down. "
+             "A fast pre-screen runs first to keep API costs down. "
              "Useful for catch-up runs after a long gap or a reset.",
     )
     parser.add_argument(

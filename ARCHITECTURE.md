@@ -30,7 +30,7 @@ pipeline.py — 3-layer dedup
 pipeline.py — cap / prompt decision
     │ ≤ MAX_JOBS_PER_RUN  →  proceed
     │ > cap, interactive  →  prompt user with count + cost estimate
-    │ > cap, --all flag   →  show cost estimate + require "y" confirmation (interactive)
+    │ > cap, --no-limit   →  show provider-aware cost estimate + require "y" confirmation (interactive)
     │                         or cap to MAX_JOBS_PER_RUN + warn (cron / non-TTY)
     │ > cap, non-TTY      →  silently cap + log warning
     ▼
@@ -127,14 +127,17 @@ cache window pay reduced input token costs. Trade-off: one large call is more fr
 than N small calls (partial-JSON recovery in `_recover_partial_json()` mitigates this).
 
 ### 3. Three-pass scoring: pre-screen → extraction → full scoring
-Pass 1 (pre-screen): activated when role count exceeds `MAX_JOBS_PER_RUN`. The fast model sees
-only title+company, returns Y/N. Reduces catch-up run cost by ~40–60%.
+Pass 1 (pre-screen): activated when role count exceeds `MAX_JOBS_PER_RUN`. The configured fast
+model sees only title+company and returns Y/N. This reduces catch-up run cost before JD extraction
+and full scoring.
 
 Pass 2 (Layer 1 extraction): always runs on enriched jobs. The extraction model at temperature=0
 extracts 27 structured fields from each JD. Two Python hard gates run here:
 `jd_blank` (no JD text → skip full scoring) and `salary_floor` (disclosed salary_max < floor * 0.9).
 Extraction failures fall back to blank structs — scoring is never blocked.
-Cost depends on provider/model choice and is partially offset by gate filtering savings.
+Cost depends on provider/model choice and is partially offset by gate filtering savings. Runtime
+cost prompts use provider-aware per-role estimates that can be overridden with
+`METIS_COST_PER_ROLE_LOW` / `METIS_COST_PER_ROLE_HIGH` for custom models or pricing.
 
 Pass 3 (Layer 2 full scoring): only runs on roles that passed hard gates. Each job block
 includes the Layer 1 `[EXTRACTED CONTEXT]` as grounding. The scoring prompt includes
@@ -281,6 +284,10 @@ Key `.env` fields:
 | `ANTHROPIC_PRESCREEN_MODEL` / `OPENAI_PRESCREEN_MODEL` | provider default | Fast model for pre-screen pass |
 | `ANTHROPIC_EXTRACT_MODEL` / `OPENAI_EXTRACT_MODEL` | provider default | Model for structured JD extraction |
 | `MODEL`, `PRESCREEN_MODEL`, `EXTRACT_MODEL` | provider default | Backward-compatible generic model variables |
+| `METIS_COST_PER_ROLE_LOW` / `METIS_COST_PER_ROLE_HIGH` | provider default | Override cost estimate range for custom models or pricing |
+| `METIS_LLM_MAX_ATTEMPTS` | `3` | Max attempts for transient scoring calls, including rate limits and timeouts |
+| `METIS_LLM_RETRY_BASE_SECONDS` | `1` | Initial exponential-backoff delay for transient scoring retries |
+| `METIS_LLM_TIMEOUT_SECONDS` | `120` | Provider SDK request timeout |
 
 ### LLM Provider Boundary
 
@@ -613,7 +620,7 @@ Score prompt updated: "foreign" (10) only applies when the role requires domain-
 `--no-limit` in interactive mode now requires explicit `y` confirmation after showing the cost estimate. In non-interactive (cron) mode, `--no-limit` is silently downgraded to `MAX_JOBS_PER_RUN` with a warning — prevents runaway spend on scheduled runs.
 
 **CI via GitHub Actions** (June 28 2026)
-`.github/workflows/test.yml` runs `pytest tests/ -q` on Python 3.11 and 3.12 on every push/PR to main. Requires `ANTHROPIC_API_KEY` secret in GitHub repo settings.
+`.github/workflows/test.yml` runs `pytest tests/ -q --cov=metis --cov-report=term-missing --cov-report=xml` on Python 3.11 and 3.12 on every push/PR to main, then uploads `coverage.xml` as an artifact. Requires `ANTHROPIC_API_KEY` secret in GitHub repo settings.
 
 **Format regression prevention** (June 21 2026)
 Silent format regressions in `render.py` (legend labels, stat tile label, score breakdown visibility) were caused by agents making unsolicited changes during unrelated bug fixes. Fixed at two layers: CLAUDE.md constraint #0 names the locked strings; `tests/test_render_format.py` (18 assertions) enforces them after every edit. Format-breaking changes now fail tests immediately rather than surfacing in the next email.

@@ -276,7 +276,7 @@ Not safe without migration: adding a column in the middle, removing a column, re
 ### 8. pipeline.py stage order is load-bearing — do not reorganize without explicit instruction
 `pipeline.py` is the orchestration layer. The stage sequence is:
 1. Dedup check (`load_seen_roles`) → before scoring so unseen roles don't waste API calls
-2. Score (`_stage_score`) → Haiku pre-screen, then Sonnet full score
+2. Score (`_stage_score`) → fast-model pre-screen, then full scoring model
 3. Deal-breaker split (`_stage_split_filtered`) → **after** `new_role_timestamps` is built, **before** `render_html`
 4. Skipped metadata saved → before SMTP so it survives delivery failure
 5. Render → `scored_jobs` only (filtered excluded), `deal_breaker_count` passed as footer note

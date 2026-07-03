@@ -158,7 +158,7 @@ Start fresh   — full 4-step wizard with a new resume; overwrites existing prof
 **Goal:** User runs `metis` and receives a ranked digest of new roles worth reviewing.
 
 ```
-metis [--lookback DURATION] [--all]
+metis [--lookback DURATION] [--no-limit]
 ```
 
 **Input format — LinkedIn job alert emails**
@@ -183,33 +183,33 @@ check whether the expected URL pattern is present.
 ```
 → Fetches LinkedIn alert emails from the past 3 days
   (default; customisable via --lookback flag or DEFAULT_LOOKBACK in .env)
-→ Skips roles already evaluated in the past 14 days
-→ Evaluates up to 20 new roles
+→ Skips roles already evaluated in the past 30 days
+→ Evaluates up to 40 new roles
   (default cap; customisable via MAX_JOBS_PER_RUN in .env)
 → Sends HTML digest to RECIPIENT_EMAIL
 ```
 
-**When more than 20 new roles are found:**
+**When more than 40 new roles are found:**
 ```
 → User is notified interactively:
-    "Found 47 new roles. Evaluating first 20.
-     Remaining 27 will appear in your next run.
-     To evaluate all now: metis --all  (~$0.24–$0.71 estimated)"
+    "Found 47 new roles. Evaluating first 40.
+     Remaining 7 will appear in your next run.
+     To evaluate all now: metis --no-limit  (~provider-aware estimate)"
 → Roles beyond the cap are NOT marked as seen — they appear in the next run
 ```
 
-**With `--all` flag:**
+**With `--no-limit` flag:**
 ```
-metis --all [--lookback DURATION]
-→ Bypasses the per-run cap (does NOT bypass the 14-day dedup gate)
-→ Haiku pre-screens all roles on title+company to filter obvious mismatches cheaply
+metis --no-limit [--lookback DURATION]
+→ Bypasses the per-run cap (does NOT bypass the 30-day dedup gate)
+→ The configured fast model pre-screens all roles on title+company to filter obvious mismatches cheaply
 → Estimated API cost is shown before scoring begins
-→ Sonnet scores the survivors; digest is delivered
+→ The configured full scoring model scores the survivors; digest is delivered
 ```
 
 **When no new roles are found:**
 ```
-→ "No new roles to evaluate — all already seen within the past 14 days."
+→ "No new roles to evaluate — all already seen within the past 30 days."
 → No digest sent; no error; exit 0
 ```
 
@@ -218,7 +218,7 @@ metis --all [--lookback DURATION]
 - [x] Roles beyond the cap are NOT written to `seen_roles.json`; they reappear next run
 - [x] Running `metis` twice with no new emails shows "no new roles", not empty digest
 - [x] User is notified when the role count exceeds the cap (interactive runs)
-- [x] `--all` shows a cost estimate before making any scoring API calls
+- [x] `--no-limit` shows a provider-aware cost estimate before making any scoring API calls
 - [x] Cron / non-interactive runs never block on a prompt; they cap silently and log
 - [x] metis does not re-evaluate previously seen roles unless `metis reset` is run
 - [x] Digest has a default visual style; visual customisation requires editing `render.py`
@@ -282,7 +282,7 @@ cap, and delivery path apply.
 - [x] Re-running `metis schedule --set` replaces the existing schedule without orphaning the old plist
 - [x] If the venv binary has moved, `metis schedule` warns clearly
 - [x] The scheduling wizard is offered (but not required) at the end of `metis init`
-- [x] Existing `metis` and `metis --all` manual runs are unaffected
+- [x] Existing `metis` and `metis --no-limit` manual runs are unaffected
 - [ ] Missed runs (machine was asleep) are silently skipped — no backfill *(known; see ARCHITECTURE.md T-11)*
 
 ---
@@ -400,8 +400,8 @@ All user-facing configuration lives in two places: `.env` (runtime and secrets) 
 | What to configure | How | Default | Notes |
 |---|---|---|---|
 | Lookback window | `--lookback` flag or `DEFAULT_LOOKBACK` in `.env` | `3d` | Accepts `7d`, `14d`, `2026-06-01`, `yesterday` |
-| Max roles per run | `MAX_JOBS_PER_RUN` in `.env` | `20` | Set to `0` for no cap |
-| Score all roles (bypass cap) | `--all` flag | off | Bypasses the per-run cap only. Does NOT bypass the 14-day dedup gate. Use `metis reset` to clear dedup state. |
+| Max roles per run | `MAX_JOBS_PER_RUN` in `.env` | `40` | Set to `0` for no cap |
+| Score all roles (bypass cap) | `--no-limit` flag | off | Bypasses the per-run cap only. Does NOT bypass the 30-day dedup gate. Use `metis reset` to clear dedup state. |
 | Apply threshold | `scoring.apply_threshold` in `profile.yaml` | `75` | Roles at or above → "Apply" |
 | Consider threshold | `scoring.consider_threshold` in `profile.yaml` | `55` | Roles between thresholds → "Consider"; below → "Skipped" |
 | Level-mismatch penalty | `scoring.level_mismatch_deduction` in `profile.yaml` | `10` | Deducted when job title lacks a seniority signal (Staff / Lead / Director / VP / etc.) |
@@ -421,9 +421,9 @@ All user-facing configuration lives in two places: `.env` (runtime and secrets) 
 | Requirement | Target |
 |---|---|
 | First-time setup | < 5 minutes from install to first digest |
-| Per-run time | 60–90s for 20 roles. > 10 min warrants investigation. Scoring is chunked (≤15 roles/call) to stay within Sonnet's 8,192-token output ceiling; large batches (30–45 roles) add one extra API call but remain well within the time budget. |
-| API cost (20 roles) | < $0.30 |
-| API cost (100 roles with Haiku pre-screen) | < $1.50 |
+| Per-run time | 60–90s for 20 roles. > 10 min warrants investigation. Scoring is chunked (≤15 roles/call) to stay within the configured model's output ceiling; large batches (30–45 roles) add one extra API call but remain well within the time budget. |
+| API cost (20 roles) | Provider/model dependent; estimate shown before scoring |
+| API cost (100 roles with fast pre-screen) | Provider/model dependent; estimate shown before scoring |
 | Sensitive files | `.env` and `~/.job_pipeline/profile.yaml` are never committed to git |
 | Errors | Config errors exit with a clear message and a specific fix instruction. SMTP delivery failures exit with code 1 and a log message. Parse failures fall back gracefully (partial JSON recovery; no silent data loss). |
 
@@ -439,7 +439,7 @@ Rationale for non-obvious product decisions:
 | Q2 | `deal_breakers` are hard filters, not score penalties. | A deal-breaker violation means the role should never appear in the digest, period. Future: opt-in soft-filter mode for users who prefer a penalty. |
 | Q3 | Future sources: Tier A (IMAP email — Indeed, Glassdoor); Tier B (HTTP/RSS — VC boards like a16z). | Tier A reuses the existing IMAP parser. Tier B is a separate engineering track with different auth and scraping concerns. |
 | Q4 | `salary_floor_usd` is the single source of truth for the salary hard gate. | `salary_floor_usd` in `profile.yaml` is the authoritative floor. When the user updates salary via `metis init`, any salary mention in `deal_breakers[]` is automatically removed to prevent conflict (deal-breakers are applied before the `salary_floor_usd` check, so a stale deal-breaker would silently override the user's explicit floor). Planned: if listed salary < 90% of floor → filter; if 90–99% → score normally, add amber "salary near floor" tag. Not yet implemented — currently `salary_floor_usd` is sent to Claude as context and Claude applies it with its own judgment. |
-| Q5 | Haiku pre-screen filters on function only — not seniority level. | The pre-screen sees only title+company (no JD). It cannot reliably assess scope: a "Senior PM" role may be Staff-scope in practice. Pre-screen filters only wrong-function roles (engineering, marketing, design, sales) and obvious deal-breaker matches. All PM/product roles at any seniority level pass through to full Sonnet scoring, where scope is assessed against the JD. Missing 1 in 10 function-mismatches is acceptable; false negatives on level are not. |
+| Q5 | Fast pre-screen filters on function only — not seniority level. | The pre-screen sees only title+company (no JD). It cannot reliably assess scope: a "Senior PM" role may be Staff-scope in practice. Pre-screen filters only wrong-function roles (engineering, marketing, design, sales) and obvious deal-breaker matches. All PM/product roles at any seniority level pass through to full scoring, where scope is assessed against the JD. Missing 1 in 10 function-mismatches is acceptable; false negatives on level are not. |
 | Q6 | `metis config` not re-added. | `metis init` and `.env` cover all configuration surfaces. No meaningful third category. |
 | Q7 | Single-user only for v0.1. | No secondary persona. Senior Companion is a separate unrelated project. |
 | Q8 | Crash / failure recovery — known limitation in v0.1. | `seen_roles.json` is only written after a successful digest delivery. Any failure before that point (scoring error, SMTP failure, crash) leaves roles unmarked. A re-run re-fetches and re-scores the same roles, incurring additional API cost. This behaviour prioritises delivery guarantee (never mark a role seen if the user didn't receive the digest) over cost efficiency. **Future mitigation:** save the rendered HTML to disk on SMTP failure so the user can resend without re-scoring (ARCHITECTURE.md T-07). |
@@ -448,7 +448,7 @@ Rationale for non-obvious product decisions:
 | Q11 | Easy Apply vs. external ATS is invisible in the digest — by design for v0.1. | `apply_url` (the external ATS link from LinkedIn JSON-LD) is fetched and stored in the job dict but not surfaced in the digest card. Both Easy Apply and external-ATS roles display the same "View posting →" LinkedIn link. Surfacing the distinction (e.g. a "Direct apply" badge on cards with an ATS link) is planned for a future digest version. |
 | Q12 | Deal-breaker filtering relies on Claude's judgment, not deterministic matching. | The `verdict="filtered"` is set by the scoring model based on profile deal-breaker text. An ambiguous role might occasionally slip through. Deterministic keyword matching against `deal_breakers[]` is a future option for users who need guaranteed filtering. |
 | Q13 | Gmail INBOX assumed — label-filtered emails not supported. | The IMAP search targets the INBOX folder. If a user has a Gmail filter that labels LinkedIn job alerts and archives them, `metis` will find 0 emails. Workaround: disable the archive action on that Gmail filter, or adjust the filter to keep matching emails in INBOX. |
-| Q14 | Scoring API errors (network, rate limit) produce a traceback — known limitation in v0.1. | No retry logic on `score_jobs_batch`. A transient API error during scoring exits with a traceback. JD enrichment work is lost; re-running re-fetches and re-scores. A single retry with exponential backoff is planned. |
+| Q14 | Scoring API errors use bounded retries. | `score_jobs_batch` retries transient network, timeout, 5xx, and rate-limit errors with exponential backoff. Defaults are `METIS_LLM_MAX_ATTEMPTS=3`, `METIS_LLM_RETRY_BASE_SECONDS=1`, and `METIS_LLM_TIMEOUT_SECONDS=120`. If all attempts fail, the run exits without marking roles seen so delivery can be retried. |
 | Q15 | Long `notes` / AI-instructions field is hard to edit in-wizard. | `questionary.text` is a single-line input. Editing a multi-sentence `notes` value is awkward. Workaround: use `metis init → Open in editor` to edit `profile.yaml` directly for any long free-text field. |
 | Q16 | Scheduled job bakes in the venv binary path at install time. | The launchd plist and crontab line store the absolute path to `metis` (inside the venv). If the venv is recreated, the path becomes stale and the scheduled run fails silently. Mitigation: `metis schedule` detects this and warns. Fix: `metis schedule --set` reinstalls with the current binary. An alternative (using `env metis`) would require the venv to be on PATH at launchd start time, which is unreliable across macOS versions. Absolute path is more predictable. |
 | Q17 | Twice-weekly uses Monday and Thursday specifically. | Chosen to space digests evenly across the work week (3 days apart). This gives 4-day lookback coverage with minimal overlap. Users who prefer different days can run `metis schedule --set` and select "Weekly" for a custom single day, then run again for their second day — though this creates two independent plist entries, which is not yet supported in v0.1. Alternative: edit `schedule.json` and re-run `metis schedule --set` to regenerate the plist. |

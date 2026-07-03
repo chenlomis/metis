@@ -145,21 +145,21 @@ def _prompt_score_all(n_found: int, cap: int) -> int:
 
     Accepts:
       Enter / n / N      → cap (default, no pre-screen)
-      y / yes / all      → n_found (Haiku pre-screen runs first)
+      y / yes / all      → n_found (fast pre-screen runs first)
       a number           → that count, clamped to 1..n_found
     """
     from .score import estimate_cost, estimate_cost_hi
-    cost_str  = estimate_cost(n_found)
-    cost_hi   = estimate_cost_hi(n_found)
+    cost_str  = estimate_cost(n_found, provider=LLM_PROVIDER)
+    cost_hi   = estimate_cost_hi(n_found, provider=LLM_PROVIDER)
     high_cost = cost_hi >= _COST_GATE_USD
 
     print(f"\n  ⚠  Found {n_found} new roles in your lookback window.")
     print(f"     Your cap is {cap} (MAX_JOBS_PER_RUN in .env).")
     if high_cost:
-        print(f"     ⚠  Estimated cost: ~{cost_str}  (up to ${cost_hi:.2f}) — higher than usual")
+        print(f"     ⚠  Estimated {LLM_PROVIDER} cost: ~{cost_str}  (up to ${cost_hi:.2f}) — higher than usual")
     else:
-        print(f"     Estimated cost: ~{cost_str}")
-    print(f"     (Haiku pre-screen runs first — actual cost typically 40–60% lower.)")
+        print(f"     Estimated {LLM_PROVIDER} cost: ~{cost_str}")
+    print(f"     (Fast pre-screen runs first — actual cost is usually lower.)")
     print(f"     Roles beyond the number you choose are queued for the next run.\n")
     try:
         ans = input(
@@ -175,7 +175,7 @@ def _prompt_score_all(n_found: int, cap: int) -> int:
         return n_found
     try:
         n = max(1, min(int(ans), n_found))
-        print(f"     → {n} roles · estimated cost: ~{estimate_cost(n)}")
+        print(f"     → {n} roles · estimated {LLM_PROVIDER} cost: ~{estimate_cost(n, provider=LLM_PROVIDER)}")
         return n
     except ValueError:
         print(f"     → Unrecognized input, using cap ({cap})")
@@ -311,12 +311,12 @@ def _stage_cap(
     client,                  # Metis LLM client — passed through to prescreen if needed
     dry_run: bool = False,
 ) -> tuple[list[dict], bool]:
-    """Apply the per-run cap and optionally run the Haiku pre-screen.
+    """Apply the per-run cap and optionally run the fast pre-screen.
 
     Returns (jobs_to_score, did_prescreen).
 
     Cap logic (in priority order):
-      --no-limit flag       → confirm, run Haiku pre-screen, score everything that survives
+      --no-limit flag       → confirm, run fast pre-screen, score everything that survives
       interactive TTY       → ask how many to score; then pre-screen and cap to that number
       non-interactive cron  → pre-screen, then cap silently to MAX_JOBS_PER_RUN
 
@@ -331,8 +331,8 @@ def _stage_cap(
         from .score import estimate_cost
         print(
             f"\n  --no-limit: {n_found} role{'s' if n_found != 1 else ''} in window. "
-            f"Estimated cost: ~{estimate_cost(n_found)}\n"
-            f"  (Haiku pre-screen will filter obvious mismatches — actual cost typically lower.)\n"
+            f"Estimated {LLM_PROVIDER} cost: ~{estimate_cost(n_found, provider=LLM_PROVIDER)}\n"
+            f"  (Fast pre-screen will filter obvious mismatches — actual cost is usually lower.)\n"
         )
         # Guard: require explicit confirmation in interactive mode; block in cron.
         if n_found > MAX_JOBS_PER_RUN:
@@ -354,22 +354,22 @@ def _stage_cap(
     cap_to: int | None = None
     if MAX_JOBS_PER_RUN > 0 and n_found > MAX_JOBS_PER_RUN:
         if score_all:
-            log.info(f"{n_found} roles to evaluate (--no-limit flag; Haiku pre-screen will filter)")
+            log.info(f"{n_found} roles to evaluate (--no-limit flag; fast pre-screen will filter)")
             should_prescreen = True
         elif sys.stdin.isatty():
             chosen = _prompt_score_all(n_found, MAX_JOBS_PER_RUN)
             if chosen >= n_found:
-                log.info(f"Scoring all {n_found} roles (Haiku pre-screen will filter first)")
+                log.info(f"Scoring all {n_found} roles (fast pre-screen will filter first)")
                 should_prescreen = True
             else:
                 cap_to = chosen
                 should_prescreen = True  # always prescreen before a custom cap too
-                log.info(f"Scoring up to {chosen} role(s) (Haiku pre-screen runs first)")
+                log.info(f"Scoring up to {chosen} role(s) (fast pre-screen runs first)")
         else:
             # Non-interactive (cron): prescreen full batch, then cap to MAX_JOBS_PER_RUN.
             cap_to = MAX_JOBS_PER_RUN
             should_prescreen = True
-            log.info(f"{n_found} roles found — Haiku pre-screen before capping to {MAX_JOBS_PER_RUN}")
+            log.info(f"{n_found} roles found — fast pre-screen before capping to {MAX_JOBS_PER_RUN}")
     else:
         log.info(f"{n_found} unique role(s) to evaluate")
 
@@ -401,14 +401,14 @@ def _stage_cap(
 
 
 def _stage_enrich_and_score(jobs: list[dict], client, dry_run: bool = False) -> list[dict]:
-    """Fetch JDs (enrich), run Layer 1 extraction + gate checks, then score + rank with Sonnet.
+    """Fetch JDs, run structured extraction + gate checks, then score and rank.
 
-    Layer 1 (Haiku, temperature=0):
+    Layer 1 (configured extraction model, temperature=0):
       - Extracts structured fields (salary, work model, degree req, domain, etc.)
-      - Hard gates: blank JDs skip Sonnet; disclosed salary below floor → filtered
+      - Hard gates: blank JDs skip full scoring; disclosed salary below floor → filtered
       - Extraction failures fall back gracefully — scoring is never blocked
 
-    Layer 2 (Sonnet):
+    Layer 2 (configured scoring model):
       - Receives extraction context per job as grounding
       - Only runs on roles that passed all hard gates
 
@@ -548,8 +548,8 @@ def run_pipeline(since_dt: datetime.datetime, score_all: bool = False, dry_run: 
     seen_roles.json (30-day TTL) is the dedup gate — roles already scored
     within the last 30 days are skipped automatically.
 
-    score_all=True (--no-limit flag) bypasses the cap and runs a Haiku pre-screen
-    before full Sonnet scoring to keep costs down.
+    score_all=True (--no-limit flag) bypasses the cap and runs a fast pre-screen
+    before full scoring to keep costs down.
 
     dry_run=True skips all writes: no email send, no seen_roles save, no tracker write.
     """
@@ -574,9 +574,9 @@ def run_pipeline(since_dt: datetime.datetime, score_all: bool = False, dry_run: 
         log.info("No new roles to evaluate — all already seen within the past 30 days.")
         return
 
-    # Stage 2: Apply cap, optionally run Haiku pre-screen
+    # Stage 2: Apply cap, optionally run fast pre-screen
     # new_role_timestamps is built AFTER this so only surviving roles get persisted.
-    # (Pre-fix: capped roles were written to seen_roles.json and locked out for 14 days
+    # (Pre-fix: capped roles were written to seen_roles.json and locked out for 30 days
     #  without ever being evaluated — the role-burial bug.)
     all_jobs, _prescreened = _stage_cap(all_jobs, score_all, client, dry_run=dry_run)
     if not all_jobs:

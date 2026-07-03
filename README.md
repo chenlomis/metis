@@ -8,6 +8,8 @@ Think of it as a personal decision agent for high-volume opportunity triage: it 
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![Tests](https://github.com/chenlomis/metis/actions/workflows/test.yml/badge.svg)](https://github.com/chenlomis/metis/actions/workflows/test.yml)
+[![Coverage](https://img.shields.io/badge/coverage-pytest--cov-informational.svg)](#testing)
 [![LLM providers](https://img.shields.io/badge/LLM-Anthropic%20%7C%20OpenAI-blueviolet.svg)](#env-configuration)
 
 ![Metis demo preview](docs/assets/metis-demo-thumbnail.png)
@@ -345,9 +347,9 @@ Scoring cost depends on provider, model, and how many roles survive pre-screenin
 
 Runtime depends on how many roles survive deduplication and pre-screening. A larger run may make several model calls: fast pre-screening, structured JD extraction, then full scoring. metis logs chunk progress while it works so long runs do not look frozen.
 
-When more than `MAX_JOBS_PER_RUN` new roles appear (default: 40), metis pauses and shows the count and estimated cost before proceeding. If you choose fewer than the available roles, metis pre-screens the full batch, scores the freshest roles up to your chosen count, and stores the remaining pre-screen survivors in `role_queue.json` for the next run. They are never silently discarded or marked seen before scoring.
+When more than `MAX_JOBS_PER_RUN` new roles appear (default: 40), metis pauses and shows the count and estimated cost before proceeding. The estimate is provider-aware for the built-in Anthropic/OpenAI defaults and can be overridden with `METIS_COST_PER_ROLE_LOW` / `METIS_COST_PER_ROLE_HIGH` if you use custom models or pricing. If you choose fewer than the available roles, metis pre-screens the full batch, scores the freshest roles up to your chosen count, and stores the remaining pre-screen survivors in `role_queue.json` for the next run. They are never silently discarded or marked seen before scoring.
 
-Set `MAX_JOBS_PER_RUN=0` in `.env` to remove the cap.
+Set `MAX_JOBS_PER_RUN=0` in `.env` to remove the cap. For rate-limit-prone providers, tune `METIS_LLM_MAX_ATTEMPTS`, `METIS_LLM_RETRY_BASE_SECONDS`, and `METIS_LLM_TIMEOUT_SECONDS`.
 
 ---
 
@@ -455,6 +457,19 @@ This usually means a stale `metis.egg-info/` directory is confusing editable ins
 
 ```bash
 rm -rf metis.egg-info && pip install -e .
+```
+
+---
+
+<a id="testing"></a>
+
+## Testing
+
+CI runs the full pytest suite on Python 3.11 and 3.12, with a `pytest-cov` XML artifact attached to each workflow run. Locally:
+
+```bash
+make test
+venv/bin/python -m pytest tests/ -q --cov=metis --cov-report=term-missing
 ```
 
 ---

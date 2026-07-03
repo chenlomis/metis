@@ -1,5 +1,5 @@
 from __future__ import annotations
-import re, json, logging, time
+import os, re, json, logging, time
 from pathlib import Path
 from typing import List
 import anthropic
@@ -53,7 +53,7 @@ def _candidate_name() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Pre-screen — fast Haiku pass on title+company only (no JD fetch)
+# Pre-screen — fast model pass on title+company only (no JD fetch)
 # ---------------------------------------------------------------------------
 
 def _build_prescreen_context() -> str:
@@ -104,18 +104,63 @@ def _build_prescreen_context() -> str:
     return "\n".join(lines)
 
 
-def estimate_cost(n: int) -> str:
-    """Human-readable Sonnet cost range for scoring n jobs (upper bound before pre-screen).
+_DEFAULT_COST_PER_ROLE_USD: dict[str, tuple[float, float]] = {
+    # Conservative end-to-end per-role estimates, including extraction and full scoring.
+    # Override with METIS_COST_PER_ROLE_LOW/HIGH when using custom models or pricing.
+    "anthropic": (0.005, 0.015),
+    "openai": (0.003, 0.012),
+}
+
+
+def _cost_provider(provider: str | None = None) -> str:
+    try:
+        from .llm import normalize_provider
+        return normalize_provider(provider or os.getenv("METIS_LLM_PROVIDER", "anthropic"))
+    except Exception:
+        return "anthropic"
+
+
+def _cost_per_role(provider: str | None = None) -> tuple[float, float]:
+    provider_id = _cost_provider(provider)
+    default_low, default_high = _DEFAULT_COST_PER_ROLE_USD.get(
+        provider_id,
+        _DEFAULT_COST_PER_ROLE_USD["anthropic"],
+    )
+    try:
+        low = float(os.getenv("METIS_COST_PER_ROLE_LOW", default_low))
+        high = float(os.getenv("METIS_COST_PER_ROLE_HIGH", default_high))
+    except ValueError:
+        low, high = default_low, default_high
+    if high < low:
+        high = low
+    return max(0.0, low), max(0.0, high)
+
+
+def estimate_cost(n: int, *, provider: str | None = None) -> str:
+    """Human-readable provider-aware cost range for scoring n jobs.
 
     Exported so pipeline.py can reference this single source of truth for cost estimates.
     """
-    lo, hi = n * 0.005, n * 0.015
+    low, high = _cost_per_role(provider)
+    lo, hi = n * low, n * high
     return f"${lo:.2f}–${hi:.2f}"
 
 
-def estimate_cost_hi(n: int) -> float:
+def estimate_cost_hi(n: int, *, provider: str | None = None) -> float:
     """Upper-bound cost estimate as a float — used by the cost gate in pipeline.py."""
-    return n * 0.015
+    return n * _cost_per_role(provider)[1]
+
+
+def _retry_settings() -> tuple[int, float]:
+    try:
+        attempts = int(os.getenv("METIS_LLM_MAX_ATTEMPTS", "3"))
+    except ValueError:
+        attempts = 3
+    try:
+        base_seconds = float(os.getenv("METIS_LLM_RETRY_BASE_SECONDS", "1"))
+    except ValueError:
+        base_seconds = 1.0
+    return max(1, attempts), max(0.0, base_seconds)
 
 
 def _recover_partial_json(raw: str) -> list[dict]:
@@ -165,8 +210,8 @@ def _unwrap_score_json(value: object) -> list[dict]:
 
 def prescreen_jobs_batch(client, jobs: list[dict],
                          *, model: str = _DEFAULT_PRESCREEN_MODEL) -> list[dict]:
-    """Fast Haiku pre-screen on title+company only — filters obvious mismatches before
-    JD enrichment and full Sonnet scoring.
+    """Fast-model pre-screen on title+company only — filters obvious mismatches before
+    JD enrichment and full scoring.
 
     Returns the subset of jobs worth scoring.  Falls back to the full list if
     the API call fails or the response cannot be parsed.
@@ -205,7 +250,7 @@ def prescreen_jobs_batch(client, jobs: list[dict],
     except Exception as exc:
         log.warning(
             "Pre-screen API call failed (%s) — skipping filter, proceeding with all %d roles. "
-            "Estimated Sonnet cost: ~$%.4f",
+            "Estimated scoring cost: ~%s",
             exc, len(jobs), estimate_cost(len(jobs)),
         )
         return jobs
@@ -236,7 +281,7 @@ def prescreen_jobs_batch(client, jobs: list[dict],
     if not passed and not filtered:
         log.warning(
             "Pre-screen: response couldn't be parsed — proceeding with all %d roles. "
-            "Estimated Sonnet cost: ~$%.4f",
+            "Estimated scoring cost: ~%s",
             len(jobs), estimate_cost(len(jobs)),
         )
         return jobs
@@ -248,7 +293,7 @@ def prescreen_jobs_batch(client, jobs: list[dict],
 
 
 # ---------------------------------------------------------------------------
-# Full scoring (Sonnet)
+# Full scoring
 # ---------------------------------------------------------------------------
 
 def _build_bullet_style_guide(profile_data: dict) -> str:
@@ -552,7 +597,7 @@ def _build_score_system() -> str:
     return build_score_system(profile)
 
 
-_SCORE_CHUNK_SIZE = 15   # max jobs per Sonnet call (~15 × 300 tok ≈ 4,500 out, fits in 8192)
+_SCORE_CHUNK_SIZE = 15   # max jobs per scoring call (~15 × 300 tok ≈ 4,500 out, fits in 8192)
 _MAX_OUTPUT_TOKENS = 8192
 
 
@@ -591,7 +636,7 @@ def _score_chunk(
         anthropic.APITimeoutError,       # request timed out
         LLMTransientError,
     )
-    _MAX_ATTEMPTS = 3
+    _MAX_ATTEMPTS, _RETRY_BASE_SECONDS = _retry_settings()
     response = None
     for attempt in range(_MAX_ATTEMPTS):
         try:
@@ -610,9 +655,9 @@ def _score_chunk(
             break
         except _RETRYABLE as exc:
             if attempt < _MAX_ATTEMPTS - 1:
-                wait = 2 ** attempt   # 1s, 2s
+                wait = _RETRY_BASE_SECONDS * (2 ** attempt)
                 log.warning(
-                    "Scoring API error (attempt %d/%d): %s — retrying in %ds",
+                    "Scoring API error (attempt %d/%d): %s — retrying in %.1fs",
                     attempt + 1, _MAX_ATTEMPTS, exc, wait,
                 )
                 time.sleep(wait)
