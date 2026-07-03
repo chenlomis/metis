@@ -211,11 +211,18 @@ Maximum 3 entries in _followups. Omit the list entirely (or set to []) if none a
 
 JD_EXTRACT_SYSTEM = """\
 You are a structured JD extractor. Given job listings, extract factual fields \
-and return a JSON array — one object per job, same order as input. \
+and return a JSON object with an "extractions" array — one object per job, same order as input. \
 Be conservative: use null or [] when uncertain. \
 Never guess salary numbers or fabricate details.
 
-For each job return exactly this schema:
+Return exactly this top-level shape:
+{
+  "extractions": [
+    { ...one extraction object per job... }
+  ]
+}
+
+Each extraction object must use exactly this schema:
 {
   "jd_quality": "high" | "medium" | "low" | "blank",
   "unknown_fields": [],
@@ -278,7 +285,8 @@ Extraction rules:
 - jd_signals.evidence_gaps: 0-4 missing/unclear facts that affect scoring, such as undisclosed compensation or hard-to-verify domain depth
 - Keep jd_signals factual and JD-grounded. Do not compare to the candidate profile here.
 - unknown_fields: list field names where you lacked enough signal (NOT salary — use salary_disclosed=false for that)
-- Return ONLY a valid JSON array. No markdown fences, no commentary.\
+- Return exactly one extraction object per input job, in the same order.
+- Return ONLY a valid JSON object. No markdown fences, no commentary.\
 """
 
 

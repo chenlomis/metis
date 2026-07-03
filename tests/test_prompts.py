@@ -53,6 +53,7 @@ class TestJdExtractSystem:
 
     def test_includes_jd_signals_schema(self):
         from metis.prompts import JD_EXTRACT_SYSTEM
+        assert '"extractions"' in JD_EXTRACT_SYSTEM
         assert '"jd_signals"' in JD_EXTRACT_SYSTEM
         assert '"must_haves"' in JD_EXTRACT_SYSTEM
         assert '"screening_signals"' in JD_EXTRACT_SYSTEM

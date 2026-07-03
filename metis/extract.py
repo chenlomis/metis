@@ -164,7 +164,7 @@ def _extract_chunk(client, jobs: list[dict],
                 system=JD_EXTRACT_SYSTEM,
                 user=(
                     f"Extract structured fields for all {len(jobs)} jobs. "
-                    f"Return a JSON array of exactly {len(jobs)} objects.\n\n"
+                    f"Return a JSON object with an 'extractions' array of exactly {len(jobs)} objects.\n\n"
                     f"{job_blocks}"
                 ),
                 json_mode=True,

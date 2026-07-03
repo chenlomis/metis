@@ -344,6 +344,17 @@ class TestExtractJdStructs:
         assert result[0]["jd_quality"] == "high"
         assert result[0]["jd_signals"]["must_haves"] == ["Own platform roadmap", "Partner with engineering"]
 
+    def test_extract_prompt_requests_extractions_wrapper(self):
+        from metis.extract import extract_jd_structs
+        client = MagicMock()
+        client.messages.create.return_value = self._good_response(1)
+
+        extract_jd_structs(client, [_make_job()])
+
+        user = client.messages.create.call_args.kwargs["messages"][0]["content"]
+        assert "extractions" in user
+        assert "JSON object" in user
+
     def test_legacy_response_without_jd_signals_gets_default_shape(self):
         from metis.extract import extract_jd_structs
         legacy = _minimal_struct()
