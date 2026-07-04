@@ -29,7 +29,10 @@ metis = "metis.cli:main"
 
 [project.optional-dependencies]
 browser = ["playwright>=1.40"]
-dev = ["pytest>=8.0"]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]
