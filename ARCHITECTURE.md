@@ -489,17 +489,24 @@ Each stage is independent — later stages don't replace earlier ones.
 Stage 0 (done)   CLI              metis [subcommand]
                                   Entry point for the author and technical users.
 
-Stage 1 (next)   MCP server       metis/mcp_server.py, local subprocess
+Stage 1 (initial) MCP server      metis/mcp_server.py, local subprocess
                                   Claude Code users add via: claude mcp add metis
                                   No hosting required. Runs on user's machine with
                                   their own credentials. Natural language → tool calls
                                   → real pipeline.
-                                  Prerequisite: config-as-parameters refactor.
+                                  Current version uses service wrappers around the
+                                  existing CLI/pipeline internals.
+
+Stage 1.5         MCP/API hardening
+                                  Remove import-time path/env coupling from core
+                                  modules. State/profile/tracker config should be
+                                  call-scoped for long-lived agent servers and clean
+                                  library imports.
 
 Stage 2           Python package  pip install metis (PyPI)
                                   Developers can import score_jobs(), extract_jd() etc.
                                   into their own agents or workflows.
-                                  Prerequisite: stable public API + Stage 1 complete.
+                                  Prerequisite: stable public API + Stage 1.5 complete.
 
 Stage 3           Docker image    docker run -p 3000:3000 metis/metis
                                   Browser-based setup wizard. No Python/venv/cron.
@@ -516,19 +523,32 @@ Stage 4           Web app         OAuth Gmail login, server-side scheduling.
 
 Thin wrapper around existing functions. Does NOT require a rewrite.
 
-Tools to expose:
-- `score_jobs`       → wraps `run_pipeline()`
-- `get_last_digest`  → reads last_run.json, returns summary
-- `check_tracker`    → reads Applications xlsx, returns recent rows
-- `run_track`        → wraps `run_track()` from track.py
-- `get_profile`      → returns current profile.yaml summary
+Tools exposed:
+- `get_metis_status`          → read setup/config readiness and missing next steps
+- `run_job_search`            → wraps the normal digest pipeline with explicit config
+- `list_recommended_roles`    → reads the latest run's Solid/Moderate roles
+- `get_role_details`          → reads one role's saved trace details
+- `record_scoring_feedback`   → appends explicit calibration feedback
+- `list_scoring_feedback`     → reads recent feedback entries
+- `track_applications`        → scans application-status emails and updates/previews tracker
+- `list_application_activity` → reads Applications xlsx rows
+- `generate_progress_summary` → wraps `metis summary` report generation
 
-**Key prerequisite — config as parameters:**
-MCP server runs as a subprocess in an arbitrary working directory and cannot rely on
-`.env` being present. All config (api_key, gmail_address, gmail_app_password,
-profile_path) must be passable as explicit parameters to core functions. The CLI layer
-continues reading from `.env` and passing values through — the change is that the
-library layer accepts explicit parameters rather than reading env vars at import time.
+Current service boundary lives in `metis/services/`. Read/query tools are explicit-path
+and safe to call from an agent. `run_job_search` and `track_applications` have service
+wrappers that return structured status, stdout preview, and before/after counts where
+applicable. They use a process-local lock while temporarily patching legacy import-time
+globals, which prevents overlapping MCP write/run calls from mixing persona state in
+the initial server. The deeper config-as-parameters refactor is still needed before
+these internals are a clean public library API. LinkedIn alert fetching can use the
+provider-neutral OAuth fetcher when Gmail IMAP credentials are not configured.
+
+**Next hardening step — config as parameters:**
+Long-lived MCP servers and importable packages should not depend on module-level path
+constants resolved from `METIS_DATA_DIR` / `METIS_PROFILE` at import time. All config
+(`api_key`, email auth, `data_dir`, `profile_path`, `tracker_path`) should become
+explicit parameters or call-time resolvers in core functions. The CLI layer can keep
+reading `.env`; the library layer should not.
 
 **Discovery:** Publish to MCP registry after Stage 1 is stable. The CLI audience is
 the author; the MCP audience is Claude Code users — technical, self-selecting, more
