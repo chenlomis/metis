@@ -164,11 +164,25 @@ Score distribution, apply rate, and score-vs-interest correlation can all be com
 
 ## Library / MCP design
 
-**D-36 · Config-as-parameters before MCP or PyPI**
-Several modules call `os.getenv()` at import time (score.py, extract.py, linkedin.py). A library must not do this — it hijacks the caller's environment. Fix: pass `api_key=`, `model=`, `profile_path=` explicitly into core functions. The CLI wrapper reads from `.env` and passes through. This is a prerequisite for both the MCP server (different working dir) and PyPI publish (clean importable API).
+**D-36 · Config-as-parameters before PyPI-quality public API**
+Several modules call `os.getenv()` or resolve state/profile paths at import time. The initial MCP server ships with a service boundary that passes explicit paths/config at call time and serializes legacy write/run calls with a process-local lock. A cleaner public library API still needs core functions to accept `api_key=`, `model=`, `data_dir=`, `profile_path=`, and `tracker_path=` directly, with the CLI wrapper reading `.env` and passing values through.
 
-**D-37 · MCP surface: 5 tools, wrapping existing functions**
-`score_jobs`, `get_last_digest`, `check_tracker`, `run_track`, `get_profile`. Thin wrapper — no rewrite. Prerequisite: D-36 + stable core functions (finish `metis summary` and feedback loop first so the MCP surface doesn't change signatures mid-flight).
+**D-37 · MCP surface is product-level, not subcommand-shaped**
+Expose agent-facing capabilities instead of mirroring CLI commands or module names.
+Initial read/write service boundary: `get_metis_status`, `run_job_search`,
+`list_recommended_roles`, `get_role_details`, `record_scoring_feedback`,
+`list_scoring_feedback`, `track_applications`, `list_application_activity`, and
+`generate_progress_summary`. Thin wrappers are still preferred, but tool names
+should match verbs a user would say in chat. Remaining hardening: finish D-36 so
+write/run tools no longer rely on ambient env/import-time globals internally.
+
+Status note: read/query tools and `record_scoring_feedback` are call-time configured.
+`run_job_search` and `track_applications` now wrap the existing pipeline/tracker flows
+with explicit data/profile/tracker paths and structured results. These wrappers use a
+process-local lock while patching legacy import-time globals during the call; the
+deeper D-36 refactor is still needed before the core pipeline is a clean public library
+API. LinkedIn alert fetching falls back to the provider-neutral OAuth email fetcher
+when legacy Gmail IMAP credentials are not configured.
 
 **D-29 · Employer-lens scoring: deferred**
 Rejection patterns (applied to roles → got rejected) could indicate a mismatch between self-assessment and employer assessment. Adding an employer lens to scoring is a later concern — it requires enough track data to be meaningful and risks producing confident wrong signals on thin data. Address after `metis summary` surfaces the pattern clearly.
@@ -255,7 +269,7 @@ The eval dict shape that `score.py` emits is consumed directly by `render.py`: v
 Passive seekers (biweekly/weekly cadence, selective, won't mass-apply) are the better fit for scoring-first design. Active seekers want volume tools; they churn from anything that adds friction before the application. Passive seekers value signal quality over throughput — metis's 2-layer AI pipeline is the right investment for that persona.
 
 **D-45 · Interface roadmap: CLI → MCP server → PyPI → Docker → web app (on demand only)**
-Stage 0 (done): local CLI. Stage 1 (next): MCP server — local subprocess, no hosting, Claude Code users can `claude mcp add metis`. Stage 2: PyPI package after stable public API. Stage 3: Docker for users who skip the venv setup. Stage 4: web app only if demonstrated demand from non-technical users. Prereq for Stage 1: config-as-parameters refactor (no `os.getenv()` at module import time).
+Stage 0 (done): local CLI. Stage 1 (initial): MCP server — local subprocess, no hosting, agent clients can call Metis tools directly. Stage 1.5: harden runtime config so state/profile/tracker paths are call-scoped throughout core modules. Stage 2: PyPI package after stable public API. Stage 3: Docker for users who skip the venv setup. Stage 4: web app only if demonstrated demand from non-technical users.
 
 **D-46 · prompts.py as canonical, OSS-safe identity layer**
 All LLM prompt templates live in `prompts.py`. Candidate name and profile are injected dynamically — no personal details hardcoded. This makes the repo safe to publish as OSS without scrubbing. Call sites (`score.py`, `feedback.py`) import from here; no duplicate prompt strings anywhere in the codebase.

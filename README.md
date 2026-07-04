@@ -311,6 +311,24 @@ LinkedIn alert senders are built in. Company sourcing can pull roles directly fr
 
 `metis track` recognizes confirmations, rejections, and recruiter-screen emails. Feedback is parsed by the configured LLM provider, confirmed before saving, and injected into future scoring runs.
 
+### MCP server
+
+Metis also ships an MCP server for agent clients that can call local tools. It runs as
+a local subprocess, not a hosted service; profile, tracker, feedback, and email
+credentials stay on the user's machine. Install the MCP extra, then configure your
+MCP client to run `metis-mcp`:
+
+```bash
+pipx inject metis-job 'mcp>=1.0.0'
+metis-mcp
+```
+
+The server exposes these tools: `get_metis_status`, `run_job_search`,
+`list_recommended_roles`, `get_role_details`, `record_scoring_feedback`,
+`list_scoring_feedback`, `track_applications`, `list_application_activity`, and
+`generate_progress_summary`. `run_job_search` and `track_applications` default to
+dry-run mode for safer agent usage.
+
 ### State and debugging
 
 | Command                              | What it does                                                                            |
@@ -361,7 +379,8 @@ Near-term roadmap:
 
 - More alert sources and company/ATS adapters
 - Additional LLM adapters, such as Gemini and Grok/XAI
-- MCP server and importable core API
+- [x] Initial MCP server support
+- Cleaner importable core API for PyPI and long-lived agent integrations
 - PyPI and Docker packaging
 - Output targets beyond email, such as Markdown, Slack, Notion, or webhooks
 - Deeper analytics over score trends, tracker outcomes, and market signals

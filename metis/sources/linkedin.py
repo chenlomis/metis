@@ -19,6 +19,11 @@ _LINKEDIN_SENDER_SEARCH = (
     'FROM "jobs-noreply@linkedin.com" '
     'FROM "jobs-listings@linkedin.com"'
 )
+_LINKEDIN_SENDERS = [
+    "jobalerts-noreply@linkedin.com",
+    "jobs-noreply@linkedin.com",
+    "jobs-listings@linkedin.com",
+]
 
 _NOISE_LINES = re.compile(
     r"^\d+\s+connections?$"
@@ -435,6 +440,26 @@ def fetch_linkedin_alerts_since(
 
     _addr = gmail_address or _GMAIL_ADDRESS_ENV
     _pwd  = gmail_app_password or _GMAIL_APP_PASSWORD_ENV
+    if not (_addr and _pwd):
+        try:
+            from .email_fetcher import fetch_emails_from_sender, get_provider
+
+            if get_provider() != "imap":
+                for sender in _LINKEDIN_SENDERS:
+                    for msg in fetch_emails_from_sender(sender, since_dt):
+                        body = msg.get("text", "")
+                        html = msg.get("html", "")
+                        if body or html:
+                            threads.append({
+                                "msg_id": "",
+                                "body": body,
+                                "html": html,
+                                "subject": msg.get("subject", ""),
+                                "email_date": msg.get("date", datetime.datetime.now().isoformat()),
+                            })
+                return threads
+        except Exception as exc:
+            log.warning("OAuth email fetch failed for LinkedIn alerts — falling back to IMAP: %s", exc)
 
     for attempt in range(1, _IMAP_MAX_RETRIES + 1):
         try:

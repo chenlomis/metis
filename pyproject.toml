@@ -26,10 +26,12 @@ dependencies = [
 
 [project.scripts]
 metis = "metis.cli:main"
+metis-mcp = "metis.mcp_server:main"
 
 [project.optional-dependencies]
 browser = ["playwright>=1.40"]
 dev = ["pytest>=8.0"]
+mcp = ["mcp>=1.0.0"]
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -37,7 +37,8 @@ The [README roadmap](./README.md#roadmap) is the best source for larger directio
 - New source adapters for job boards, ATSs, and company alert emails.
 - Outlook / Microsoft 365 support.
 - LLM provider abstraction, so scoring is not tied to one backend.
-- Cleaner library boundaries for the future MCP server and PyPI package.
+- MCP hardening, especially call-scoped runtime config and non-interactive safety.
+- Cleaner library boundaries for the future PyPI package.
 - Output interfaces beyond email, such as chat, Slack, Telegram, or local agent surfaces.
 - Resume tailoring and application-assist workflows with human approval before submission.
 - Globalization: non-English alert emails, international salary/location handling, and region-specific job boards.
