@@ -48,3 +48,6 @@ dist/
 
 # pytest
 .pytest_cache/
+.coverage
+coverage.xml
+htmlcov/

@@ -1,4 +1,4 @@
-.PHONY: test test-fast test-full test-e2e lint
+.PHONY: test test-fast test-full test-e2e coverage lint
 
 # Prefer the contributor venv from README, then the legacy local venv.
 # Fall back to the active Python so CI and already-activated shells still work.
@@ -14,6 +14,9 @@ test-full:
 
 test-e2e:
 	$(PYTEST) tests/test_e2e_personas.py -q
+
+coverage:
+	$(PYTEST) tests/ --cov=metis --cov-report=term-missing --cov-report=xml
 
 lint:
 	python -m compileall -q metis tests

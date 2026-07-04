@@ -483,6 +483,7 @@ rm -rf metis.egg-info && pip install -e .
 Issues, ideas, docs fixes, and PRs are welcome. Small improvements can go straight to PR; for larger changes, open an issue first so we can align before you spend time building.
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for development setup and PR guidance. For private vulnerability reports, see [SECURITY.md](./SECURITY.md).
+For test strategy, critical-path coverage, and coverage-reporting guidance, see [docs/testing.md](./docs/testing.md).
 
 **Dev setup:**
 
@@ -492,6 +493,7 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 npm install
 make test
+make coverage  # optional: full suite with coverage report
 make lint
 ```
 
