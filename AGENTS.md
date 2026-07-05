@@ -1,14 +1,14 @@
-# metis — Codex context
+# metis — agent context
 
 ## What this project is
-A personal job alert pipeline. It pulls job listings, scores them against a user profile using Codex, and sends a personalized email digest. CLI entry point: `metis` → `metis/cli.py`; digest orchestration lives in `metis/pipeline.py`.
+A personal job alert pipeline. It pulls job listings, scores them against a user profile using the configured LLM provider, and sends a personalized email digest. CLI entry point: `metis` → `metis/cli.py:main`; digest orchestration lives in `metis/pipeline.py`.
 
 ## Key commands
 ```
 # Main runner (no subcommand)
 metis                          # pull → score → send digest; incremental (since last run, fallback 3d)
 metis --lookback 7d            # override window; accepts: 3d, 14d, 2026-06-01
-metis --no-limit               # ignore MAX_JOBS_PER_RUN cap; Haiku pre-screens to control cost
+metis --no-limit               # ignore MAX_JOBS_PER_RUN cap; fast model pre-screens to control cost
 metis --dry-run                # full run (fetch + score), zero writes — no email, no seen_roles, no tracker
 
 # init — build/update scoring profile
@@ -33,7 +33,7 @@ metis track --lookback 30d     # accepts same DURATION format as main runner
 metis track --dry-run          # parse + classify, no xlsx write, no open; prints matches to stdout
 
 # feedback — calibration notes that shape future scoring
-metis feedback                 # collect → Codex parse → conflict detect → save to feedback.md
+metis feedback                 # collect → configured LLM parse → conflict detect → save to feedback.md
 metis feedback list            # show last 5 entries (full history: ~/.job_pipeline/feedback.md)
 
 # debug — dump most recent LinkedIn alert email
@@ -48,18 +48,23 @@ METIS_THEME=dark  metis [...]
 ```
 metis/
   cli.py           — CLI parsing and subcommand routing
+  auth/            — Gmail/Outlook OAuth, active provider marker, PKCE/state helpers
+  config_access_cmd.py — `metis config access` inbox connect/reconnect flow
   pipeline.py      — digest pipeline orchestration
   init_cmd.py      — interactive profile setup wizard (InquirerPy + Rich)
   theme.py         — ALL colors, styles, and print helpers (single source of truth)
   profile.py       — load/save ~/.job_pipeline/profile.yaml
-  extract.py       — Codex extraction of structured profile from resume text
+  llm/             — provider-neutral LLM boundary (Anthropic/OpenAI adapters)
+  normalization.py — deterministic profile normalization after raw LLM extraction
+  extract.py       — structured JD extraction before scoring
   score.py         — scoring logic against profile
   render.py        — builds DigestPayload, renders HTML via React Email or Python fallback
   schedule_cmd.py  — cron scheduling wizard
   state.py         — run state / seen-jobs tracking
   track.py         — job tracking
-  tracker.py       — tracker helpers
-  feedback_cmd.py  — feedback collection: collect → parse (Haiku) → save to feedback.md + feedback_log.jsonl
+  xlsx.py          — applications.xlsx write helpers
+  track_write.py   — tracker status update helpers
+  feedback.py      — feedback collection: collect → parse with configured extract model → save to feedback.md + feedback_log.jsonl
   sources/         — job source scrapers (proactive company career pages)
 
 emails/
@@ -156,13 +161,71 @@ make test-fast       # fast pass only
 
 # Manual — only if venv is already active:
 source venv/bin/activate
-pytest tests/ -q                                        # full pass (~397 tests, ~3s)
+pytest tests/ -q                                        # full pass (~459 tests, ~3s)
 pytest tests/test_core.py tests/test_schedule.py -q    # fast pass (~60 tests, <3s)
 ```
 
 `test_extract.py` is the heavyweight suite (~70+ tests, mocked API). Only run when `extract.py` changes — skip during routine iteration.
 
 When the same feedback, correction, or workflow preference repeats twice, propose promoting it to the narrowest durable layer: test, contract, AGENTS rule, docs checklist, or reusable skill.
+
+## Optimization and learning policy
+
+Metis optimizes for calibrated job-search outcomes, not raw score inflation, job volume, or opaque auto-learning.
+
+Primary lagging outcome:
+- Recruiter screen / interview conversion from applied roles.
+
+Primary near-term calibration:
+- Solid Match and Moderate Match roles should have meaningfully higher application rates than Limited Match roles.
+- Limited Match should have a meaningfully high non-application rate; if users apply to Limited Match roles often, treat that as a scoring calibration signal.
+- Repeated positive feedback should preserve or amplify the corresponding pattern in future scoring.
+- Repeated negative feedback should reduce the corresponding pattern in future scoring.
+
+Hard constraints before optimization:
+- Never fabricate resume content or unsupported candidate claims.
+- Respect explicit deal-breakers as hard gates.
+- Keep tests and schema contracts passing for touched behavior.
+- Respect configured cost caps.
+- Do not auto-update profile, scoring weights, resume policy, or durable rules from thin behavioral data.
+- User approval is required before converting behavioral signals into persistent policy.
+
+When changing scoring, feedback, reporting, tracker, resume tailoring, or pipeline behavior:
+- Evaluate both true positives and true negatives:
+  - TP = Solid/Moderate roles that are applied to.
+  - TN = Limited Match roles that are not applied to.
+- Treat recruiter screen rate as a lagging outcome, not the only active reward.
+- Use application behavior, feedback, and tier calibration as near-term signals.
+- Surface repeated feedback as a proposed durable change rather than silently changing weights.
+- Promote repeated feedback to the narrowest durable layer: feedback note, profile edit, test, contract, AGENTS rule, docs checklist, or reusable skill.
+- Keep recommendation policy separate from resume-tailoring policy. Positive recommendation feedback can raise future role emphasis, but it cannot authorize unsupported resume claims.
+
+## OAuth email access state
+
+`metis init` and `metis config access` can connect Gmail or Outlook via browser OAuth.
+
+Local runtime files, never committed:
+- `~/.job_pipeline/gmail_token.json`
+- `~/.job_pipeline/outlook_token.json`
+- `~/.job_pipeline/email_provider.json`
+
+Provider selection order:
+1. `METIS_EMAIL_PROVIDER=gmail_oauth|outlook_oauth|imap` override
+2. `email_provider.json` latest successful OAuth connection
+3. newest OAuth token file for old dual-token installs
+4. legacy Gmail IMAP fallback
+
+OAuth security invariants:
+- Use `metis/auth/oauth_security.py` for random `state` and PKCE (`S256`) helpers.
+- Auth URLs must include `state`, `code_challenge`, and `code_challenge_method=S256`.
+- Callback handlers must reject missing/mismatched `state` before token exchange.
+- Token exchange must include the matching `code_verifier`.
+- Reconnect should force account selection (`prompt=consent select_account` for Gmail, `prompt=select_account` for Outlook).
+- Token files and `email_provider.json` must be written owner-only (`0600`).
+
+Current rollout boundary: non-LinkedIn email alert sources use the provider-neutral fetcher.
+LinkedIn alert fetching, tracker/backfill, and main digest delivery still have legacy Gmail
+call sites until explicitly wired through the provider abstraction.
 
 ## Critical constraints
 
@@ -251,8 +314,8 @@ Scoring reliability rules:
 ### 6. state.py `_role_hash()` is a persisted key — do not change
 `_role_hash(title, company)` in `state.py` produces the dedup keys stored in `~/.job_pipeline/seen_roles.json`. Changing the hash function (normalization regex, algorithm, slice length) invalidates all historical keys — every previously seen role re-processes on the next run, causing a flood email. The current implementation (`md5(normalize(title+company))[:12]`) is intentional and sufficient — do not "improve" it.
 
-### 7. tracker.py column order is a persisted xlsx schema — do not reorder or insert
-`_HEADERS` and `_COL_*` constants in `tracker.py` define the column layout of `applications.xlsx`. The file may contain months of history. **Column order must never change** without an explicit migration plan — inserting or reordering columns corrupts existing rows.
+### 7. xlsx.py column order is a persisted xlsx schema — do not reorder or insert
+`_HEADERS` and `_COL_*` constants in `xlsx.py` define the column layout of `applications.xlsx`. The file may contain months of history. **Column order must never change** without an explicit migration plan — inserting or reordering columns corrupts existing rows.
 
 Safe to change: column header *text* in `_HEADERS` (row 1 display names), tracker file path (via `TRACKER_PATH` env var).
 Not safe without migration: adding a column in the middle, removing a column, reordering.
@@ -291,7 +354,7 @@ All interactive prompts in `init_cmd.py` use five helpers — do not use `questi
 `schedule_cmd.py` still uses `questionary` (not migrated — fine to leave as-is).
 
 ## Dependencies
-- `anthropic` — Codex API (profile extraction + job scoring)
+- `anthropic` / `openai` — provider-backed LLM calls through `metis/llm/`
 - `rich>=13.0` — terminal formatting
 - `questionary>=2.0` — used by `schedule_cmd.py` only
 - `InquirerPy>=0.3.4` — prompt library for `init_cmd.py` `_ask*` helpers; in `requirements.txt`
@@ -309,4 +372,4 @@ If running separate Codex sessions on design vs. build:
 - `render.py` is build-owned for bug fixes and new data wiring only — output format is locked (see constraint #0)
 - `pipeline.py` stage order is locked — bug fixes only, no restructuring (see constraint #8)
 - `state.py` `_role_hash()` is frozen — do not touch (see constraint #6)
-- `tracker.py` column order is frozen — header text and file path are safe to change, order is not (see constraint #7)
+- `xlsx.py` column order is frozen — header text and file path are safe to change, order is not (see constraint #7)

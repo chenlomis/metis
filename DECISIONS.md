@@ -108,6 +108,13 @@ Each stage gates on the previous. MCP server is next and requires a "config as p
 **D-20 · No auto-calibration; all feedback is explicit and user-initiated**
 Score drift signals (applied to roles scored "skip") are surfaced as digest footer nudges, not auto-adjustments. User decides whether to act via `metis init → Quick edits` or `metis feedback`. Rationale: auto-calibration on thin behavioral signals produces confident wrong answers.
 
+**D-56 · Optimization policy lives in AGENTS.md; DECISIONS.md records the rationale**
+Metis optimizes for calibrated job-search outcomes, not raw role volume, inflated scores, or opaque auto-learning. Recruiter screen / interview conversion is the lagging north-star outcome, but day-to-day calibration uses nearer-term signals: application behavior, explicit feedback, source conversion, and tier calibration.
+
+Recommendation quality is evaluated as both true positives and true negatives: Solid/Moderate roles should be applied to at meaningfully higher rates, and Limited Match roles should usually not be applied to. A high Limited Match application rate is a calibration signal, not something to ignore because the role was "skipped."
+
+Durable behavior rules belong in `AGENTS.md` so Codex, Claude, Gemini, Grok, DeepSeek, and future coding agents can see them without knowing this decision log exists. This file keeps the why. No behavioral signal may silently weaken resume-tailoring safety: recommendation feedback can change future role emphasis, but it cannot authorize unsupported resume claims.
+
 **D-27 · Single shared identity in `prompts.py`; no hardcoded candidate names (OSS-safe)**
 All LLM calls share a common identity anchored in the headhunter framing: metis is the advisor, the candidate is the client, `profile.yaml` is the client brief. `prompts.py` is the single source of truth for identity templates and system prompt assembly — same principle as `theme.py` for colors. `SCORING_IDENTITY` and `FEEDBACK_IDENTITY` contain `{candidate_name}` format slots; no literal names are hardcoded. `build_candidate_context(profile)` synthesizes a terse brief from the profile dict that orients Claude before it reads the full `render_profile` detail. This separation (brief → detail) prevents Claude from pattern-matching keywords before it has a coherent perspective on the candidate.
 
