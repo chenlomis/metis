@@ -509,6 +509,7 @@ def build_score_system(profile: dict) -> str:
     """
     from .profile import render_profile
     from .feedback import load_feedback_text
+    from .domain_taxonomy import render_domain_taxonomy
     from .prompts import scoring_system_prompt
 
     apply_t, consider_t = 75, 55
@@ -525,6 +526,7 @@ def build_score_system(profile: dict) -> str:
     salary_is_hard_floor = bool(profile.get("salary_is_hard_floor", False))
     score_suffix       = _build_score_suffix(name, apply_t, consider_t, salary_is_hard_floor)
     feedback      = load_feedback_text()
+    domain_taxonomy = render_domain_taxonomy()
 
     # Inject extracted-context instruction into bullet_guide preamble so it
     # stays co-located with the writing rules rather than floating loose.
@@ -540,6 +542,7 @@ def build_score_system(profile: dict) -> str:
         bullet_guide=extracted_ctx_note + "\n\n" + bullet_guide,
         score_suffix=score_suffix,
         feedback_text=feedback,
+        domain_taxonomy_text=domain_taxonomy,
     )
 
 

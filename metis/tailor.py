@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .domain_taxonomy import render_domain_taxonomy
 from .llm import complete_text
 
 
@@ -329,6 +330,7 @@ def generate_tailoring_plan(
             "resume edits grounded in the evidence_matches. Return JSON only."
         ),
         "candidate": candidate,
+        "domain_transferability_reference": render_domain_taxonomy(),
         "role": {
             "title": role.get("title", ""),
             "company": role.get("company", ""),

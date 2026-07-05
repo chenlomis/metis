@@ -198,6 +198,20 @@ class TestScoringSystemPrompt:
             feedback_text=feedback,
         )
 
+    def test_domain_taxonomy_included_when_provided(self):
+        from metis.prompts import scoring_system_prompt
+
+        result = scoring_system_prompt(
+            profile=FULL_PROFILE,
+            rendered_profile="RENDERED PROFILE BLOCK",
+            bullet_guide="BULLET GUIDE BLOCK",
+            score_suffix="SCORE SUFFIX BLOCK",
+            domain_taxonomy_text="cloud infra hard barriers include Kubernetes",
+        )
+
+        assert "DOMAIN TRANSFERABILITY REFERENCE" in result
+        assert "Kubernetes" in result
+
     def test_contains_identity(self):
         result = self._make_prompt()
         assert "ruthlessly" in result or "headhunter" in result

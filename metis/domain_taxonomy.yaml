@@ -1,0 +1,101 @@
+version: 1
+purpose: >
+  Reference guidance for scoring and resume tailoring. Use it to separate
+  transferable product experience from domains that require direct evidence.
+
+rules:
+  - Do not collapse narrow technical requirements into generic platform fit.
+  - Native evidence may support strong fit; adjacent evidence may support cautious fit.
+  - Hard-barrier domains require direct evidence or should create real friction.
+  - Credentialed or regulated domains are not learnable-by-default when the JD says required.
+
+domains:
+  developer_platform:
+    native_signals:
+      - developer workflows
+      - APIs and SDKs
+      - CLI tooling
+      - internal platforms
+      - platform adoption
+    adjacent_signals:
+      - enterprise SaaS workflows
+      - technical PM with engineering users
+    hard_barriers: []
+
+  ai_platform:
+    native_signals:
+      - AI/ML systems
+      - model evaluation
+      - LLM orchestration
+      - human-in-the-loop workflows
+      - AI platform strategy
+    adjacent_signals:
+      - data products
+      - automation products
+      - enterprise AI adoption
+    hard_barriers:
+      - GPU scheduling
+      - CUDA/runtime internals
+      - model serving infrastructure ownership
+
+  data_platform:
+    native_signals:
+      - data modeling
+      - data governance
+      - analytics workflows
+      - semantic layers
+      - ETL or data pipelines
+    adjacent_signals:
+      - experimentation
+      - product analytics
+      - enterprise reporting
+    hard_barriers:
+      - database engine internals
+      - distributed query optimization
+
+  cloud_infrastructure:
+    native_signals:
+      - cloud platform services
+      - infrastructure products
+      - deployment workflows
+      - reliability and scalability
+    adjacent_signals:
+      - developer platform
+      - enterprise platform PM
+    hard_barriers:
+      - Kubernetes operations
+      - container orchestration
+      - multi-cluster operations
+      - self-hosted infrastructure
+      - FinOps or cost allocation
+      - observability pipelines
+
+  security_identity:
+    native_signals:
+      - IAM
+      - permissions
+      - enterprise trust
+      - access control
+    adjacent_signals:
+      - enterprise admin workflows
+      - compliance-oriented SaaS
+    hard_barriers:
+      - privileged access management
+      - threat detection
+      - vulnerability management
+      - security certifications
+
+  regulated_domain:
+    native_signals:
+      - domain-specific regulated product ownership
+      - compliance requirements
+      - auditability
+    adjacent_signals:
+      - enterprise trust
+      - legal or admin workflows
+    hard_barriers:
+      - healthcare clinical credentials
+      - financial licensing
+      - government clearance
+      - export control
+      - safety-critical systems
