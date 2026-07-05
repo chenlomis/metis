@@ -301,7 +301,7 @@ def _load_profile_index_evidence() -> list[Any]:
         index_path = ensure_evidence_index()
         index = yaml.safe_load(index_path.read_text(encoding="utf-8")) or {}
         return build_evidence_units_from_profile_index(index)
-    except Exception:
+    except (Exception, SystemExit):
         return []
 
 
@@ -370,6 +370,11 @@ def run_resume_tailor(
     if not roles:
         raise SystemExit("No roles selected.")
 
+    data_dir = _data_dir()
+    base_output_dir = Path(out_dir).expanduser() if out_dir else data_dir
+    if not _is_relative_to(base_output_dir, data_dir):
+        raise SystemExit("Resume tailoring output must stay under METIS_DATA_DIR.")
+
     provider = normalize_provider(os.getenv("METIS_LLM_PROVIDER", os.getenv("LLM_PROVIDER", "anthropic")))
     model = resolve_stage_models(provider)["model"]
     key = api_key or os.getenv(provider_api_key_env(provider), "")
@@ -382,10 +387,6 @@ def run_resume_tailor(
     if not evidence:
         raise SystemExit("Source resume/profile does not contain evidence to ground tailoring.")
 
-    data_dir = _data_dir()
-    base_output_dir = Path(out_dir).expanduser() if out_dir else data_dir
-    if not _is_relative_to(base_output_dir, data_dir):
-        raise SystemExit("Resume tailoring output must stay under METIS_DATA_DIR.")
     artifacts: list[dict[str, str]] = []
     for role in roles:
         jd_text = _fetch_jd(role)
