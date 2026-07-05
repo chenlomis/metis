@@ -92,6 +92,14 @@ PROFILE_PATH = Path(os.environ["METIS_PROFILE"]) if "METIS_PROFILE" in os.enviro
 from .prompts import init_extract_system_prompt
 
 
+def _refresh_evidence_index() -> None:
+    try:
+        from .profile_evidence import ensure_evidence_index
+        ensure_evidence_index()
+    except Exception as exc:
+        log.debug("Profile evidence index refresh skipped: %s", exc)
+
+
 # ---------------------------------------------------------------------------
 # Clarification question specs — kind → UI options
 # ---------------------------------------------------------------------------
@@ -881,6 +889,7 @@ def run_init(api_key):
     if mode == "editor":
         from .init_bak_cmd import open_in_editor
         open_in_editor(PROFILE_PATH)
+        _refresh_evidence_index()
         return
 
     if mode == "quick":
@@ -893,6 +902,7 @@ def run_init(api_key):
         DATA_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
         PROFILE_PATH.write_text(yaml.dump(profile, allow_unicode=True, sort_keys=False))
         PROFILE_PATH.chmod(0o600)
+        _refresh_evidence_index()
         console.print(f"\n  [{THEME['success']}]✓[/]  Saved to [dim]{PROFILE_PATH}[/dim]\n")
         return
 
@@ -961,6 +971,7 @@ def run_init(api_key):
     DATA_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
     PROFILE_PATH.write_text(yaml.dump(profile, allow_unicode=True, sort_keys=False))
     PROFILE_PATH.chmod(0o600)
+    _refresh_evidence_index()
     console.print(f"\n  [{THEME['success']}]✓[/]  Saved to [dim]{PROFILE_PATH}[/dim]\n")
 
     # ── Proactive sources ─────────────────────────────────────────────────────
@@ -970,6 +981,7 @@ def run_init(api_key):
     # Re-save after proactive sources may have updated profile
     PROFILE_PATH.write_text(yaml.dump(profile, allow_unicode=True, sort_keys=False))
     PROFILE_PATH.chmod(0o600)
+    _refresh_evidence_index()
 
     # ── Scheduling ────────────────────────────────────────────────────────────
     from .schedule_cmd import load_schedule, run_schedule_wizard

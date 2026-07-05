@@ -374,7 +374,8 @@ def _build_score_suffix(name: str, apply_t: int, consider_t: int, salary_is_hard
                                      automotive safety (ISO 26262), defense/GovTech (clearance, ITAR).
                                10  — hard technical niche with mandatory domain credentials clearly absent
                                      (e.g., clinical pharmacology, nuclear safety, air traffic control,
-                                     RDMA/InfiniBand datacenter networking, kernel drivers, GPU scheduling).
+                                     RDMA/InfiniBand datacenter networking, kernel drivers, GPU scheduling,
+                                     Kubernetes/container operations, FinOps cost allocation, multi-cluster observability).
                                Use extracted customer_type, product_surface, industry as signal.
                                Positive industry_targets (AI infra, dev tools) signal what the candidate PREFERS —
                                they do NOT make all other domains a penalty. Only regulate compliance barriers score low.
@@ -384,8 +385,10 @@ def _build_score_suffix(name: str, apply_t: int, consider_t: int, salary_is_hard
                                Do not let domain_background alone push a role below the consider threshold unless
                                the JD states a hard prerequisite domain barrier. Conversely, do not promote a role
                                solely because the company and level look attractive: a foreign niche such as
-                               networking protocols, hardware architecture, or regulated-domain credentials must
-                               create real friction when the profile lacks that background.
+                               networking protocols, Kubernetes/container operations, FinOps observability,
+                               hardware architecture, or regulated-domain credentials must create real friction
+                               when the profile lacks that background. Do not treat generic developer tools,
+                               APIs, cloud, or platform work as direct evidence for Kubernetes/container expertise.
 
   company_stage       (0.10)  Does the company stage match the candidate's stated preference?
                                Use extracted company_stage and company_tier.
@@ -726,7 +729,9 @@ _HARD_DOMAIN_TERMS = re.compile(
     r"iso 26262|automotive safety|defense|govtech|government|clearance|itar|"
     r"export control|nuclear|pharmacology|air traffic|credential|required domain|"
     r"rdma|infiniband|datacenter fabric|networking protocol|kernel|driver|"
-    r"hardware architecture|gpu scheduling|hpc cluster|storage firmware)\b",
+    r"hardware architecture|gpu scheduling|hpc cluster|storage firmware|"
+    r"kubernetes|kubecost|container operations|multi-cluster|multicluster|"
+    r"finops|cost allocation|telemetry pipeline|observability)\b",
     re.IGNORECASE,
 )
 
@@ -789,9 +794,16 @@ def score_jobs_batch(
     else:
         system_prompt = build_score_system(profile)
     salary_is_hard_floor = bool(profile.get("salary_is_hard_floor", False))
-    _error_eval   = {
-        "score": 0, "verdict": "skipped",
-        "leveragePoints": [], "frictionPoints": ["Scoring parse error"], "tags": [],
+    _error_eval = {
+        "score": 0,
+        "verdict": "skipped",
+        "dimensions": [
+            {"name": name, "score": 0, "rationale": "Scoring parse error"}
+            for name in WEIGHTS
+        ],
+        "leveragePoints": ["Scoring response could not be parsed", "Role requires manual review"],
+        "frictionPoints": ["Scoring parse error"],
+        "tags": [{"text": "scoring: parse error", "sentiment": "red"}],
     }
 
     chunks = [jobs[i:i + _SCORE_CHUNK_SIZE] for i in range(0, len(jobs), _SCORE_CHUNK_SIZE)]
