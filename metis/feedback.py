@@ -40,6 +40,14 @@ _FEEDBACK_HEADER = (
     "Add entries via `metis feedback` or edit this file directly.\n"
 )
 
+FEEDBACK_CATEGORIES = {
+    "scoring_calibration",
+    "profile_evidence",
+    "search_preference",
+    "workflow_preference",
+    "unclear",
+}
+
 
 # ---------------------------------------------------------------------------
 # ID helpers
@@ -124,6 +132,7 @@ def append_feedback_entry(
     comment  = (
         f"<!-- id:{feedback_id}"
         f" | run:{run_id or 'unknown'}"
+        f" | category:{meta.get('category', 'scoring_calibration')}"
         f" | roles:{','.join(meta.get('roles', []))}"
         f" | dims:{','.join(meta.get('dims', []))} -->"
     )
@@ -165,19 +174,22 @@ def write_feedback_log(
     dims: list[str],
     action_taken: str = "saved",
     conflict_count: int = 0,
+    category: str = "scoring_calibration",
 ) -> None:
     """Append one audit record to feedback_log.jsonl.
 
     This file is for regression tracking and history display only — it is
     never injected into scoring prompts.
 
-    action_taken values: "saved" | "cancelled" | "discard" | "profile_only" | "empty_input"
+    action_taken values include "saved", "cancelled", "discard", "profile_only",
+    and "workflow_only".
     """
     record = {
         "feedback_id":   feedback_id,
         "run_id":        run_id,
         "timestamp":     datetime.datetime.now().isoformat(),
         "action_taken":  action_taken,
+        "category":      category,
         "conflict_count": conflict_count,
         "roles":         roles,
         "dims":          dims,
@@ -261,13 +273,63 @@ NEW FEEDBACK:
 
 Return exactly this shape (empty list [] for fields with no items):
 {{
+  "category": "scoring_calibration|profile_evidence|search_preference|workflow_preference|unclear",
+  "category_reason": "",
   "roles": [{{"company": "", "title": "", "score": null, "direction": "too_low|too_high|right|unclear", "dim": "", "note": ""}}],
   "general_notes": ["..."],
   "conflicts": [{{"new_statement": "", "existing_statement": "", "description": ""}}],
   "profile_items": [],
+  "profile_evidence": [],
+  "search_preferences": [],
+  "workflow_preferences": [],
   "dims": []
 }}
+
+Category rules:
+- scoring_calibration: feedback about scoring, ranking, dimensions, verdicts, or role eval quality.
+- profile_evidence: new/corrected factual evidence about the candidate's background.
+- search_preference: durable preference about what roles, companies, industries, locations, or comp to seek/avoid.
+- workflow_preference: product/CLI behavior preference, not scoring or candidate profile.
+- unclear: insufficient signal to route safely.
+
+Pick exactly one category. Prefer scoring_calibration only when the feedback should affect future scoring prompts.
 """
+
+
+def _normalize_parsed_feedback(result: dict) -> dict:
+    """Fill missing parser keys and infer a primary routing category.
+
+    Older model/test outputs predate category routing. Keep those valid by
+    deriving the narrowest category from the fields we already had.
+    """
+    for key in (
+        "roles",
+        "general_notes",
+        "conflicts",
+        "profile_items",
+        "profile_evidence",
+        "search_preferences",
+        "workflow_preferences",
+        "dims",
+    ):
+        value = result.get(key)
+        result[key] = value if isinstance(value, list) else []
+
+    category = str(result.get("category") or "").strip().lower()
+    if category not in FEEDBACK_CATEGORIES:
+        if result["workflow_preferences"]:
+            category = "workflow_preference"
+        elif result["profile_evidence"]:
+            category = "profile_evidence"
+        elif result["profile_items"] or result["search_preferences"]:
+            category = "search_preference"
+        elif result["roles"] or result["general_notes"] or result["dims"]:
+            category = "scoring_calibration"
+        else:
+            category = "unclear"
+    result["category"] = category
+    result["category_reason"] = str(result.get("category_reason") or "").strip()
+    return result
 
 
 def _llm_process(
@@ -308,9 +370,7 @@ def _llm_process(
         raw = re.sub(r"^```(?:json)?\s*", "", raw)
         raw = re.sub(r"\s*```$",          "", raw)
         result = json.loads(raw)
-        for key in ("roles", "general_notes", "conflicts", "profile_items", "dims"):
-            result.setdefault(key, [])
-        return result
+        return _normalize_parsed_feedback(result)
     except Exception as exc:
         log.warning("Feedback processing failed (%s) — saving raw text without analysis", exc)
         return None
@@ -359,6 +419,22 @@ def _print_parsed(parsed: dict) -> None:
     print_section("→", "Understood", "what I extracted from your feedback")
     console.print()
 
+    category = parsed.get("category", "unclear")
+    category_labels = {
+        "scoring_calibration": "Scoring calibration",
+        "profile_evidence": "Profile evidence",
+        "search_preference": "Search preference",
+        "workflow_preference": "Workflow preference",
+        "unclear": "Unclear",
+    }
+    console.print(
+        f"  [{THEME['accent']}]Category[/]  "
+        f"[{THEME['bright']}]{category_labels.get(category, 'Unclear')}[/]",
+    )
+    if parsed.get("category_reason"):
+        console.print(f"     [{THEME['dim']}]{_escape(parsed['category_reason'])}[/]")
+    console.print()
+
     import textwrap as _tw
     prefix2 = "  "
     prefix5 = "     "
@@ -387,6 +463,19 @@ def _print_parsed(parsed: dict) -> None:
 
     for note in parsed.get("general_notes", []):
         lines = _tw.wrap(note, width=avail2 - 3) or [note]
+        for i, wl in enumerate(lines):
+            if i == 0:
+                console.print(f"{prefix2}[{THEME['dim']}]·[/]  [{THEME['muted']}]{_escape(wl)}[/]")
+            else:
+                console.print(f"{prefix5}[{THEME['muted']}]{_escape(wl)}[/]")
+
+    routed_items = (
+        parsed.get("profile_evidence", [])
+        + parsed.get("search_preferences", [])
+        + parsed.get("workflow_preferences", [])
+    )
+    for item in routed_items:
+        lines = _tw.wrap(str(item), width=avail2 - 3) or [str(item)]
         for i, wl in enumerate(lines):
             if i == 0:
                 console.print(f"{prefix2}[{THEME['dim']}]·[/]  [{THEME['muted']}]{_escape(wl)}[/]")
@@ -464,7 +553,13 @@ def run_feedback(api_key: Optional[str] = None) -> None:
         if run_data else None
     )
 
-    def _log(action: str, roles: list[str] = [], dims: list[str] = [], conflicts: int = 0) -> None:
+    def _log(
+        action: str,
+        roles: list[str] = [],
+        dims: list[str] = [],
+        conflicts: int = 0,
+        category: str = "scoring_calibration",
+    ) -> None:
         write_feedback_log(
             feedback_id=feedback_id,
             run_id=run_id,
@@ -473,6 +568,7 @@ def run_feedback(api_key: Optional[str] = None) -> None:
             dims=dims,
             action_taken=action,
             conflict_count=conflicts,
+            category=category,
         )
 
     # LLM processing — optional, degrades gracefully
@@ -487,9 +583,11 @@ def run_feedback(api_key: Optional[str] = None) -> None:
     roles_meta: list[str] = []
     dims_meta:  list[str] = []
     conflict_count: int   = 0
+    category: str = "scoring_calibration"
 
     if parsed:
         _print_parsed(parsed)
+        category       = parsed.get("category", "unclear")
         roles_meta     = [r.get("company", "").lower() for r in parsed.get("roles", []) if r.get("company")]
         dims_meta      = parsed.get("dims", [])
         conflict_count = len(parsed.get("conflicts", []))
@@ -527,17 +625,31 @@ def run_feedback(api_key: Optional[str] = None) -> None:
             ).execute()
             if resolution == "discard":
                 console.print("  (discarded — no changes made)\n", style=Style(color=THEME["dim"]))
-                _log("discard", roles_meta, dims_meta, conflict_count)
+                _log("discard", roles_meta, dims_meta, conflict_count, category)
                 return
 
-        # Profile-level routing
-        profile_items = parsed.get("profile_items", [])
-        if profile_items:
+        if category == "workflow_preference":
             console.print()
             console.print(
+                f"  [{THEME['accent']}]Workflow preference[/]  "
+                f"[{THEME['muted']}]This is product behavior, so it will not be injected into scoring.[/]"
+            )
+            console.print()
+            _log("workflow_only", roles_meta, dims_meta, conflict_count, category)
+            return
+
+        # Profile/config-level routing
+        profile_items = (
+            parsed.get("profile_items", [])
+            + parsed.get("profile_evidence", [])
+            + parsed.get("search_preferences", [])
+        )
+        if category in {"profile_evidence", "search_preference"} or profile_items:
+            console.print()
+            subject = "profile.yaml" if category == "profile_evidence" else "profile/config"
+            console.print(
                 f"  [{THEME['accent']}]Profile flag[/]  "
-                f"[{THEME['muted']}]These look like permanent preferences — "
-                "they belong in your profile:[/]"
+                f"[{THEME['muted']}]This belongs in {subject}, not only scoring feedback:[/]"
             )
             for item in profile_items:
                 console.print(f"    [{THEME['dim']}]· {_escape(item)}[/]")
@@ -554,10 +666,11 @@ def run_feedback(api_key: Optional[str] = None) -> None:
             ).execute()
             if routing == "profile":
                 console.print(
-                    "  Run `metis init` → Quick edits to update your profile.\n",
+                    "  Run `metis init` → Quick edits to update your profile. "
+                    "Metis will rebuild the evidence index after the profile is saved.\n",
                     style=Style(color=THEME["dim"]),
                 )
-                _log("profile_only", roles_meta, dims_meta, conflict_count)
+                _log("profile_only", roles_meta, dims_meta, conflict_count, category)
                 return
             if routing == "both":
                 console.print(
@@ -575,16 +688,16 @@ def run_feedback(api_key: Optional[str] = None) -> None:
 
     if not confirmed:
         console.print("  (cancelled)\n", style=Style(color=THEME["dim"]))
-        _log("cancelled", roles_meta, dims_meta, conflict_count)
+        _log("cancelled", roles_meta, dims_meta, conflict_count, category)
         return
 
     append_feedback_entry(
         text=raw_text,
         feedback_id=feedback_id,
         run_id=run_id,
-        meta={"roles": roles_meta, "dims": dims_meta},
+        meta={"roles": roles_meta, "dims": dims_meta, "category": category},
     )
-    _log("saved", roles_meta, dims_meta, conflict_count)
+    _log("saved", roles_meta, dims_meta, conflict_count, category)
 
     console.print()
     t = Text()

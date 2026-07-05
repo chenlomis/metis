@@ -153,6 +153,25 @@ def test_write_feedback_log_creates_jsonl(tmp_data):
     assert record["dims"] == ["culture_values"]
     assert record["action_taken"] == "saved"
     assert record["conflict_count"] == 0
+    assert record["category"] == "scoring_calibration"
+
+
+def test_write_feedback_log_records_category(tmp_data):
+    from metis.feedback import write_feedback_log, FEEDBACK_LOG_FILE
+
+    write_feedback_log(
+        "fb_001",
+        None,
+        "please add a compare command",
+        [],
+        [],
+        action_taken="workflow_only",
+        category="workflow_preference",
+    )
+
+    record = json.loads(FEEDBACK_LOG_FILE.read_text())
+    assert record["action_taken"] == "workflow_only"
+    assert record["category"] == "workflow_preference"
     assert "timestamp" in record
 
 
@@ -315,6 +334,18 @@ def test_claude_process_fills_missing_keys(tmp_data):
     assert result.get("conflicts") == []
     assert result.get("profile_items") == []
     assert result.get("dims") == []
+    assert result.get("category") == "scoring_calibration"
+
+
+def test_normalize_parsed_feedback_infers_workflow_category(tmp_data):
+    from metis.feedback import _normalize_parsed_feedback
+
+    result = _normalize_parsed_feedback({
+        "workflow_preferences": ["Add metis resume compare later"],
+    })
+
+    assert result["category"] == "workflow_preference"
+    assert result["roles"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -591,6 +622,28 @@ def test_run_feedback_profile_routing_feedback_only_saves(fb_mocks, monkeypatch)
         fb_mod.run_feedback(api_key="fake-key")
 
     assert (fb_mocks / "feedback.md").exists()
+
+
+def test_run_feedback_workflow_preference_logs_without_feedback_md(fb_mocks, monkeypatch):
+    import metis.feedback as fb_mod
+
+    parsed = _parsed_no_conflicts(
+        category="workflow_preference",
+        general_notes=[],
+        roles=[],
+        dims=[],
+        workflow_preferences=["Add a Word compare review command later"],
+    )
+    monkeypatch.setattr(fb_mod, "_claude_process", lambda *a, **kw: parsed)
+
+    inq = _make_inquirer_stub(confirm=True)
+    with patch.dict("sys.modules", {"InquirerPy": inq, "InquirerPy.base.control": MagicMock()}):
+        fb_mod.run_feedback(api_key="fake-key")
+
+    assert not (fb_mocks / "feedback.md").exists()
+    record = json.loads((fb_mocks / "feedback_log.jsonl").read_text().strip())
+    assert record["action_taken"] == "workflow_only"
+    assert record["category"] == "workflow_preference"
 
 
 # (c) Feedback incorporated into next scoring run — load_feedback_text returns

@@ -313,6 +313,16 @@ Strict constraints:
 input, it does not exist.
 - Zero inference from company names, role titles, or your own knowledge of \
 those companies or industries.
+- Classify the feedback into exactly one primary category. Do not use multiple \
+categories for one entry. If the user mixes intents, choose the category that \
+would determine the safest durable action.
+- scoring_calibration is for scoring/ranking/verdict/dimension corrections.
+- profile_evidence is for factual claims about {candidate_name}'s background \
+that may belong in profile.yaml or the evidence index.
+- search_preference is for durable target-role, company, location, comp, or \
+industry preferences.
+- workflow_preference is for CLI/product behavior requests and must not affect \
+future scoring prompts.
 - Conflicts exist only when a specific existing statement in the prior feedback \
 directly contradicts the new input. No prior statement = no conflict. \
 Empty prior feedback = empty conflicts list.
