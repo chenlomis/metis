@@ -198,6 +198,21 @@ call sites until explicitly wired through the provider abstraction.
 
 ## Critical constraints
 
+### -2. Interactive CLI UX must use the centralized theme/prompt system
+
+New interactive command flows must use `console`, `INQUIRER_STYLE`, and helper
+prints from `metis/theme.py`. Do not create ad hoc Rich tables, custom colors,
+or one-off prompt styles for selection screens. For role/job selection, prefer a
+single InquirerPy checkbox/select list with concise fixed-width labels, sorted by
+the user-relevant rank (for resume tailoring: highest match score first). Include
+select-all as a normal list choice when batch action is expected.
+
+Resume-tailoring copy must stay concise and source-grounded. Prefer equal-length
+or shorter replacements; only lengthen wording when the added phrase creates a
+clear recruiter/HM/ATS signal from the JD. Do not rewrite bullets merely to sound
+more tailored, and do not use `profile.yaml` skill/preference strings as primary
+resume evidence when a source resume DOCX is available.
+
 ### -1. Proactive source scrapes always use render.py format and role+location filtering
 
 **Any time a proactive career-page scrape runs** (scheduled, one-off, or test), two invariants must hold:

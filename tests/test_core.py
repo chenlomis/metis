@@ -805,6 +805,26 @@ def test_domain_foreign_tag_preserved_for_hard_networking_barrier():
     assert evals[0]["tags"][0] == {"text": "domain: foreign", "sentiment": "red"}
 
 
+def test_domain_foreign_tag_preserved_for_kubernetes_container_barrier():
+    from metis.score import _normalize_tag_sentiments
+
+    evals = [{
+        "dimensions": [
+            {
+                "name": "domain_background",
+                "score": 30,
+                "rationale": "Kubernetes, Kubecost, multi-cluster observability, and FinOps cost allocation required",
+            }
+        ],
+        "frictionPoints": ["Container operations domain is mandatory for first-quarter roadmap."],
+        "tags": [{"text": "domain: foreign", "sentiment": "amber"}],
+    }]
+
+    _normalize_tag_sentiments(evals)
+
+    assert evals[0]["tags"][0] == {"text": "domain: foreign", "sentiment": "red"}
+
+
 # ---------------------------------------------------------------------------
 # score.py — chunking behaviour
 # ---------------------------------------------------------------------------
@@ -877,6 +897,7 @@ class TestScoreJobsBatchChunking:
     def test_chunk_truncation_fills_remainder_after_retry_failure(self):
         """If retries still fail to return evals, missing slots get _error_eval."""
         from metis.score import score_jobs_batch, _SCORE_CHUNK_SIZE
+        from metis.contracts import validate_eval_schema
         import unittest.mock as mock
 
         jobs = self._make_jobs(5)
@@ -889,6 +910,7 @@ class TestScoreJobsBatchChunking:
         assert fake_client.messages.create.call_count == 6
         assert result[0]["eval"]["verdict"] == "skipped"
         assert "parse error" in result[0]["eval"]["frictionPoints"][0].lower()
+        assert validate_eval_schema(result[0]["eval"]).valid is True
 
 
 # ---------------------------------------------------------------------------

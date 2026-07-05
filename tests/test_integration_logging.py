@@ -103,7 +103,8 @@ class TestWriteTrace:
         write_trace(self._sample_job())
         record = json.loads((tmp_data_dir / "runs.jsonl").read_text())
         required = {"ts", "role_hash", "title", "company", "location",
-                    "source", "extraction", "eval", "prompt_version", "model"}
+                    "job_id", "url", "apply_url", "source", "extraction",
+                    "eval", "prompt_version", "model"}
         assert required.issubset(set(record.keys()))
 
     def test_multiple_calls_each_appends_a_line(self, tmp_data_dir):

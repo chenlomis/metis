@@ -42,6 +42,7 @@ include = ["metis*"]
 
 [tool.setuptools.package-data]
 metis = [
+    "domain_taxonomy.yaml",
     "sources/companies.yml",
     "email_templates/render.ts",
     "email_templates/package.json",

@@ -313,6 +313,16 @@ Strict constraints:
 input, it does not exist.
 - Zero inference from company names, role titles, or your own knowledge of \
 those companies or industries.
+- Classify the feedback into exactly one primary category. Do not use multiple \
+categories for one entry. If the user mixes intents, choose the category that \
+would determine the safest durable action.
+- scoring_calibration is for scoring/ranking/verdict/dimension corrections.
+- profile_evidence is for factual claims about {candidate_name}'s background \
+that may belong in profile.yaml or the evidence index.
+- search_preference is for durable target-role, company, location, comp, or \
+industry preferences.
+- workflow_preference is for CLI/product behavior requests and must not affect \
+future scoring prompts.
 - Conflicts exist only when a specific existing statement in the prior feedback \
 directly contradicts the new input. No prior statement = no conflict. \
 Empty prior feedback = empty conflicts list.
@@ -414,6 +424,7 @@ def scoring_system_prompt(
     bullet_guide: str,
     score_suffix: str,
     feedback_text: Optional[str] = None,
+    domain_taxonomy_text: Optional[str] = None,
 ) -> str:
     """Assemble the full Layer 2 Sonnet system prompt.
 
@@ -421,9 +432,10 @@ def scoring_system_prompt(
       1. Identity — who metis is, evaluation standards
       2. Candidate brief — synthesized orientation for the headhunter
       3. Full rendered profile — detailed grounding (experience, strengths, etc.)
-      4. Calibration feedback — user-provided adjustments from past runs
-      5. Bullet writing rules — voice and quality standards
-      6. Scoring rubric + output schema
+      4. Domain taxonomy — transferability and hard-barrier guidance
+      5. Calibration feedback — user-provided adjustments from past runs
+      6. Bullet writing rules — voice and quality standards
+      7. Scoring rubric + output schema
 
     The identity and brief anchor Claude's perspective before it reads
     the detailed profile, so it reasons as an advisor, not a pattern matcher.
@@ -436,6 +448,13 @@ def scoring_system_prompt(
         "\nCLIENT BRIEF:\n" + context,
         "\nFULL CANDIDATE PROFILE:\n" + rendered_profile,
     ]
+
+    if domain_taxonomy_text:
+        sections.append(
+            "\nDOMAIN TRANSFERABILITY REFERENCE:\n"
+            "Use this reference to distinguish learnable adjacent domains from hard technical or regulated barriers.\n"
+            + domain_taxonomy_text
+        )
 
     if feedback_text:
         sections.append(

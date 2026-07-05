@@ -8,6 +8,7 @@ import sys
 
 from .pipeline import (
     ANTHROPIC_API_KEY,
+    LLM_API_KEY,
     GMAIL_ADDRESS,
     GMAIL_APP_PASSWORD,
     DATA_DIR,
@@ -48,7 +49,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(
         dest="command",
-        metavar="{init,config,reset,schedule,track,sources,feedback,debug,summary}",
+        metavar="{init,config,reset,schedule,track,sources,feedback,profile,resume,debug,summary}",
     )
 
     subparsers.add_parser(
@@ -162,6 +163,36 @@ def _build_parser() -> argparse.ArgumentParser:
     feedback_sub = feedback_p.add_subparsers(dest="feedback_action")
     feedback_sub.add_parser("add", help="Add a calibration note interactively.")
     feedback_sub.add_parser("list", help="Show recent feedback entries.")
+
+    profile_p = subparsers.add_parser(
+        "profile",
+        help="Inspect or preview profile-derived artifacts.",
+        description=(
+            "Profile utilities.\n\n"
+            "  metis profile evidence-index      # write a generated retrieval index"
+        ),
+    )
+    profile_sub = profile_p.add_subparsers(dest="profile_action")
+    index_p = profile_sub.add_parser(
+        "evidence-index",
+        help="Write a generated evidence retrieval index without modifying profile.yaml.",
+    )
+
+    resume_p = subparsers.add_parser(
+        "resume",
+        help="Tailor resume artifacts for selected roles.",
+        description=(
+            "Create grounded, role-specific resume artifacts on demand.\n\n"
+            "  metis resume tailor        # pick from recent Solid/Moderate roles\n"
+            "  metis resume tailor --all  # tailor all eligible recent roles"
+        ),
+    )
+    resume_sub = resume_p.add_subparsers(dest="resume_action")
+    tailor_p = resume_sub.add_parser("tailor", help="Tailor a resume for one or more roles.")
+    tailor_p.add_argument("--resume", default=None, metavar="DOCX", help="Source resume DOCX. Defaults to METIS_RESUME or newest ~/Documents/personal/*resume*.docx.")
+    tailor_p.add_argument("--limit", type=int, default=40, help="Number of recent roles to show in the picker.")
+    tailor_p.add_argument("--all", action="store_true", help="Tailor all eligible recent Solid/Moderate roles.")
+    tailor_p.add_argument("--top", type=int, default=None, metavar="N", help="Tailor the top N eligible roles by match score.")
 
     subparsers.add_parser("debug", help="Dump the most recent LinkedIn alert email for inspection.")
 
@@ -341,6 +372,36 @@ def main(argv: list[str] | None = None):
         else:
             from .feedback import run_feedback
             run_feedback(api_key=ANTHROPIC_API_KEY)
+
+    elif args.command == "profile":
+        _validate_env(require_gmail=False)
+        action = getattr(args, "profile_action", None)
+        if action == "evidence-index":
+            from .profile_evidence import write_evidence_index
+            path = write_evidence_index()
+            print(f"Evidence index: {path}")
+        else:
+            parser.parse_args(["profile", "--help"])
+
+    elif args.command == "resume":
+        _validate_env(require_gmail=False)
+        action = getattr(args, "resume_action", None)
+        if action == "tailor":
+            from .resume_cmd import run_resume_tailor
+            artifacts = run_resume_tailor(
+                api_key=LLM_API_KEY,
+                resume_path=getattr(args, "resume", None),
+                limit=getattr(args, "limit", 40),
+                tailor_all=getattr(args, "all", False),
+                top_n=getattr(args, "top", None),
+            )
+            for item in artifacts:
+                print(f"Tailored {item['role']}")
+                print(f"  Updated resume: {item['clean_resume']}")
+                print(f"  Review: {item['review']}")
+                print(f"  Record: {item['record']}")
+        else:
+            parser.parse_args(["resume", "--help"])
 
     elif args.command == "debug":
         _validate_env()
