@@ -56,6 +56,7 @@ from .state import (
     load_seen_roles, save_seen_roles, save_skipped_roles, _role_hash,
     load_role_queue, save_role_queue,
 )
+from .xlsx import load_tracker_role_keys, role_tracker_key
 from .feedback import save_last_run
 from .sources import fetch_alerts
 from .sources.linkedin import extract_jobs, extract_jobs_html, _extract_text
@@ -303,6 +304,25 @@ def _stage_ingest(since_dt: datetime.datetime, seen_roles: set, profile=None) ->
     all_jobs.sort(key=lambda j: j.get("email_date", ""), reverse=True)
 
     return all_jobs
+
+
+def _stage_filter_tracker_known(all_jobs: list[dict]) -> list[dict]:
+    """Drop roles already present in the long-lived applications tracker."""
+    tracker_keys = load_tracker_role_keys()
+    if not tracker_keys:
+        return all_jobs
+
+    filtered = [
+        job for job in all_jobs
+        if role_tracker_key(job.get("title", ""), job.get("company", "")) not in tracker_keys
+    ]
+    skipped = len(all_jobs) - len(filtered)
+    if skipped:
+        log.info(
+            "Tracker dedup: skipped %d role(s) already present in applications.xlsx",
+            skipped,
+        )
+    return filtered
 
 
 def _stage_cap(
@@ -572,6 +592,11 @@ def run_pipeline(since_dt: datetime.datetime, score_all: bool = False, dry_run: 
         return   # "No emails in lookback window" already logged inside _stage_ingest
     if not all_jobs:
         log.info("No new roles to evaluate — all already seen within the past 30 days.")
+        return
+
+    all_jobs = _stage_filter_tracker_known(all_jobs)
+    if not all_jobs:
+        log.info("No new roles to evaluate — all already present in the applications tracker.")
         return
 
     # Stage 2: Apply cap, optionally run Haiku pre-screen

@@ -78,6 +78,11 @@ def _find_project_root() -> str:
     return str(candidates[-1].resolve())
 
 
+def _active_profile_path() -> str:
+    """Return the profile path that scheduled jobs should pin explicitly."""
+    return os.getenv("METIS_PROFILE") or str(DATA_DIR / "profile.yaml")
+
+
 # ---------------------------------------------------------------------------
 # Display helpers
 # ---------------------------------------------------------------------------
@@ -257,7 +262,7 @@ def install_schedule(config: dict) -> None:
         "metis_bin": metis_bin,
         "working_dir":   working_dir,
         "data_dir":      str(DATA_DIR),
-        "profile_path":  os.getenv("METIS_PROFILE", ""),
+        "profile_path":  _active_profile_path(),
         "installed_at":  datetime.datetime.now().isoformat(),
         "platform":      platform.system(),
     }

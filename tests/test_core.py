@@ -1332,6 +1332,18 @@ class TestWriteToTracker:
         titles = [ws.cell(row=r, column=2).value for r in range(2, ws.max_row + 1)]
         assert titles.count("Senior PM") == 1
 
+    def test_load_tracker_role_keys_reads_existing_rows(self, tmp_path, monkeypatch):
+        pytest.importorskip("openpyxl")
+        import metis.xlsx as tracker
+
+        monkeypatch.setattr(tracker, "TRACKER_PATH", tmp_path / "applications.xlsx")
+        tracker.write_to_tracker(
+            [self._make_job("Staff Product Manager, AI Platform", "Acme", "apply")],
+            run_date="2026-06-16",
+        )
+
+        assert tracker.role_tracker_key("Staff Product Manager, AI Platform", "Acme") in tracker.load_tracker_role_keys()
+
     def test_no_eligible_roles_writes_nothing(self, tmp_path, monkeypatch):
         pytest.importorskip("openpyxl")
         import metis.xlsx as tracker
@@ -1354,6 +1366,24 @@ class TestWriteToTracker:
                     [self._make_job("PM", "Co", "apply")], run_date="2026-06-16"
                 )
         assert not (tmp_path / "applications.xlsx").exists()
+
+
+class TestPipelineTrackerDedup:
+    """The digest should not resurface roles already known to the tracker."""
+
+    def test_stage_filter_tracker_known_drops_existing_tracker_roles(self, monkeypatch):
+        from metis import pipeline
+
+        monkeypatch.setattr(pipeline, "load_tracker_role_keys", lambda: {"staffpmacme"})
+
+        jobs = [
+            {"title": "Staff PM", "company": "Acme"},
+            {"title": "Principal PM", "company": "Beta"},
+        ]
+
+        assert pipeline._stage_filter_tracker_known(jobs) == [
+            {"title": "Principal PM", "company": "Beta"},
+        ]
 
 
 # ---------------------------------------------------------------------------

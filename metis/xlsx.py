@@ -177,6 +177,11 @@ def _norm_key(title: str, company: str) -> str:
     return re.sub(r"[^a-z0-9]", "", (title + company).lower())
 
 
+def role_tracker_key(title: str, company: str) -> str:
+    """Return the tracker dedup key for a role title + company pair."""
+    return _norm_key(title, company)
+
+
 def _norm_entity(text: str) -> str:
     return re.sub(r"[^a-z0-9]", "", text.lower())
 
@@ -319,6 +324,42 @@ def _existing_keys(ws) -> dict[str, int]:
         company = ws.cell(row_idx, _COL_COMPANY).value or ""
         # hyperlink cells store the display text as .value
         keys[_norm_key(str(title), str(company))] = row_idx
+    return keys
+
+
+def load_tracker_role_keys() -> set[str]:
+    """Return role keys already present in the long-lived applications tracker.
+
+    The pipeline uses this as a read-only, long-term recommendation suppressor.
+    It intentionally does not write these keys into seen_roles.json: seen_roles
+    remains the short-term delivery/evaluation TTL store.
+    """
+    if not TRACKER_PATH.exists():
+        return set()
+    try:
+        import openpyxl
+    except ImportError:
+        log.warning("openpyxl not installed — skipping tracker-aware dedup.")
+        return set()
+
+    try:
+        wb = openpyxl.load_workbook(TRACKER_PATH, read_only=True, data_only=True)
+        ws = wb.active
+    except Exception as exc:
+        log.warning("Tracker: could not read %s for dedup (%s)", TRACKER_PATH, exc)
+        return set()
+
+    keys: set[str] = set()
+    for row_idx in range(2, ws.max_row + 1):
+        title = str(ws.cell(row_idx, _COL_ROLE_TITLE).value or "").strip()
+        company = str(ws.cell(row_idx, _COL_COMPANY).value or "").strip()
+        suggestion_status = str(ws.cell(row_idx, _COL_SUGGESTION_STATUS).value or "")
+        normalized_title = _external_role_title(title, company, suggestion_status)
+        if not normalized_title or normalized_title == "External application" or not company:
+            continue
+        if not _is_plausible_job_row(normalized_title, company):
+            continue
+        keys.add(_norm_key(normalized_title, company))
     return keys
 
 

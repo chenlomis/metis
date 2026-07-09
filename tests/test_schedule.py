@@ -305,6 +305,21 @@ class TestSchedulePersistence:
         assert saved["data_dir"] == str(tmp_path)
         assert saved["profile_path"] == str(tmp_path / "profile.yaml")
 
+    def test_install_defaults_profile_path_to_data_dir_profile(self, tmp_path, monkeypatch):
+        sf = tmp_path / "schedule.json"
+        monkeypatch.setattr("metis.schedule_cmd.SCHEDULE_FILE", sf)
+        monkeypatch.setattr("metis.schedule_cmd.DATA_DIR", tmp_path)
+        monkeypatch.setattr("metis.schedule_cmd._metis_bin", lambda: "/venv/bin/metis")
+        monkeypatch.setattr("metis.schedule_cmd._find_project_root", lambda: "/project")
+        monkeypatch.setattr("platform.system", lambda: "Darwin")
+        monkeypatch.delenv("METIS_PROFILE", raising=False)
+
+        with mock.patch("metis.schedule_cmd._install_launchd"):
+            install_schedule({"frequency": "daily", "time": "08:00"})
+
+        saved = json.loads(sf.read_text())
+        assert saved["profile_path"] == str(tmp_path / "profile.yaml")
+
 
 # ---------------------------------------------------------------------------
 # remove_schedule
