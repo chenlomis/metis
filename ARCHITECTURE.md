@@ -70,7 +70,7 @@ render.py — render_html() / build_digest_html()
     │ tries Node/ts-node React Email renderer first
     │ falls back to Python inline HTML builder
     ▼
-render.py — send_digest()
+deliver.py — send_digest()
     │ SMTP_SSL to Gmail; raises on auth failure or SMTP error
     ▼
 state.py — save_seen_roles()
@@ -225,13 +225,13 @@ they only see the `Job` dict list, not the source.
 
 ### Adding a new digest output format (e.g., Slack message, Markdown file, webhook)
 
-Output is isolated to `render.py`. The pipeline calls two functions:
-- `render_html(jobs) -> str` — builds the HTML string
-- `send_digest(html, run_date)` — delivers it
+Output is split across two modules. The pipeline calls:
+- `render_html(jobs, run_date, ...) -> str` from `render.py` — builds the HTML string (pure, no I/O)
+- `send_digest(html, run_date, label, job_count)` from `deliver.py` — SMTP delivery, reads credentials from env vars
 
 To add a new output format:
 
-1. Add a new delivery function in `render.py`, e.g. `send_slack(jobs, run_date)`.
+1. Add a new delivery function in `deliver.py`, e.g. `send_slack(jobs, run_date)`.
 2. In `pipeline.py`, check a new `OUTPUT_MODE` env var and call the appropriate function.
    Keep `send_digest()` as the default so existing users are unaffected.
 3. Add `OUTPUT_MODE=slack` to `.env.example`.
@@ -386,7 +386,8 @@ email-provider abstraction is wired through end-to-end.
 | `llm/` | Provider-neutral LLM boundary, provider normalization, per-stage model resolution |
 | `extract.py` | Layer 1 structured extraction (27 fields), hard gate checker, context formatter |
 | `score.py` | Fast pre-screen, full scoring (Layer 2), JSON recovery, rank — eval schema is a locked contract with render.py |
-| `render.py` | HTML digest building, SMTP delivery — output format locked; see CLAUDE.md constraint #0 |
+| `render.py` | HTML digest building (pure, no I/O) — output format locked; see CLAUDE.md constraint #0 |
+| `deliver.py` | SMTP delivery (`send_digest`); reads credentials from env vars; raises on auth/SMTP failure |
 | `profile.py` | Profile YAML loader + `render_profile()` for scoring prompt |
 | `state.py` | `seen_roles.json` read/write/prune, `_role_hash()` — hash function frozen, do not change |
 | `xlsx.py` | `applications.xlsx` write helpers; `_is_plausible_job_row()` validation gate; column order frozen |

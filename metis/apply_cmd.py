@@ -15,6 +15,8 @@ from .application_profile import application_value, load_application_profile
 from .profile import load_profile_yaml
 from .state import RUNS_PATH, _role_hash
 
+log = __import__("logging").getLogger(__name__)
+
 
 _SELECT_ALL = "__metis_select_all__"
 _CANCEL = "__metis_cancel__"
@@ -296,6 +298,7 @@ def _candidate_values() -> dict[str, str]:
         "veteran_status": os.getenv("METIS_VETERAN_STATUS", "").strip(),
         "transgender": os.getenv("METIS_TRANSGENDER", "").strip(),
         "disability": os.getenv("METIS_DISABILITY", "").strip(),
+        "sexual_orientation": os.getenv("METIS_SEXUAL_ORIENTATION", "").strip(),
         "work_authorized": os.getenv("METIS_WORK_AUTHORIZED", "").strip(),
         "sponsorship_required": os.getenv("METIS_SPONSORSHIP_REQUIRED", "").strip(),
         "willing_to_relocate": os.getenv("METIS_WILLING_TO_RELOCATE", "").strip(),
@@ -325,15 +328,215 @@ def _fill_visible_form(page: Any, candidate: ApplicationCandidate) -> None:
     if resume_upload.count():
         resume_upload.first.set_input_files(str(candidate.resume_path))
     if detect_ats(page.url) == "ashby":
-        page.wait_for_timeout(750)
+        page.wait_for_timeout(1_500)
         _fill_ashby_form(page, candidate, values)
     elif detect_ats(page.url) == "greenhouse":
         _fill_greenhouse_form(page, candidate, values)
     _ensure_resume_attached(page, candidate)
     # Resume uploads can rerender Ashby/Greenhouse forms and clear dependent
-    # autocomplete controls. Re-run location after the final upload settles.
-    page.wait_for_timeout(500)
+    # autocomplete controls. Re-run location and demographics after the final upload settles.
+    page.wait_for_timeout(1_000)
     _fill_location_control(page, values["location"])
+    _fill_greenhouse_eeoc_by_attr(page, values)
+    _llm_fill_remaining(page, values)
+
+
+def _fill_greenhouse_eeoc_by_attr(page: Any, values: dict[str, str]) -> None:
+    """Fallback for Greenhouse EEOC selects whose labels don't match get_by_label.
+
+    Greenhouse EEO forms use predictable id/name attributes (gender_identity, race,
+    veteran_status, disability_status, etc.). This function scans all <select> elements
+    and tries to match them by attribute keyword, then selects the best matching option.
+    It runs after the label-based pass so it only fills still-empty selects.
+    """
+    gender_choices = (
+        ["Female", "Woman"] if re.search(r"woman|female", values["gender_identity"], re.I)
+        else ([values["gender_identity"]] if values["gender_identity"] else [])
+    )
+    race_choices = (
+        ["Asian", "Asian (Not Hispanic or Latino)", "Asian or Pacific Islander"]
+        if "asian" in values["race"].lower()
+        else ([values["race"]] if values["race"] else [])
+    )
+    veteran_choices = (
+        ["No", "Not a protected veteran", "I am not a protected veteran", "None of the above",
+         "I am not a protected veteran"]
+        if values["veteran_status"].lower() in {"no", "not a protected veteran"}
+        else ([values["veteran_status"]] if values["veteran_status"] else [])
+    )
+    disability_choices = (
+        ["No", "No, I don't have a disability", "No, I do not have a disability",
+         "I don't have a disability or chronic condition"]
+        if values["disability"].lower() == "no"
+        else ([values["disability"]] if values["disability"] else [])
+    )
+    hispanic_choices = (
+        ["No", "Not Hispanic or Latino", "No, not of Hispanic, Latino, or Spanish origin"]
+        if values["hispanic_latino"].lower() in {"no", "non-hispanic", "not hispanic or latino"}
+        else ([values["hispanic_latino"]] if values["hispanic_latino"] else [])
+    )
+    transgender_choices = (
+        ["No", "No, I do not identify as transgender"]
+        if values["transgender"].lower() == "no"
+        else ([values["transgender"]] if values["transgender"] else [])
+    )
+    orientation = values.get("sexual_orientation", "")
+    orientation_choices = [orientation] if orientation else []
+
+    keyword_choices: list[tuple[list[str], list[str]]] = [
+        (["gender"], gender_choices),
+        (["race", "ethnicity"], race_choices),
+        (["veteran", "military"], veteran_choices),
+        (["disability"], disability_choices),
+        (["hispanic", "latino"], hispanic_choices),
+        (["transgender"], transgender_choices),
+        (["orientation"], orientation_choices),
+    ]
+
+    try:
+        all_selects = page.locator("select").all()
+    except Exception:
+        return
+
+    for select in all_selects:
+        try:
+            sel_id = (select.get_attribute("id") or "").lower()
+            sel_name = (select.get_attribute("name") or "").lower()
+            attr_text = f"{sel_id} {sel_name}"
+            for keywords, choices in keyword_choices:
+                if not choices or not any(kw in attr_text for kw in keywords):
+                    continue
+                # Skip if already has a non-empty selection
+                current = (select.input_value() or "").strip()
+                if current:
+                    continue
+                options = select.locator("option").all_text_contents()
+                for choice in choices:
+                    match = next(
+                        (opt for opt in options if choice.lower() in opt.lower()),
+                        None,
+                    )
+                    if match:
+                        try:
+                            select.select_option(label=match, timeout=3_000)
+                        except Exception:
+                            pass
+                        break
+        except Exception:
+            continue
+
+
+def _llm_fill_remaining(page: Any, values: dict[str, str]) -> None:
+    """Haiku agent pass: fill dropdowns the deterministic pass missed.
+
+    Collects all visible <select> elements that are still empty, asks Haiku which
+    option to pick given the candidate profile, and applies the suggestions.
+    Only runs if an LLM API key is present — silently skips otherwise.
+    """
+    try:
+        provider = os.getenv("METIS_LLM_PROVIDER", "anthropic")
+        from .llm import create_llm_client, normalize_provider, resolve_stage_models
+        provider_id = normalize_provider(provider)
+        key_env = "OPENAI_API_KEY" if provider_id == "openai" else "ANTHROPIC_API_KEY"
+        api_key = os.getenv(key_env, "")
+        if not api_key:
+            return
+        client = create_llm_client(provider=provider_id, api_key=api_key)
+        model = resolve_stage_models(provider_id)["extract_model"]
+    except Exception:
+        return
+
+    # Collect empty visible selects with their labels and options
+    fields: list[dict[str, Any]] = []
+    try:
+        for select in page.locator("select").all():
+            try:
+                if not select.is_visible():
+                    continue
+                if (select.input_value() or "").strip():
+                    continue  # already filled
+                label_text = ""
+                sel_id = select.get_attribute("id") or ""
+                if sel_id:
+                    label_el = page.locator(f'label[for="{sel_id}"]')
+                    if label_el.count():
+                        label_text = label_el.first.inner_text().strip()
+                if not label_text:
+                    # Try walking up to find a label-like ancestor text
+                    try:
+                        label_text = select.evaluate(
+                            "el => { let p = el.parentElement; for (let i=0; i<4; i++) {"
+                            " if (!p) break; let l = p.querySelector('label,p,span,div.label');"
+                            " if (l && l.innerText.trim()) return l.innerText.trim(); p=p.parentElement; }"
+                            " return ''; }"
+                        )
+                    except Exception:
+                        pass
+                if not label_text:
+                    continue
+                opts = [o for o in select.locator("option").all_text_contents() if o.strip() and o.strip().lower() not in {"select...", "select", ""}]
+                if not opts:
+                    continue
+                fields.append({"id": sel_id or label_text[:30], "label": label_text, "options": opts})
+            except Exception:
+                continue
+    except Exception:
+        return
+
+    if not fields:
+        return
+
+    profile_lines = [
+        f"Name: {values.get('first_name', '')} {values.get('last_name', '')}",
+        f"Gender identity: {values.get('gender_identity', '')}",
+        f"Pronouns: {values.get('pronouns', '')}",
+        f"Race/ethnicity: {values.get('race', '')}",
+        f"Hispanic/Latino: {values.get('hispanic_latino', '')}",
+        f"Transgender: {values.get('transgender', '')}",
+        f"Sexual orientation: {values.get('sexual_orientation', '')}",
+        f"Veteran status: {values.get('veteran_status', '')}",
+        f"Disability: {values.get('disability', '')}",
+        f"Work authorized in US: {values.get('work_authorized', '')}",
+        f"Requires sponsorship: {values.get('sponsorship_required', '')}",
+        f"Willing to relocate: {values.get('willing_to_relocate', '')}",
+    ]
+    profile_text = "\n".join(line for line in profile_lines if line.split(": ", 1)[1])
+
+    prompt = (
+        "A job applicant is filling an online application form. "
+        "For each dropdown field below, choose the best matching option from the available choices "
+        "based on the candidate profile. Only answer fields you can determine with confidence.\n\n"
+        f"Candidate profile:\n{profile_text}\n\n"
+        f"Form fields:\n{json.dumps(fields, indent=2)}\n\n"
+        "Return a JSON object mapping field 'id' to the exact option text to select. "
+        "Example: {\"field_id\": \"Female\"}. Return {} if nothing can be determined."
+    )
+
+    try:
+        from .llm import complete_text
+        resp = complete_text(
+            client, model=model, system="Return only valid JSON.", user=prompt,
+            max_tokens=400, json_mode=True,
+        )
+        suggestions: dict[str, str] = json.loads(resp.text)
+    except Exception as exc:
+        log.debug("apply: LLM fill pass failed (%s)", exc)
+        return
+
+    for field in fields:
+        fid = field["id"]
+        chosen = suggestions.get(fid, "")
+        if not chosen:
+            continue
+        try:
+            sel = page.locator(f'select[id="{fid}"]') if fid else page.locator("select").filter(has_text=field["label"])
+            if sel.count() and not (sel.first.input_value() or "").strip():
+                opts = field["options"]
+                match = next((o for o in opts if chosen.lower() in o.lower()), None)
+                if match:
+                    sel.first.select_option(label=match, timeout=3_000)
+        except Exception:
+            continue
 
 
 def _fill_empty(locator: Any, value: str) -> None:
@@ -521,6 +724,7 @@ def _answer_demographics_and_eligibility(page: Any, values: dict[str, str]) -> N
     hispanic = ["No", "Not Hispanic or Latino"] if values["hispanic_latino"].lower() in {"no", "non-hispanic", "not hispanic or latino"} else values["hispanic_latino"]
     race = ["Asian", "Asian (Not Hispanic or Latino)"] if "asian" in values["race"].lower() else values["race"]
     transgender = ["No", "No, I do not identify as transgender"] if values["transgender"].lower() == "no" else values["transgender"]
+    sexual_orientation = values.get("sexual_orientation", "")
     answers = [
         (r"(?:legally |lawfully )?authorized to work", authorized),
         (r"(?:need|require).{0,35}sponsorship|sponsorship.{0,35}(?:need|required)", sponsorship),
@@ -530,6 +734,7 @@ def _answer_demographics_and_eligibility(page: Any, values: dict[str, str]) -> N
         (r"identify your race|race(?: or| and)? ethnicity|racial/ethnic|ethnicities|^Race\b", race),
         (r"protected veteran|veteran status|military status|veteran or active|served in the military", veteran),
         (r"disability status|have a disability|live with a disability|do you have a disability", disability),
+        (r"sexual orientation", sexual_orientation),
     ]
     for question, answer in answers:
         _answer_known_choice(page, question, answer)
@@ -677,18 +882,25 @@ def _choose_custom_select(page: Any, label_pattern: re.Pattern[str], value: str)
 
 def _choose_location(page: Any, field: Any, value: str) -> None:
     city = value.split(",", 1)[0].strip() or value
+    attempts = [city, value] if city != value else [city]
+    for attempt in attempts:
+        try:
+            field.click(timeout=3_000)
+            field.fill("")
+            field.press_sequentially(attempt, delay=80, timeout=5_000)
+            page.wait_for_timeout(3_500)
+            options = page.locator('[role="option"]:visible')
+            if options.count():
+                preferred = options.filter(has_text=re.compile(re.escape(city), re.I))
+                (preferred.first if preferred.count() else options.first).click(timeout=3_000)
+                page.wait_for_timeout(500)
+                return
+        except Exception:
+            pass
+    # Last resort: arrow-down + enter on whatever is showing
     try:
-        field.click(timeout=3_000)
-        field.fill("")
-        field.press_sequentially(city, delay=100, timeout=5_000)
-        page.wait_for_timeout(3_000)
-        options = page.locator('[role="option"]:visible')
-        if options.count():
-            preferred = options.filter(has_text=re.compile(re.escape(city), re.I))
-            (preferred.first if preferred.count() else options.first).click(timeout=3_000)
-        else:
-            field.press("ArrowDown", timeout=3_000)
-            field.press("Enter", timeout=3_000)
+        field.press("ArrowDown", timeout=3_000)
+        field.press("Enter", timeout=3_000)
         page.wait_for_timeout(500)
     except Exception:
         pass

@@ -11,6 +11,7 @@ _LABELS = {
     "phone": "Phone", "location": "Current location", "linkedin": "LinkedIn URL",
     "github": "GitHub URL", "pronouns": "Pronouns", "current_employer": "Current employer",
     "gender_identity": "Gender identity", "transgender": "Identify as transgender",
+    "sexual_orientation": "Sexual orientation",
     "hispanic_latino": "Hispanic/Latino", "race": "Race/ethnicity",
     "veteran_status": "Protected veteran", "disability": "Disability",
     "work_authorized": "Authorized to work", "sponsorship_required": "Sponsorship required",

@@ -49,7 +49,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(
         dest="command",
-        metavar="{init,config,reset,schedule,track,sources,feedback,profile,resume,apply,debug,summary}",
+        metavar="{init,config,autofill,reset,schedule,track,sources,feedback,profile,resume,apply,debug,summary}",
     )
 
     subparsers.add_parser(
@@ -61,15 +61,21 @@ def _build_parser() -> argparse.ArgumentParser:
         "config",
         help="Manage Metis configuration.",
         description=(
-            "  metis config access         connect Gmail or Outlook inbox via OAuth\n"
-            "  metis config application    manage application autofill settings"
+            "  metis config access    connect Gmail or Outlook inbox via OAuth"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     config_sub = config_p.add_subparsers(dest="config_action")
     config_sub.add_parser("access", help="Connect or reconnect your inbox via Gmail or Outlook OAuth.")
-    config_application = config_sub.add_parser("application", help="Configure application autofill answers and browser identity.")
-    config_application.add_argument("--show", action="store_true", help="Show the active application settings without editing.")
+    # keep 'metis config application' as a hidden back-compat alias
+    config_application = config_sub.add_parser("application")
+    config_application.add_argument("--show", action="store_true")
+
+    autofill_p = subparsers.add_parser(
+        "autofill",
+        help="View or edit application autofill settings (name, demographics, resume, etc.).",
+    )
+    autofill_p.add_argument("--show", action="store_true", help="Print current settings without editing.")
 
     reset_p = subparsers.add_parser("reset", help="Clear seen-role state so all roles reprocess.")
     reset_p.add_argument("--force", action="store_true", help="Skip confirmation prompt.")
@@ -298,14 +304,15 @@ def main(argv: list[str] | None = None):
     args = parser.parse_args(raw_argv)
     _configure_logging()
 
-    if args.command == "config":
+    if args.command == "autofill" or (args.command == "config" and getattr(args, "config_action", None) == "application"):
+        from .config_apply_cmd import run_config_apply
+        run_config_apply(show=getattr(args, "show", False))
+
+    elif args.command == "config":
         action = getattr(args, "config_action", None)
         if action == "access":
             from .config_access_cmd import run_config_access
             run_config_access()
-        elif action == "application":
-            from .config_apply_cmd import run_config_apply
-            run_config_apply(show=getattr(args, "show", False))
         else:
             parser.parse_args(["config", "--help"])
 

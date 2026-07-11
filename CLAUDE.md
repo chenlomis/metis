@@ -58,12 +58,15 @@ metis/
   normalization.py — deterministic profile normalization after raw LLM extraction
   extract.py       — structured JD extraction before scoring
   score.py         — scoring logic against profile
-  render.py        — builds DigestPayload, renders HTML via React Email or Python fallback
+  render.py        — builds DigestPayload, renders HTML via React Email or Python fallback (pure, no I/O)
+  deliver.py       — SMTP delivery; send_digest() reads credentials from env vars
   schedule_cmd.py  — cron scheduling wizard
   state.py         — run state / seen-jobs tracking
-  track.py         — job tracking
+  track.py         — metis track orchestration; delegates to track_imap / track_parse / track_write
+  track_imap.py    — IMAP fetch + ATS platform domain list
+  track_parse.py   — classify_email(), extract_company/role, rejection/confirmation phrase lists
+  track_write.py   — find_tracker_row(), update_confirmation(), update_rejection(), create_row()
   xlsx.py          — applications.xlsx write helpers
-  track_write.py   — tracker status update helpers
   feedback.py      — feedback collection: collect → parse with configured extract model → save to feedback.md + feedback_log.jsonl
   sources/         — job source scrapers (proactive company career pages)
 

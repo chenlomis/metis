@@ -92,9 +92,9 @@ VALID_SENTIMENTS = {"green", "amber", "red"}
 ```
 
 ### Render vs deliver
-`render.py` owns pure HTML generation. `deliver.py` owns SMTP delivery and receives credentials via `Config`:
+`render.py` owns pure HTML generation. `deliver.py` owns SMTP delivery and reads credentials from env vars (`GMAIL_ADDRESS`, `GMAIL_APP_PASSWORD`, `RECIPIENT_EMAIL`):
 - `render.py` — pure function: `render_html(jobs, run_date, ...) -> str`. No I/O, no credentials.
-- `deliver.py` — side-effectful: `send_digest(html, run_date, *, config: Config)`. Testable by mocking SMTP.
+- `deliver.py` — side-effectful: `send_digest(html, run_date, label="", job_count=0)`. Testable by mocking `smtplib.SMTP_SSL`.
 
 ---
 

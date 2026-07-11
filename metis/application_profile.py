@@ -17,6 +17,7 @@ ENV_FIELDS = {
     "gender_identity": "METIS_GENDER_IDENTITY", "transgender": "METIS_TRANSGENDER",
     "hispanic_latino": "METIS_HISPANIC_LATINO", "race": "METIS_RACE",
     "veteran_status": "METIS_VETERAN_STATUS", "disability": "METIS_DISABILITY",
+    "sexual_orientation": "METIS_SEXUAL_ORIENTATION",
     "work_authorized": "METIS_WORK_AUTHORIZED",
     "sponsorship_required": "METIS_SPONSORSHIP_REQUIRED",
     "willing_to_relocate": "METIS_WILLING_TO_RELOCATE",
