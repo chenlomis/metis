@@ -7,7 +7,9 @@ harm — bad dedup, missed jobs, wrong scoring order, or buried roles.
 Run with:  pytest tests/
 """
 import datetime
+import importlib
 import json
+import os
 import re
 import tempfile
 from pathlib import Path
@@ -372,6 +374,127 @@ class TestParseLookback:
         monkeypatch.setattr("builtins.input", lambda _prompt: "30")
 
         assert _prompt_score_all(110, 40) == 30
+
+
+class TestPipelineEnvOverrides:
+    """Shell env overrides must survive .env loading for cost-control knobs."""
+
+    def test_data_dir_dotenv_overrides_project_dotenv(self, monkeypatch, tmp_path):
+        import metis.pipeline as pipeline
+
+        calls = []
+        project_env = tmp_path / "project" / ".env"
+        data_env = tmp_path / "data" / ".env"
+
+        def fake_load_dotenv(path, override=True):
+            calls.append(path)
+            if path == project_env:
+                monkeypatch.setenv("GMAIL_ADDRESS", "real@example.com")
+                return True
+            if path == data_env:
+                monkeypatch.setenv("GMAIL_ADDRESS", "smoke@example.com")
+                return True
+            return False
+
+        monkeypatch.setattr(pipeline, "load_dotenv", fake_load_dotenv)
+
+        assert pipeline._load_dotenv_candidates([project_env, data_env]) is True
+        assert calls == [project_env, data_env]
+        assert os.environ["GMAIL_ADDRESS"] == "smoke@example.com"
+
+    def test_max_jobs_per_run_env_wins_over_dotenv(self, monkeypatch):
+        import metis.pipeline as pipeline
+
+        monkeypatch.setenv("MAX_JOBS_PER_RUN", "10")
+        reloaded = importlib.reload(pipeline)
+
+        assert reloaded.MAX_JOBS_PER_RUN == 10
+        monkeypatch.delenv("MAX_JOBS_PER_RUN", raising=False)
+        importlib.reload(pipeline)
+
+
+class TestSourcesProfileIsolation:
+    """Source commands must mutate the active profile, not the default home profile."""
+
+    def test_sources_on_writes_metis_profile(self, monkeypatch, tmp_path):
+        import yaml
+        from metis import sources_cmd
+
+        profile_path = tmp_path / "profile.yaml"
+        profile_path.write_text(
+            yaml.safe_dump({"proactive_sources": {"enabled": False, "companies": []}}),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("METIS_PROFILE", str(profile_path))
+        monkeypatch.setenv("METIS_DATA_DIR", str(tmp_path))
+
+        sources_cmd.cmd_on()
+
+        saved = yaml.safe_load(profile_path.read_text(encoding="utf-8"))
+        assert saved["proactive_sources"]["enabled"] is True
+
+
+class TestTrackRuntimeGuards:
+    """Track live scans need operator-controlled bounds for large inboxes."""
+
+    def test_track_max_emails_reads_positive_env(self, monkeypatch):
+        from metis.track import _track_max_emails
+
+        monkeypatch.setenv("METIS_TRACK_MAX_EMAILS", "50")
+
+        assert _track_max_emails() == 50
+
+    def test_track_max_emails_ignores_invalid_env(self, monkeypatch):
+        from metis.track import _track_max_emails
+
+        monkeypatch.setenv("METIS_TRACK_MAX_EMAILS", "garbage")
+
+        assert _track_max_emails() is None
+
+    def test_track_dry_run_skips_digest_backfill(self, monkeypatch, tmp_path):
+        from metis import track, xlsx
+
+        monkeypatch.setattr(track, "_build_llm_client", lambda api_key: None)
+        monkeypatch.setattr(xlsx, "TRACKER_PATH", tmp_path / "applications.xlsx")
+        monkeypatch.setattr(track, "fetch_candidate_emails", lambda *args, **kwargs: [])
+
+        def fail_backfill(*_args, **_kwargs):
+            raise AssertionError("dry-run must not write digest backfill rows")
+
+        monkeypatch.setattr(track, "backfill_from_digests", fail_backfill)
+
+        track.run_track(
+            gmail_address="user@example.com",
+            app_password="password",
+            since_dt=datetime.datetime(2026, 7, 1),
+            dry_run=True,
+            api_key=None,
+        )
+
+    def test_parse_email_skips_llm_for_linkedin_job_alert(self, monkeypatch):
+        from metis import track
+
+        def fail_classify(*_args, **_kwargs):
+            raise AssertionError("job alerts should not reach LLM classification")
+
+        def fail_role_llm(*_args, **_kwargs):
+            raise AssertionError("job alerts should not reach LLM role extraction")
+
+        monkeypatch.setattr(track, "classify_email", fail_classify)
+        monkeypatch.setattr(track, "_extract_role_llm", fail_role_llm)
+
+        parsed = track.parse_email(
+            {
+                "subject": "Senior Product Manager at Hyperproof",
+                "sender": "LinkedIn Job Alerts <jobalerts-noreply@linkedin.com>",
+                "body": "A job alert, not an application status email.",
+                "links": [],
+                "date": "2026-07-05",
+            },
+            llm_client=object(),
+        )
+
+        assert parsed["classification"] == "unknown"
 
 
 # ---------------------------------------------------------------------------

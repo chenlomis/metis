@@ -2,6 +2,7 @@
 
 # Prefer the contributor venv from README, then the legacy local venv.
 # Fall back to the active Python so CI and already-activated shells still work.
+PYTHON := $(shell if [ -x ./.venv/bin/python ]; then echo ./.venv/bin/python; elif [ -x ./venv/bin/python ]; then echo ./venv/bin/python; else echo python; fi)
 PYTEST := $(shell if [ -x ./.venv/bin/pytest ]; then echo ./.venv/bin/pytest; elif [ -x ./venv/bin/pytest ]; then echo ./venv/bin/pytest; else echo python -m pytest; fi)
 
 test: test-full
@@ -19,4 +20,5 @@ coverage:
 	$(PYTEST) tests/ --cov=metis --cov-report=term-missing --cov-report=xml
 
 lint:
-	python -m compileall -q metis tests
+	$(PYTHON) -m ruff check metis tests
+	$(PYTHON) -m compileall -q metis tests

@@ -16,16 +16,23 @@ from .llm import (
 # data directory cannot silently drift to another because of project .env loading.
 _PINNED_STATE_ENV = {
     key: os.environ[key]
-    for key in ("METIS_DATA_DIR", "METIS_PROFILE")
+    for key in ("METIS_DATA_DIR", "METIS_PROFILE", "MAX_JOBS_PER_RUN")
     if key in os.environ
 }
 _dotenv_candidates = [
     Path(__file__).parent.parent / ".env",
     Path(os.environ.get("METIS_DATA_DIR", Path.home() / ".job_pipeline")) / ".env",
 ]
-for _dotenv_path in _dotenv_candidates:
-    if load_dotenv(_dotenv_path, override=True):
-        break
+
+
+def _load_dotenv_candidates(candidates: list[Path]) -> bool:
+    loaded = False
+    for dotenv_path in candidates:
+        loaded = load_dotenv(dotenv_path, override=True) or loaded
+    return loaded
+
+
+_load_dotenv_candidates(_dotenv_candidates)
 os.environ.update(_PINNED_STATE_ENV)
 
 # ---------------------------------------------------------------------------

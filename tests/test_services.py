@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import ast
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 
 def test_get_metis_status_reports_missing_setup(tmp_path):
@@ -308,6 +309,52 @@ def test_record_scoring_feedback_rejects_empty_text(tmp_path):
         raise AssertionError("Expected empty feedback to raise ValueError")
 
 
+def test_record_scoring_feedback_sanitizes_comment_metadata(tmp_path):
+    from metis.services import record_scoring_feedback
+
+    record_scoring_feedback(
+        "Prefer vertical AI roles.",
+        data_dir=tmp_path,
+        feedback_id="fb_meta",
+        run_id="run_1",
+        roles=["Acme -->\n## injected", "Beta|Gamma"],
+        dims=["domain,background", "<culture>"],
+        today=datetime.date(2026, 7, 4),
+    )
+
+    content = (tmp_path / "feedback.md").read_text(encoding="utf-8")
+    comment = next(line for line in content.splitlines() if line.startswith("<!-- id:fb_meta"))
+
+    assert comment.startswith("<!-- id:fb_meta")
+    assert "-->" == comment[-3:]
+    assert "## injected" not in comment
+    assert "<culture>" not in comment
+    assert "Beta/Gamma" in comment
+
+
+def test_record_scoring_feedback_serializes_concurrent_writes(tmp_path):
+    from metis.services import list_scoring_feedback, record_scoring_feedback
+
+    def write_one(idx: int) -> None:
+        record_scoring_feedback(
+            f"Calibration note {idx}",
+            data_dir=tmp_path,
+            feedback_id=f"fb_{idx:02d}",
+            today=datetime.date(2026, 7, 4),
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(write_one, range(20)))
+
+    content = (tmp_path / "feedback.md").read_text(encoding="utf-8")
+    log_lines = (tmp_path / "feedback_log.jsonl").read_text(encoding="utf-8").splitlines()
+    listed = list_scoring_feedback(data_dir=tmp_path, limit=25)
+
+    assert content.count("Calibration note") == 20
+    assert len(log_lines) == 20
+    assert listed["count"] == 20
+
+
 def test_run_job_search_reports_missing_configuration(tmp_path):
     from metis.services import run_job_search
 
@@ -316,6 +363,28 @@ def test_run_job_search_reports_missing_configuration(tmp_path):
     assert result["ran"] is False
     assert result["status"] == "missing_configuration"
     assert set(result["missing"]) == {"profile", "ANTHROPIC_API_KEY", "gmail_credentials"}
+
+
+def test_run_job_search_returns_invalid_input_for_bad_lookback(tmp_path):
+    from metis.services import run_job_search
+
+    profile = tmp_path / "profile.yaml"
+    profile.write_text("candidate:\n  name: Test User\n", encoding="utf-8")
+
+    result = run_job_search(
+        data_dir=tmp_path,
+        profile_path=profile,
+        lookback="garbage",
+        env={
+            "ANTHROPIC_API_KEY": "test-key",
+            "GMAIL_ADDRESS": "user@example.com",
+            "GMAIL_APP_PASSWORD": "test-password",
+        },
+    )
+
+    assert result["ran"] is False
+    assert result["status"] == "invalid_input"
+    assert "lookback" in result["error"]
 
 
 def test_run_job_search_requires_confirmation_for_write_mode(tmp_path):
@@ -416,6 +485,38 @@ def test_run_job_search_accepts_oauth_email_state(tmp_path, monkeypatch):
     assert len(calls) == 1
 
 
+def test_run_job_search_returns_failed_status_for_pipeline_exit(tmp_path, monkeypatch):
+    from metis.services import run_job_search
+    from metis import pipeline
+
+    profile_path = tmp_path / "profile.yaml"
+    profile_path.write_text("candidate:\n  name: Test User\n", encoding="utf-8")
+
+    def fake_run_pipeline(*args, **kwargs):
+        print("scored before failure")
+        raise SystemExit("SMTP failed")
+
+    monkeypatch.setattr(pipeline, "run_pipeline", fake_run_pipeline)
+
+    result = run_job_search(
+        data_dir=tmp_path,
+        profile_path=profile_path,
+        dry_run=False,
+        confirm_send=True,
+        env={
+            "ANTHROPIC_API_KEY": "test-key",
+            "GMAIL_ADDRESS": "user@example.com",
+            "GMAIL_APP_PASSWORD": "test-password",
+        },
+    )
+
+    assert result["ran"] is True
+    assert result["status"] == "failed"
+    assert result["error_type"] == "SystemExit"
+    assert result["error"] == "SMTP failed"
+    assert result["stdout"] == "scored before failure"
+
+
 def test_linkedin_fetch_uses_oauth_fetcher_without_imap_credentials(monkeypatch):
     from metis.sources import email_fetcher, linkedin
 
@@ -476,6 +577,16 @@ def test_track_applications_requires_current_tracking_credentials(tmp_path):
     assert "GMAIL_ADDRESS" in result["message"]
 
 
+def test_track_applications_rejects_non_positive_lookback(tmp_path):
+    from metis.services import track_applications
+
+    result = track_applications(data_dir=tmp_path, lookback_days=0, dry_run=True)
+
+    assert result["ran"] is False
+    assert result["status"] == "invalid_input"
+    assert "positive integer" in result["message"]
+
+
 def test_track_applications_dry_run_returns_preview_without_writing(tmp_path, monkeypatch):
     from metis.services import track_applications
     from metis import track
@@ -520,13 +631,12 @@ def test_track_applications_surfaces_scan_warnings(tmp_path, monkeypatch):
     from metis.services import track_applications
     from metis import track
 
-    def fake_backfill(*args, **kwargs):
+    def fake_fetch(*args, **kwargs):
         logging.getLogger("metis.track").warning("track: IMAP connect failed after 3 attempts: test network")
-        return 0
+        return []
 
-    monkeypatch.setattr(track, "backfill_from_digests", fake_backfill)
     monkeypatch.setattr(track, "_build_llm_client", lambda *args, **kwargs: None)
-    monkeypatch.setattr(track, "fetch_candidate_emails", lambda *args, **kwargs: [])
+    monkeypatch.setattr(track, "fetch_candidate_emails", fake_fetch)
 
     result = track_applications(
         data_dir=tmp_path,
@@ -542,6 +652,33 @@ def test_track_applications_surfaces_scan_warnings(tmp_path, monkeypatch):
     assert result["rows_after"] == 0
     assert result["rows_changed"] == 0
     assert result["warnings"] == ["track: IMAP connect failed after 3 attempts: test network"]
+
+
+def test_track_applications_returns_failed_status_for_parser_crash(tmp_path, monkeypatch):
+    from metis.services import track_applications
+    from metis import track
+
+    monkeypatch.setattr(track, "backfill_from_digests", lambda *args, **kwargs: 0)
+    monkeypatch.setattr(track, "_build_llm_client", lambda *args, **kwargs: None)
+
+    def crash_fetch(*args, **kwargs):
+        raise RuntimeError("malformed email payload")
+
+    monkeypatch.setattr(track, "fetch_candidate_emails", crash_fetch)
+
+    result = track_applications(
+        data_dir=tmp_path,
+        gmail_address="user@example.com",
+        app_password="test-password",
+        since_dt=datetime.datetime(2026, 7, 1),
+        dry_run=True,
+    )
+
+    assert result["ran"] is True
+    assert result["status"] == "failed"
+    assert result["error_type"] == "RuntimeError"
+    assert result["error"] == "malformed email payload"
+    assert result["rows_changed"] == 0
 
 
 def test_track_applications_updates_tracker_with_explicit_path(tmp_path, monkeypatch):

@@ -33,8 +33,25 @@ browser = ["playwright>=1.40"]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
+    "ruff>=0.6.0",
 ]
 mcp = ["mcp>=1.0.0"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+extend-exclude = [
+    "build",
+    "dist",
+    "node_modules",
+    "venv",
+    ".venv",
+]
+
+[tool.ruff.lint]
+# Start with correctness-oriented checks only. Keep this narrow until the repo is
+# ready for broader style cleanup.
+select = ["E9", "F63", "F7", "F82"]
 
 [tool.setuptools.packages.find]
 where = ["."]

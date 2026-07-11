@@ -184,9 +184,9 @@ dispatches by sender address to a format-specific parser in `sources/email_alert
 |---|---|---|
 | Wellfound | `wellfound` / `angellist` | `_parse_wellfound` — structured HTML cards |
 | Ladders | `theladders` | `_parse_ladders` — plain-text rows |
-| ClinchTalent | `clinchtalent` | `_parse_clinchtalent` — tracking link extraction |
-| iCIMS | `icims` | `_parse_icims` — job URL anchor scraping |
-| Unknown | anything else | `_parse_with_llm` — LLM extraction, no code change needed |
+| ClinchTalent | `clinchtalent` | `_parse_clinchtalent` — tracking link extraction; covers examples like Waymo |
+| iCIMS | `icims` | `_parse_icims` — job URL anchor scraping; covers examples like GitHub |
+| Unknown | anything else | `_parse_with_llm` — LLM extraction, no code change needed; covers one-off sources like Indeed or InHerSight until a dedicated parser is added |
 
 To add a dedicated parser for a new known sender:
 1. Add a parser function `_parse_<name>(body_html, body_text, company) -> list[dict]` in `sources/email_alerts.py`

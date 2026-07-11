@@ -17,6 +17,7 @@ Commands:
 from __future__ import annotations
 
 import logging
+import os
 import re
 import time
 from pathlib import Path
@@ -29,7 +30,14 @@ from .theme import THEME, INQUIRER_STYLE, console, print_section
 log = logging.getLogger(__name__)
 
 _COMPANIES_YML = Path(__file__).parent / "sources" / "companies.yml"
-_PROFILE_PATH  = Path.home() / ".job_pipeline" / "profile.yaml"
+
+
+def _profile_path() -> Path:
+    if os.environ.get("METIS_PROFILE"):
+        return Path(os.environ["METIS_PROFILE"]).expanduser()
+    if os.environ.get("METIS_DATA_DIR"):
+        return Path(os.environ["METIS_DATA_DIR"]).expanduser() / "profile.yaml"
+    return Path.home() / ".job_pipeline" / "profile.yaml"
 
 
 # ── Pool helpers ──────────────────────────────────────────────────────────────
@@ -55,18 +63,20 @@ def _pool_by_name() -> dict[str, dict]:
 # ── Profile helpers ───────────────────────────────────────────────────────────
 
 def _load_profile() -> dict:
-    if not _PROFILE_PATH.exists():
+    profile_path = _profile_path()
+    if not profile_path.exists():
         return {}
     try:
-        return yaml.safe_load(_PROFILE_PATH.read_text()) or {}
+        return yaml.safe_load(profile_path.read_text()) or {}
     except Exception:
         return {}
 
 
 def _save_profile(profile: dict) -> None:
-    _PROFILE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _PROFILE_PATH.write_text(yaml.dump(profile, default_flow_style=False, allow_unicode=True))
-    _PROFILE_PATH.chmod(0o600)
+    profile_path = _profile_path()
+    profile_path.parent.mkdir(parents=True, exist_ok=True)
+    profile_path.write_text(yaml.dump(profile, default_flow_style=False, allow_unicode=True))
+    profile_path.chmod(0o600)
 
 
 def _get_ps(profile: dict) -> dict:

@@ -194,6 +194,8 @@ When changing scoring, feedback, reporting, tracker, resume tailoring, or pipeli
 - Evaluate both true positives and true negatives:
   - TP = Solid/Moderate roles that are applied to.
   - TN = Limited Match roles that are not applied to.
+- Respect the scoring quality targets in `ENGINEERING.md` for duplicate resurfacing,
+  closed postings, parse/blank-JD rate, tier churn, and explicit hard-blocker rationale.
 - Treat recruiter screen rate as a lagging outcome, not the only active reward.
 - Use application behavior, feedback, and tier calibration as near-term signals.
 - Surface repeated feedback as a proposed durable change rather than silently changing weights.

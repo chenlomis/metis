@@ -31,6 +31,7 @@ def test_sources_help_renders(capsys):
     assert exc.value.code == 0
     out = capsys.readouterr().out
     assert "metis sources add Stripe" in out
+    assert "metis sources                    show all active sources" in out
 
 
 def test_default_command_routes_to_pipeline(monkeypatch):
@@ -48,6 +49,22 @@ def test_default_command_routes_to_pipeline(monkeypatch):
     assert calls["since_dt"] == "SINCE"
     assert calls["score_all"] is False
     assert calls["dry_run"] is True
+
+
+def test_configure_logging_falls_back_to_console_when_log_file_unwritable(monkeypatch, capsys, tmp_path):
+    from metis import cli
+
+    def raise_permission_error(*_args, **_kwargs):
+        raise PermissionError("log denied")
+
+    monkeypatch.setattr(cli, "LOG_DIR", tmp_path)
+    monkeypatch.setattr(cli.logging, "FileHandler", raise_permission_error)
+    monkeypatch.setattr(cli.logging, "basicConfig", lambda **_kwargs: None)
+
+    cli._configure_logging()
+
+    err = capsys.readouterr().err
+    assert "Continuing with console logs only" in err
 
 
 def test_feedback_list_routes_without_gmail_validation(monkeypatch):
@@ -174,3 +191,56 @@ def test_summary_preview_flag_is_explicit(monkeypatch):
     cli.main(["summary", "--preview"])
 
     assert calls["preview"] is True
+
+
+def test_summary_rejects_invalid_lookback(monkeypatch, capsys):
+    from metis import cli
+
+    monkeypatch.setattr(cli, "_configure_logging", lambda: None)
+    monkeypatch.setattr(cli, "_validate_env", lambda require_gmail=True: None)
+    monkeypatch.setattr(cli, "_parse_lookback", lambda value: None)
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["summary", "--lookback", "garbage"])
+
+    assert exc.value.code == 1
+    out = capsys.readouterr().out
+    assert "Could not parse --lookback 'garbage'" in out
+
+
+def test_track_keyboard_interrupt_exits_cleanly(monkeypatch, capsys):
+    from metis import cli
+    import metis.track as track
+
+    monkeypatch.setattr(cli, "_configure_logging", lambda: None)
+    monkeypatch.setattr(cli, "_validate_env", lambda require_gmail=True: None)
+    monkeypatch.setattr(cli, "_parse_lookback", lambda value: "SINCE")
+
+    def interrupt(*_args, **_kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(track, "run_track", interrupt)
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["track", "--lookback", "7d", "--dry-run"])
+
+    assert exc.value.code == 130
+    out = capsys.readouterr().out
+    assert "Track interrupted before completion" in out
+
+
+def test_track_routes_provider_key(monkeypatch):
+    from metis import cli
+    import metis.track as track
+
+    calls = {}
+    monkeypatch.setattr(cli, "_configure_logging", lambda: None)
+    monkeypatch.setattr(cli, "_validate_env", lambda require_gmail=True: None)
+    monkeypatch.setattr(cli, "_parse_lookback", lambda value: "SINCE")
+    monkeypatch.setattr(cli, "LLM_API_KEY", "provider-key")
+    monkeypatch.setattr(cli, "ANTHROPIC_API_KEY", "anthropic-key")
+    monkeypatch.setattr(track, "run_track", lambda **kwargs: calls.update(kwargs))
+
+    cli.main(["track", "--lookback", "7d", "--dry-run"])
+
+    assert calls["api_key"] == "provider-key"

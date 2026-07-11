@@ -7,6 +7,7 @@ import logging
 import os
 import secrets
 import threading
+import time
 from contextlib import contextmanager, redirect_stdout, redirect_stderr
 from pathlib import Path
 from typing import Any
@@ -36,7 +37,41 @@ def _feedback_id(today: datetime.date | None = None) -> str:
 
 
 def _clean_meta_list(values: list[str] | None) -> list[str]:
-    return [str(value).strip() for value in values or [] if str(value).strip()]
+    cleaned = []
+    for value in values or []:
+        token = " ".join(str(value).split())
+        token = token.replace("--", "-").replace("<", "").replace(">", "").replace("|", "/")
+        token = token.replace("#", "")
+        token = token.replace(",", " ")
+        token = " ".join(token.split())
+        if token:
+            cleaned.append(token)
+    return cleaned
+
+
+@contextmanager
+def _exclusive_file_lock(path: Path, *, timeout_seconds: float = 10.0):
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    deadline = time.monotonic() + timeout_seconds
+    fd: int | None = None
+    while True:
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            os.write(fd, str(os.getpid()).encode("utf-8"))
+            break
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"Timed out waiting for lock: {lock_path}")
+            time.sleep(0.05)
+    try:
+        yield
+    finally:
+        if fd is not None:
+            os.close(fd)
+        try:
+            lock_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def record_scoring_feedback(
@@ -75,26 +110,27 @@ def record_scoring_feedback(
     entry = f"\n{comment}\n## [user] {date_str}\n\n{body}\n"
 
     resolved_data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if feedback_path.exists():
-        feedback_path.write_text(feedback_path.read_text(encoding="utf-8") + entry, encoding="utf-8")
-    else:
-        feedback_path.write_text(_FEEDBACK_HEADER + entry, encoding="utf-8")
-    feedback_path.chmod(0o600)
+    with _exclusive_file_lock(feedback_path):
+        if feedback_path.exists():
+            feedback_path.write_text(feedback_path.read_text(encoding="utf-8") + entry, encoding="utf-8")
+        else:
+            feedback_path.write_text(_FEEDBACK_HEADER + entry, encoding="utf-8")
+        feedback_path.chmod(0o600)
 
-    record = {
-        "feedback_id": resolved_id,
-        "run_id": run_id,
-        "timestamp": datetime.datetime.now().isoformat(),
-        "action_taken": "saved",
-        "conflict_count": 0,
-        "roles": resolved_roles,
-        "dims": resolved_dims,
-        "text_length": len(body),
-        "source": "service",
-    }
-    with log_path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(record) + "\n")
-    log_path.chmod(0o600)
+        record = {
+            "feedback_id": resolved_id,
+            "run_id": run_id,
+            "timestamp": datetime.datetime.now().isoformat(),
+            "action_taken": "saved",
+            "conflict_count": 0,
+            "roles": resolved_roles,
+            "dims": resolved_dims,
+            "text_length": len(body),
+            "source": "service",
+        }
+        with log_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record) + "\n")
+        log_path.chmod(0o600)
 
     return {
         "feedback_id": resolved_id,
@@ -384,17 +420,49 @@ def run_job_search(
             "dry_run": dry_run,
         }
 
-    since_dt = _parse_since(lookback)
+    try:
+        since_dt = _parse_since(lookback)
+    except ValueError as exc:
+        return {
+            "ran": False,
+            "status": "invalid_input",
+            "error": str(exc),
+            "dry_run": dry_run,
+            "lookback": lookback,
+        }
     before_roles = list_recommended_roles(data_dir=resolved_data_dir, limit=-1, latest_run_only=False)
     stdout = io.StringIO()
+    stderr = io.StringIO()
     resolved_data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-    with _patched_job_search_runtime(
-        data_dir=resolved_data_dir,
-        profile_path=resolved_profile,
-        tracker_path=resolved_tracker,
-        env=env_map,
-    ) as pipeline, redirect_stdout(stdout):
-        pipeline.run_pipeline(since_dt=since_dt, score_all=score_all, dry_run=dry_run)
+    try:
+        with _patched_job_search_runtime(
+            data_dir=resolved_data_dir,
+            profile_path=resolved_profile,
+            tracker_path=resolved_tracker,
+            env=env_map,
+        ) as pipeline, redirect_stdout(stdout), redirect_stderr(stderr):
+            pipeline.run_pipeline(since_dt=since_dt, score_all=score_all, dry_run=dry_run)
+    except (Exception, SystemExit) as exc:
+        after_failure = list_recommended_roles(data_dir=resolved_data_dir, limit=-1, latest_run_only=False)
+        return {
+            "ran": True,
+            "status": "failed",
+            "dry_run": dry_run,
+            "lookback": lookback,
+            "since": since_dt.isoformat(),
+            "score_all": score_all,
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+            "paths": {
+                "data_dir": str(resolved_data_dir),
+                "profile": str(resolved_profile),
+                "tracker": str(resolved_tracker),
+            },
+            "recommended_roles_before": before_roles["count"],
+            "recommended_roles_after": after_failure["count"],
+            "stdout": stdout.getvalue().strip(),
+            "stderr": stderr.getvalue().strip(),
+        }
 
     after_roles = list_recommended_roles(data_dir=resolved_data_dir, limit=-1, latest_run_only=False)
     return {
@@ -412,6 +480,7 @@ def run_job_search(
         "recommended_roles_before": before_roles["count"],
         "recommended_roles_after": after_roles["count"],
         "stdout": stdout.getvalue().strip(),
+        "stderr": stderr.getvalue().strip(),
     }
 
 
@@ -447,6 +516,14 @@ def track_applications(
     resolved_since = since_dt or (
         datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=lookback_days)
     )
+    if lookback_days <= 0 and since_dt is None:
+        return {
+            "ran": False,
+            "status": "invalid_input",
+            "dry_run": dry_run,
+            "message": "lookback_days must be a positive integer.",
+            "path": str(resolved_tracker),
+        }
 
     if not resolved_gmail or not resolved_password:
         return {
@@ -483,6 +560,24 @@ def track_applications(
                 dry_run=dry_run,
                 api_key=resolved_api_key,
             )
+    except (Exception, SystemExit) as exc:
+        return {
+            "ran": True,
+            "status": "failed",
+            "dry_run": dry_run,
+            "since": resolved_since.isoformat(),
+            "path": str(resolved_tracker),
+            "rows_before": len(before_rows),
+            "rows_after": len(before_rows),
+            "rows_added": 0,
+            "rows_changed": 0,
+            "stdout": stdout.getvalue().strip(),
+            "stderr": stderr.getvalue().strip(),
+            "warnings": warning_handler.messages,
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+            "applications": before_rows,
+        }
     finally:
         track_logger.removeHandler(warning_handler)
 

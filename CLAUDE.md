@@ -331,6 +331,19 @@ All interactive prompts in `init_cmd.py` use five helpers — do not use `questi
 - `pdfplumber`, `python-docx` — resume parsing
 - `pyyaml` — profile serialization
 
+## Branch hygiene — sync before new work
+Before starting any new task in a session, check status against the remote first:
+```
+git fetch origin
+git status -sb
+```
+If the current branch is stale (far behind `origin/main`) or unrelated to the task at hand, don't keep building on it — create a fresh branch off `origin/main` instead:
+```
+git switch main && git pull origin main
+git switch -c <new-branch-name>
+```
+If there's existing uncommitted or unpushed work on the current branch that looks valuable, flag it and ask before discarding or switching — don't silently abandon it. A branch that's merely stale (no unique commits ahead of main) can be reset without asking.
+
 ## Multiple sessions warning
 If running separate Claude Code sessions on design vs. build:
 - `theme.py` is design-owned — build session should not edit it

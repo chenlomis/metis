@@ -42,6 +42,7 @@ Avoid committing the MP4 directly; it is over 100 MB.
 [Commands](#commands) •
 [Project files](#project-files) •
 [Roadmap](#roadmap) •
+[Changelog](./CHANGELOG.md) •
 [Contributing](#contributing)
 
 ---
@@ -197,8 +198,25 @@ Optional knobs:
 | `RECIPIENT_EMAIL` | You want digests sent somewhere other than the connected inbox. |
 | `MAX_JOBS_PER_RUN` | You want a different per-run scoring cap. Default: `40`; `0` means no cap. |
 | `DEFAULT_LOOKBACK` | You want each run to search farther back than `3d`. |
+| `METIS_DEFAULT_RESUME` | `metis apply` should use a specific fallback DOCX when no tailored DOCX exists. |
 
 Open the file in Finder with **Go > Go to Folder...** and paste `~/.job_pipeline`. Browser login handles Gmail/Outlook access during `metis init`, so normal users do not need an app password.
+
+### Application assist
+
+After tailoring one or more resumes, run `metis apply` to choose pending roles, or
+`metis apply --all` to prepare all of them. Metis opens external Greenhouse, Lever,
+and Ashby forms in a visible persistent Chrome profile, fills deterministic contact
+fields without replacing existing browser autofill, and attaches the role-specific
+resume. You review and click Submit. Metis marks a role applied only after observing
+an ATS confirmation page or message; otherwise it remains `prefilled` and is not
+written to `applications.xlsx`.
+
+Install browser support once with `pip install 'metis-job[browser]'`. Optional fixed
+application values include `METIS_PHONE`, `METIS_LINKEDIN_URL`, `METIS_LOCATION`,
+work-authorization and sponsorship answers, and optional self-identification fields.
+Metis only fills sensitive self-identification answers explicitly supplied by the candidate.
+Workflow state is stored owner-only in `~/.job_pipeline/application_state.json`.
 
 ---
 
@@ -291,7 +309,11 @@ Each digest role gets a 0-100 score, a Solid Match / Moderate Match / Limited Ma
 | `metis schedule resume`              | Resume a paused schedule.                                                               |
 | `metis schedule remove`              | Remove the scheduled job.                                                               |
 
-LinkedIn alert senders are built in. Company sourcing can pull roles directly from Greenhouse, Lever, and Ashby career pages without waiting for a LinkedIn alert email.
+LinkedIn alert senders are built in. Extra email alert sources can watch known
+formats such as Wellfound, Ladders, GitHub/iCIMS, and Waymo/ClinchTalent; unknown
+senders such as Indeed or InHerSight fall back to LLM extraction from the email
+body. Company sourcing can pull roles directly from Greenhouse, Lever, and Ashby
+career pages without waiting for a LinkedIn alert email.
 
 ### Tracking, reporting, and feedback
 

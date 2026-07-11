@@ -28,6 +28,18 @@ from email.header import decode_header
 log = logging.getLogger(__name__)
 
 
+def _track_max_emails() -> int | None:
+    raw = os.getenv("METIS_TRACK_MAX_EMAILS", "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        log.warning("track: ignoring invalid METIS_TRACK_MAX_EMAILS=%r", raw)
+        return None
+    return value if value > 0 else None
+
+
 def _email_date_iso(date_header: str) -> str:
     from email.utils import parsedate_to_datetime
 
@@ -437,9 +449,21 @@ def fetch_candidate_emails(
                     log.info("track: no candidate emails found since %s", since_str)
                     return []
 
-                log.info("track: %d subject-matched emails — fetching bodies…", len(matching_ids))
+                ordered_ids = sorted(matching_ids)
+                max_emails = _track_max_emails()
+                if max_emails and len(ordered_ids) > max_emails:
+                    log.warning(
+                        "track: %d subject-matched emails; fetching first %d because METIS_TRACK_MAX_EMAILS is set",
+                        len(ordered_ids),
+                        max_emails,
+                    )
+                    ordered_ids = ordered_ids[:max_emails]
+                else:
+                    log.info("track: %d subject-matched emails — fetching bodies…", len(ordered_ids))
 
-                for msg_id in sorted(matching_ids):
+                for idx, msg_id in enumerate(ordered_ids, start=1):
+                    if idx % 25 == 0:
+                        log.info("track: fetched %d/%d candidate email bodies…", idx, len(ordered_ids))
                     _, raw = imap.fetch(msg_id, "(RFC822)")
                     if not raw or not raw[0]:
                         continue
@@ -609,6 +633,28 @@ def extract_role(subject: str, body: str) -> str | None:
     return None
 
 
+_NON_APPLICATION_SENDER_RE = re.compile(
+    r"jobalerts-noreply@linkedin\.com|jobs-noreply@linkedin\.com|"
+    r"jobs-listings@linkedin\.com|linkedin news",
+    re.IGNORECASE,
+)
+_NON_APPLICATION_SUBJECT_RE = re.compile(
+    r"\bposted on \d{1,2}/\d{1,2}/\d{2,4}\b|"
+    r"^new jobs similar to |^new job opportunities at |"
+    r"^your receipt from |^delivery estimate update |"
+    r"subscription was canceled|^last call:|"
+    r"run failed:|^the tax question ",
+    re.IGNORECASE,
+)
+
+
+def _is_obvious_non_application_email(subject: str, sender: str) -> bool:
+    return bool(
+        _NON_APPLICATION_SENDER_RE.search(sender or "")
+        or _NON_APPLICATION_SUBJECT_RE.search(subject or "")
+    )
+
+
 _ROLE_EXTRACT_PROMPT = """\
 You are extracting a job role title from an application confirmation email.
 
@@ -653,19 +699,21 @@ def parse_email(email_dict: dict, llm_client=None) -> dict:
     """Classify and extract structured fields from a candidate email."""
     subject = email_dict["subject"]
     body    = email_dict["body"]
+    sender  = email_dict.get("sender", "")
+    skip_llm = _is_obvious_non_application_email(subject, sender)
 
-    classification = classify_email(body, subject, llm_client=llm_client)
+    classification = "unknown" if skip_llm else classify_email(body, subject, llm_client=llm_client)
     company = extract_company(subject, body)
 
     # Sender domain fallback: "no-reply@databricks.com" → "Databricks"
     # Only used when subject/body extraction failed, and domain isn't a generic ESP
     if not company:
-        company = _company_from_sender(email_dict.get("sender", ""))
+        company = _company_from_sender(sender)
 
     role = _finalize_role(extract_role(subject, body), company)
     # Claude fallback when regex comes up empty — many ATS templates don't use
     # standard "applying for the X role" phrasing but do mention the title somewhere
-    if role is None and llm_client is not None:
+    if role is None and llm_client is not None and not skip_llm:
         role = _finalize_role(_extract_role_llm(subject, body, llm_client), company)
     log.debug("track: parse  [%s] company=%r | %s", classification[:4], company, subject[:70])
 
@@ -676,7 +724,7 @@ def parse_email(email_dict: dict, llm_client=None) -> dict:
         "url":            _candidate_job_url(email_dict.get("links")),
         "date":           email_dict["date"],
         "subject":        subject,
-        "sender":         email_dict["sender"],
+        "sender":         sender,
     }
 
 
@@ -1288,8 +1336,11 @@ def run_track(
 
     llm_client = _build_llm_client(api_key)
 
-    log.info("track: step 1 — backfilling tracker from digest emails…")
-    backfill_from_digests(gmail_address, app_password, since_dt)
+    if dry_run:
+        log.info("track: dry-run — skipping digest tracker backfill.")
+    else:
+        log.info("track: step 1 — backfilling tracker from digest emails…")
+        backfill_from_digests(gmail_address, app_password, since_dt)
 
     applied_companies: set[str] = set()
     if TRACKER_PATH.exists():

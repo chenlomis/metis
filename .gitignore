@@ -1,5 +1,6 @@
 # Dependencies
 node_modules/
+.venv/
 venv/
 __pycache__/
 *.pyc
@@ -27,9 +28,17 @@ __pycache__/
 
 # Build output
 *.html
+*.pdf
 
 # Private / personal integrations — not part of the OSS package
 private/
+
+# Editor / local tooling
+.idea/
+.vscode/*
+!.vscode/settings.json
+.ruff_cache/
+.mypy_cache/
 
 # macOS
 .DS_Store

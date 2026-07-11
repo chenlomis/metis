@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import datetime
 import logging
-import re
 import sys
 
 from .pipeline import (
@@ -30,6 +29,7 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="metis",
         description="AI-powered job alert digest — filters, scores, and delivers "
                     "only what's worth your time.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "--lookback", default=None, metavar="DURATION",
@@ -49,7 +49,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(
         dest="command",
-        metavar="{init,config,reset,schedule,track,sources,feedback,profile,resume,debug,summary}",
+        metavar="{init,config,reset,schedule,track,sources,feedback,profile,resume,apply,debug,summary}",
     )
 
     subparsers.add_parser(
@@ -61,11 +61,15 @@ def _build_parser() -> argparse.ArgumentParser:
         "config",
         help="Manage Metis configuration.",
         description=(
-            "  metis config access    connect Gmail or Outlook inbox via OAuth"
+            "  metis config access         connect Gmail or Outlook inbox via OAuth\n"
+            "  metis config application    manage application autofill settings"
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     config_sub = config_p.add_subparsers(dest="config_action")
     config_sub.add_parser("access", help="Connect or reconnect your inbox via Gmail or Outlook OAuth.")
+    config_application = config_sub.add_parser("application", help="Configure application autofill answers and browser identity.")
+    config_application.add_argument("--show", action="store_true", help="Show the active application settings without editing.")
 
     reset_p = subparsers.add_parser("reset", help="Clear seen-role state so all roles reprocess.")
     reset_p.add_argument("--force", action="store_true", help="Skip confirmation prompt.")
@@ -80,6 +84,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "  metis schedule set    interactive setup (or update)\n"
             "  metis schedule remove remove the scheduled job"
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     schedule_sub = schedule_p.add_subparsers(dest="schedule_action")
     schedule_sub.add_parser("set", help="Run the interactive setup wizard to install or replace the schedule.")
@@ -99,6 +104,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "  metis track --lookback 30d    # extend lookback\n"
             "  metis track --dry-run         # preview matches, no writes"
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     track_p.add_argument(
         "--lookback", default="7d", metavar="DURATION",
@@ -122,6 +128,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "  metis sources on                 enable company scraping\n"
             "  metis sources off                disable company scraping"
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sources_sub = sources_p.add_subparsers(dest="sources_action")
     sources_sub.add_parser("list", help="Show all active sources.")
@@ -142,6 +149,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "  metis sources email add                     interactive wizard\n"
             "  metis sources email add team@hi.wellfound.com   fetch + preview + confirm"
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     email_add_p.add_argument(
         "email_sender", nargs="?", default=None,
@@ -159,6 +167,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "  metis feedback add    # interactive prompt\n"
             "  metis feedback list   # show recent entries"
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     feedback_sub = feedback_p.add_subparsers(dest="feedback_action")
     feedback_sub.add_parser("add", help="Add a calibration note interactively.")
@@ -171,6 +180,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "Profile utilities.\n\n"
             "  metis profile evidence-index      # write a generated retrieval index"
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     profile_sub = profile_p.add_subparsers(dest="profile_action")
     index_p = profile_sub.add_parser(
@@ -186,6 +196,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "  metis resume tailor        # pick from recent Solid/Moderate roles\n"
             "  metis resume tailor --all  # tailor all eligible recent roles"
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     resume_sub = resume_p.add_subparsers(dest="resume_action")
     tailor_p = resume_sub.add_parser("tailor", help="Tailor a resume for one or more roles.")
@@ -193,6 +204,22 @@ def _build_parser() -> argparse.ArgumentParser:
     tailor_p.add_argument("--limit", type=int, default=40, help="Number of recent roles to show in the picker.")
     tailor_p.add_argument("--all", action="store_true", help="Tailor all eligible recent Solid/Moderate roles.")
     tailor_p.add_argument("--top", type=int, default=None, metavar="N", help="Tailor the top N eligible roles by match score.")
+
+    apply_p = subparsers.add_parser(
+        "apply",
+        help="Prepare external ATS applications from tailored resumes.",
+        description=(
+            "Prepare external ATS applications from resume-tailoring artifacts.\n\n"
+            "  metis apply             # choose pending tailored roles\n"
+            "  metis apply --all       # prepare every pending tailored role\n"
+            "  metis apply --top 3     # prepare the highest-scoring three"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    apply_p.add_argument("--all", action="store_true", help="Prepare all pending tailored roles.")
+    apply_p.add_argument("--top", type=int, default=None, metavar="N", help="Prepare the top N pending roles.")
+    apply_p.add_argument("--include-applied", action="store_true", help="Include roles already marked applied.")
+    apply_p.add_argument("--match", action="append", default=[], metavar="TEXT", help="Only show roles whose company or title contains TEXT. Repeat for multiple matches.")
 
     subparsers.add_parser("debug", help="Dump the most recent LinkedIn alert email for inspection.")
 
@@ -208,6 +235,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "  metis summary --lookback 60d         # scope market intel to 60 days\n"
             "  metis summary --preview              # send with [DRAFT PREVIEW] prefix"
         ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     summary_p.add_argument("--output", default=None, metavar="FILE", help="Save summary to FILE (.html or .pdf) instead of sending by email.")
     summary_p.add_argument("--lookback", default="30d", metavar="DURATION", help="How far back to scope market intelligence sections. Default: 30d")
@@ -217,16 +245,28 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _lookback_days(value: str, default: int = 30) -> int:
+    if not value:
+        return default
+    since_dt = _parse_lookback(value)
+    if not since_dt:
+        raise ValueError(value)
+    delta = datetime.datetime.now(datetime.timezone.utc) - since_dt.astimezone(datetime.timezone.utc)
+    return max(1, int(delta.total_seconds() // 86400) + 1)
+
+
 def _configure_logging() -> None:
-    LOG_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    try:
+        LOG_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+        handlers.insert(0, logging.FileHandler(LOG_DIR / f"{datetime.date.today()}.log"))
+    except OSError as exc:
+        print(f"Warning: could not write Metis log file ({exc}). Continuing with console logs only.", file=sys.stderr)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s  %(levelname)s  %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
-        handlers=[
-            logging.FileHandler(LOG_DIR / f"{datetime.date.today()}.log"),
-            logging.StreamHandler(),
-        ],
+        handlers=handlers,
     )
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
@@ -263,6 +303,9 @@ def main(argv: list[str] | None = None):
         if action == "access":
             from .config_access_cmd import run_config_access
             run_config_access()
+        elif action == "application":
+            from .config_apply_cmd import run_config_apply
+            run_config_apply(show=getattr(args, "show", False))
         else:
             parser.parse_args(["config", "--help"])
 
@@ -327,7 +370,7 @@ def main(argv: list[str] | None = None):
                 app_password=GMAIL_APP_PASSWORD,
                 since_dt=since_dt,
                 dry_run=False,
-                api_key=ANTHROPIC_API_KEY,
+                api_key=LLM_API_KEY,
             )
         else:
             show_schedule()
@@ -339,13 +382,28 @@ def main(argv: list[str] | None = None):
             print(f"Could not parse --lookback '{args.lookback}'. Try: '7d', '30d', '2026-06-01'")
             raise SystemExit(1)
         from .track import run_track
-        run_track(
-            gmail_address=GMAIL_ADDRESS,
-            app_password=GMAIL_APP_PASSWORD,
-            since_dt=since_dt,
-            dry_run=getattr(args, "dry_run", False),
-            api_key=ANTHROPIC_API_KEY,
+        try:
+            run_track(
+                gmail_address=GMAIL_ADDRESS,
+                app_password=GMAIL_APP_PASSWORD,
+                since_dt=since_dt,
+                dry_run=getattr(args, "dry_run", False),
+                api_key=LLM_API_KEY,
+            )
+        except KeyboardInterrupt:
+            print("\nTrack interrupted before completion. No dry-run changes were written.")
+            raise SystemExit(130)
+
+    elif args.command == "apply":
+        from .apply_cmd import run_apply
+        results = run_apply(
+            apply_all=getattr(args, "all", False),
+            top_n=getattr(args, "top", None),
+            include_applied=getattr(args, "include_applied", False),
+            match_terms=getattr(args, "match", []),
         )
+        for result in results:
+            print(f"{result['status'].title()}: {result['role']}")
 
     elif args.command == "sources":
         action = getattr(args, "sources_action", None)
@@ -412,7 +470,11 @@ def main(argv: list[str] | None = None):
         from .report_cmd import run_report
         from .xlsx import TRACKER_PATH
         lookback_str = getattr(args, "lookback", "30d") or "30d"
-        lookback_days = int(re.sub(r"[^\d]", "", lookback_str) or 30)
+        try:
+            lookback_days = _lookback_days(lookback_str)
+        except ValueError:
+            print(f"Could not parse --lookback '{lookback_str}'. Try: '30d', '60d', '2026-06-01'")
+            raise SystemExit(1)
         run_report(
             tracker_path=TRACKER_PATH,
             gmail_address=GMAIL_ADDRESS,

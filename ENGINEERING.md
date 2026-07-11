@@ -103,6 +103,28 @@ VALID_SENTIMENTS = {"green", "amber", "red"}
 ### The core rule
 **Every function must be testable by passing arguments — no env var reads, no hardcoded paths, no global state inside the function body.**
 
+### Scoring quality targets
+Regression tests answer "did the code break?" Offline evals answer "did recommendation quality degrade?"
+When changing scoring, extraction, JD fetching, ranking, prompts, or model selection, evaluate quality against recent labeled roles and run-history metrics before promoting the change.
+
+Primary targets for Solid Match + Moderate Match recommendations:
+- Duplicate resurfacing rate must be <= 5%.
+- Closed-posting rate must be <= 5%.
+- Parse-error or blank-JD rate must be <= 2%.
+- Tier churn across prompt/model changes must be <= 2%, unless the change is intentionally recalibrating that slice and the user approves it.
+- Known hard blockers must be surfaced explicitly in rationale or skip notes.
+
+Known hard blockers include closed postings, B2C growth mismatch, adtech or marketing-tech mismatch, healthcare regulatory or credential gaps, kernel/driver/HPC niche requirements, hard location constraints, visa constraints, and other mandatory prerequisites not supported by the profile.
+
+Use `applications.xlsx` notes as the first lightweight eval-label source. Notes may be natural language; future eval tooling should parse them with an LLM and ask for confirmation before converting repeated patterns into durable prompt/rule changes. Examples:
+
+```text
+eval: should be solid because this is AI infra, staff scope, and dev platform work.
+eval: should skip because it is consumer growth, not AI/devtools, and senior scope is too low.
+```
+
+`feedback.md` remains the durable calibration source for broad preferences. `applications.xlsx` notes are role-specific eval labels. Eval tooling should consider both sources, but must not silently mutate profile, scoring weights, prompts, or resume policy from either source.
+
 ### What a good test looks like
 ```python
 def test_salary_gate_filters_below_floor():
