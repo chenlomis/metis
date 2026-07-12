@@ -37,10 +37,10 @@ The [README roadmap](./README.md#roadmap) is the best source for larger directio
 - New source adapters for job boards, ATSs, and company alert emails.
 - Outlook / Microsoft 365 support.
 - LLM provider abstraction, so scoring is not tied to one backend.
-- MCP hardening, especially call-scoped runtime config and non-interactive safety.
+- ~~MCP server (initial support shipped — `metis-mcp`)~~ MCP hardening: call-scoped runtime config, tool-level auth, and non-interactive safety for agent embeddings.
 - Cleaner library boundaries for the future PyPI package.
 - Output interfaces beyond email, such as chat, Slack, Telegram, or local agent surfaces.
-- Resume tailoring and application-assist workflows with human approval before submission.
+- ~~Resume tailoring and application-assist~~ Further ATS coverage and smarter EEOC mapping for `metis apply`.
 - Globalization: non-English alert emails, international salary/location handling, and region-specific job boards.
 - Tests around state safety, dry-run behavior, scoring contracts, and scheduler behavior.
 - Accessibility and email-client compatibility improvements for the digest.

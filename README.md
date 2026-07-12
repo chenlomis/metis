@@ -204,17 +204,29 @@ Open the file in Finder with **Go > Go to Folder...** and paste `~/.job_pipeline
 
 ### Application assist
 
-After tailoring one or more resumes, run `metis apply` to choose pending roles, or
-`metis apply --all` to prepare all of them. Metis opens external Greenhouse, Lever,
-and Ashby forms in a visible persistent Chrome profile, fills deterministic contact
-fields without replacing existing browser autofill, and attaches the role-specific
-resume. You review and click Submit. Metis marks a role applied only after observing
+Run `metis apply` to choose evaluated, unapplied roles. Metis automatically uses a
+tailored resume when one exists and falls back to the default DOCX configured through
+`metis config autofill`. Use `metis apply --lookback 7d --top 5` for the best five
+recent roles or `metis apply --latest 10` for the ten newest evaluations. Use
+`metis tailor` separately when role-specific wording is worth the additional time and
+model cost.
+
+Metis opens external Greenhouse, Lever, and Ashby forms in a visible persistent Chrome
+profile, fills deterministic contact fields without replacing existing browser autofill,
+and attaches the selected resume. You review and click Submit. Metis marks a role applied only after observing
 an ATS confirmation page or message; otherwise it remains `prefilled` and is not
 written to `applications.xlsx`.
 
+LinkedIn-sourced roles remain selectable even when their external URL was not captured.
+After selection, Metis performs at most two exact company/title searches, validates a
+matching supported ATS page, and caches the URL only after it opens successfully. LinkedIn
+Easy Apply roles and unresolved searches open the original LinkedIn posting instead of
+blocking the rest of the batch.
+
 Install browser support once with `pip install 'metis-job[browser]'`. Optional fixed
-application values include `METIS_PHONE`, `METIS_LINKEDIN_URL`, `METIS_LOCATION`,
-work-authorization and sponsorship answers, and optional self-identification fields.
+application values are managed with `metis config autofill`; environment variables remain
+available as deployment overrides. Values include contact details, location, work
+authorization and sponsorship answers, and optional self-identification fields.
 Metis only fills sensitive self-identification answers explicitly supplied by the candidate.
 Workflow state is stored owner-only in `~/.job_pipeline/application_state.json`.
 
@@ -399,14 +411,16 @@ metis is a local, CLI-first v0. It works best today with Gmail or Outlook job-al
 
 Near-term roadmap:
 
-- More alert sources and company/ATS adapters
+- [x] Initial MCP server support — `metis-mcp` ships in the package; see [MCP server](#mcp-server) above
+- [x] Non-LinkedIn email alert sources — `metis sources email add` connects additional alert senders
+- [x] Resume tailoring — `metis resume tailor` produces a role-targeted `.docx` grounded in your resume and the JD
+- [x] Application-assist with browser autofill — `metis apply` opens the ATS page, prefills candidate fields and EEOC dropdowns, and waits for your review before submitting
+- [x] Scoring analytics — `metis report` generates an HTML dashboard over tracker outcomes and score trends
 - Additional LLM adapters, such as Gemini and Grok/XAI
-- [x] Initial MCP server support
 - Cleaner importable core API for PyPI and long-lived agent integrations
 - PyPI and Docker packaging
 - Output targets beyond email, such as Markdown, Slack, Notion, or webhooks
 - Deeper analytics over score trends, tracker outcomes, and market signals
-- Resume tailoring and application-assist workflows, with human approval before anything is submitted
 - Web UI or local dashboard only if there is clear demand from non-CLI users
 
 See [open issues](https://github.com/chenlomis/metis/issues) for the full list.
