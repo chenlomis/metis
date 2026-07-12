@@ -412,11 +412,13 @@ metis is a local, CLI-first v0. It works best today with Gmail or Outlook job-al
 Near-term roadmap:
 
 - [x] Initial MCP server support — `metis-mcp` ships in the package; see [MCP server](#mcp-server) above
-- [x] Non-LinkedIn email alert sources — `metis sources email add` connects additional alert senders
+- [x] Provider-neutral LLM support — Anthropic and OpenAI both work today; set `METIS_LLM_PROVIDER=openai` to switch
+- [x] OAuth inbox access — Gmail and Outlook connect via browser OAuth with PKCE; `metis config access` to set up
+- [x] Diverse alert sources — non-LinkedIn email alerts (Wellfound, The Ladders, ClinchTalent, LLM fallback) plus proactive Greenhouse and Lever career page scrapers
 - [x] Resume tailoring — `metis resume tailor` produces a role-targeted `.docx` grounded in your resume and the JD
 - [x] Application-assist with browser autofill — `metis apply` opens the ATS page, prefills candidate fields and EEOC dropdowns, and waits for your review before submitting
 - [x] Scoring analytics — `metis report` generates an HTML dashboard over tracker outcomes and score trends
-- Additional LLM adapters, such as Gemini and Grok/XAI
+- Additional LLM providers, such as Gemini and Grok/XAI
 - Cleaner importable core API for PyPI and long-lived agent integrations
 - PyPI and Docker packaging
 - Output targets beyond email, such as Markdown, Slack, Notion, or webhooks

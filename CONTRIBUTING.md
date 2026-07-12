@@ -36,7 +36,7 @@ The [README roadmap](./README.md#roadmap) is the best source for larger directio
 - Email parsing edge cases, especially LinkedIn variants and non-LinkedIn alert formats.
 - New source adapters for job boards, ATSs, and company alert emails.
 - Outlook / Microsoft 365 support.
-- LLM provider abstraction, so scoring is not tied to one backend.
+- ~~LLM provider abstraction~~ Anthropic and OpenAI both work; additional providers (Gemini, Grok/XAI) welcome.
 - ~~MCP server (initial support shipped — `metis-mcp`)~~ MCP hardening: call-scoped runtime config, tool-level auth, and non-interactive safety for agent embeddings.
 - Cleaner library boundaries for the future PyPI package.
 - Output interfaces beyond email, such as chat, Slack, Telegram, or local agent surfaces.
