@@ -1464,8 +1464,31 @@ def prepare_batch_in_browser(
                     page.goto(start_url, wait_until="domcontentloaded", timeout=60_000)
                 elif not linkedin_ok:
                     # LinkedIn session unavailable — go straight to web search.
-                    destination = None
-                    route = "unresolved"
+                    resolved_url = _resolve_application_url(scratch_page, candidate)
+                    if resolved_url:
+                        page = scratch_page
+                        scratch_page = context.new_page()
+                        common.update({
+                            "application_url": resolved_url,
+                            "resolution_status": "confirmed",
+                            "resolution_method": "google_search",
+                            "resolved_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+                        })
+                    else:
+                        common.update({
+                            "resolution_status": "unresolved",
+                            "resolution_attempted_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+                        })
+                        update_application_state(candidate.role_key, status="blocked", root=root, **common)
+                        print(
+                            f"Could not prepare {candidate.role.get('title')} at "
+                            f"{candidate.role.get('company')}: web search found no ATS URL."
+                        )
+                        results[candidate.role_key] = {
+                            "role": f"{candidate.role.get('title')} at {candidate.role.get('company')}",
+                            "status": "blocked",
+                        }
+                        continue
                 else:
                     # LinkedIn is the source of truth for routing. Authenticated Easy Apply
                     # remains there; offsite Apply follows LinkedIn's employer destination.
