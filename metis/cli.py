@@ -49,7 +49,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(
         dest="command",
-        metavar="{init,config,autofill,reset,schedule,track,sources,feedback,profile,resume,apply,debug,summary}",
+        metavar="{init,config,reset,schedule,track,sources,feedback,tailor,apply,debug,summary}",
     )
 
     subparsers.add_parser(
@@ -61,21 +61,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "config",
         help="Manage Metis configuration.",
         description=(
-            "  metis config access    connect Gmail or Outlook inbox via OAuth"
+            "  metis config access      connect Gmail or Outlook inbox via OAuth\n"
+            "  metis config profile     update scoring facts and preferences\n"
+            "  metis config autofill    update reusable application answers"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     config_sub = config_p.add_subparsers(dest="config_action")
     config_sub.add_parser("access", help="Connect or reconnect your inbox via Gmail or Outlook OAuth.")
-    # keep 'metis config application' as a hidden back-compat alias
-    config_application = config_sub.add_parser("application")
-    config_application.add_argument("--show", action="store_true")
-
-    autofill_p = subparsers.add_parser(
-        "autofill",
-        help="View or edit application autofill settings (name, demographics, resume, etc.).",
-    )
-    autofill_p.add_argument("--show", action="store_true", help="Print current settings without editing.")
+    config_sub.add_parser("profile", help="Update the scoring profile created by `metis init`.")
+    config_autofill = config_sub.add_parser("autofill", help="View or edit reusable application autofill answers.")
+    config_autofill.add_argument("--show", action="store_true", help="Print current settings without editing.")
 
     reset_p = subparsers.add_parser("reset", help="Clear seen-role state so all roles reprocess.")
     reset_p.add_argument("--force", action="store_true", help="Skip confirmation prompt.")
@@ -179,53 +175,47 @@ def _build_parser() -> argparse.ArgumentParser:
     feedback_sub.add_parser("add", help="Add a calibration note interactively.")
     feedback_sub.add_parser("list", help="Show recent feedback entries.")
 
-    profile_p = subparsers.add_parser(
-        "profile",
-        help="Inspect or preview profile-derived artifacts.",
-        description=(
-            "Profile utilities.\n\n"
-            "  metis profile evidence-index      # write a generated retrieval index"
-        ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    profile_sub = profile_p.add_subparsers(dest="profile_action")
-    index_p = profile_sub.add_parser(
-        "evidence-index",
-        help="Write a generated evidence retrieval index without modifying profile.yaml.",
-    )
-
-    resume_p = subparsers.add_parser(
-        "resume",
+    tailor_p = subparsers.add_parser(
+        "tailor",
         help="Tailor resume artifacts for selected roles.",
         description=(
             "Create grounded, role-specific resume artifacts on demand.\n\n"
-            "  metis resume tailor        # pick from recent Solid/Moderate roles\n"
-            "  metis resume tailor --all  # tailor all eligible recent roles"
+            "  metis tailor                        # choose eligible roles\n"
+            "  metis tailor --lookback 7d --top 5 # best five from the last week\n"
+            "  metis tailor --all                  # tailor every eligible role"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    resume_sub = resume_p.add_subparsers(dest="resume_action")
-    tailor_p = resume_sub.add_parser("tailor", help="Tailor a resume for one or more roles.")
     tailor_p.add_argument("--resume", default=None, metavar="DOCX", help="Source resume DOCX. Defaults to METIS_RESUME or newest ~/Documents/personal/*resume*.docx.")
-    tailor_p.add_argument("--limit", type=int, default=40, help="Number of recent roles to show in the picker.")
-    tailor_p.add_argument("--all", action="store_true", help="Tailor all eligible recent Solid/Moderate roles.")
-    tailor_p.add_argument("--top", type=int, default=None, metavar="N", help="Tailor the top N eligible roles by match score.")
+    tailor_p.add_argument("--limit", type=int, default=40, help="Maximum roles to show in the interactive picker.")
+    tailor_p.add_argument("--lookback", default=None, metavar="DURATION", help="Only include roles evaluated in this window, such as 7d or 2026-07-01.")
+    tailor_p.add_argument("--match", action="append", default=[], metavar="TEXT", help="Only include roles whose company or title contains TEXT. Repeatable.")
+    tailor_selection = tailor_p.add_mutually_exclusive_group()
+    tailor_selection.add_argument("--all", action="store_true", help="Tailor all eligible roles in the window.")
+    tailor_selection.add_argument("--top", type=int, default=None, metavar="N", help="Tailor the top N eligible roles by match score.")
 
     apply_p = subparsers.add_parser(
         "apply",
-        help="Prepare external ATS applications from tailored resumes.",
+        help="Prepare applications using the best available resume.",
         description=(
-            "Prepare external ATS applications from resume-tailoring artifacts.\n\n"
-            "  metis apply             # choose pending tailored roles\n"
-            "  metis apply --all       # prepare every pending tailored role\n"
-            "  metis apply --top 3     # prepare the highest-scoring three"
+            "Prepare external ATS applications for evaluated, unapplied roles.\n"
+            "Tailored resumes are used when available; otherwise the default is used.\n\n"
+            "  metis apply                         # choose pending roles\n"
+            "  metis apply --lookback 7d --top 5  # best five from the last week\n"
+            "  metis apply --latest 10            # ten most recently evaluated"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    apply_p.add_argument("--all", action="store_true", help="Prepare all pending tailored roles.")
-    apply_p.add_argument("--top", type=int, default=None, metavar="N", help="Prepare the top N pending roles.")
+    apply_p.add_argument("--lookback", default=None, metavar="DURATION", help="Only include roles evaluated in this window, such as 7d or 2026-07-01.")
+    apply_selection = apply_p.add_mutually_exclusive_group()
+    apply_selection.add_argument("--all", action="store_true", help="Prepare all pending roles in the window.")
+    apply_selection.add_argument("--top", type=int, default=None, metavar="N", help="Prepare the N highest-scoring pending roles.")
+    apply_selection.add_argument("--latest", type=int, default=None, metavar="N", help="Prepare the N most recently evaluated pending roles.")
     apply_p.add_argument("--include-applied", action="store_true", help="Include roles already marked applied.")
     apply_p.add_argument("--match", action="append", default=[], metavar="TEXT", help="Only show roles whose company or title contains TEXT. Repeat for multiple matches.")
+    apply_resume = apply_p.add_mutually_exclusive_group()
+    apply_resume.add_argument("--resume", default=None, metavar="DOCX", help="Upload this DOCX for every selected role.")
+    apply_resume.add_argument("--default-resume", action="store_true", help="Always use the configured default resume, ignoring tailored versions.")
 
     subparsers.add_parser("debug", help="Dump the most recent LinkedIn alert email for inspection.")
 
@@ -304,15 +294,18 @@ def main(argv: list[str] | None = None):
     args = parser.parse_args(raw_argv)
     _configure_logging()
 
-    if args.command == "autofill" or (args.command == "config" and getattr(args, "config_action", None) == "application"):
-        from .config_apply_cmd import run_config_apply
-        run_config_apply(show=getattr(args, "show", False))
-
-    elif args.command == "config":
+    if args.command == "config":
         action = getattr(args, "config_action", None)
         if action == "access":
             from .config_access_cmd import run_config_access
             run_config_access()
+        elif action == "profile":
+            _validate_env(require_gmail=False)
+            from .init_cmd import run_init
+            run_init(api_key=ANTHROPIC_API_KEY)
+        elif action == "autofill":
+            from .config_apply_cmd import run_config_apply
+            run_config_apply(show=getattr(args, "show", False))
         else:
             parser.parse_args(["config", "--help"])
 
@@ -402,15 +395,45 @@ def main(argv: list[str] | None = None):
             raise SystemExit(130)
 
     elif args.command == "apply":
+        if GMAIL_ADDRESS and GMAIL_APP_PASSWORD:
+            from .track import run_track
+            from .application_state import data_dir as _data_dir
+            import time as _time
+            _cache_file = _data_dir() / ".reconcile_ts"
+            _ttl = int(os.getenv("METIS_RECONCILE_TTL", "600"))  # default 10 min
+            _age = _time.time() - (_cache_file.stat().st_mtime if _cache_file.exists() else 0)
+            if _age < _ttl:
+                log.info("apply: skipping reconciliation (last run %.0fs ago, TTL %ds)", _age, _ttl)
+            else:
+                try:
+                    log.info("apply: reconciling confirmation emails before candidate selection")
+                    run_track(
+                        gmail_address=GMAIL_ADDRESS,
+                        app_password=GMAIL_APP_PASSWORD,
+                        since_dt=datetime.datetime.now().astimezone() - datetime.timedelta(days=3),
+                        dry_run=False,
+                        api_key=LLM_API_KEY,
+                        open_tracker=False,
+                        backfill=False,
+                        scan_company_outreach=False,
+                    )
+                    _cache_file.touch()
+                except Exception as exc:
+                    log.warning("apply: confirmation reconciliation unavailable: %s", exc)
         from .apply_cmd import run_apply
         results = run_apply(
             apply_all=getattr(args, "all", False),
             top_n=getattr(args, "top", None),
+            latest_n=getattr(args, "latest", None),
             include_applied=getattr(args, "include_applied", False),
             match_terms=getattr(args, "match", []),
+            lookback=getattr(args, "lookback", None),
+            resume_path=getattr(args, "resume", None),
+            force_default_resume=getattr(args, "default_resume", False),
         )
         for result in results:
-            print(f"{result['status'].title()}: {result['role']}")
+            label = result["status"].replace("_", " ").title()
+            print(f"{label}: {result['role']}")
 
     elif args.command == "sources":
         action = getattr(args, "sources_action", None)
@@ -438,35 +461,23 @@ def main(argv: list[str] | None = None):
             from .feedback import run_feedback
             run_feedback(api_key=ANTHROPIC_API_KEY)
 
-    elif args.command == "profile":
+    elif args.command == "tailor":
         _validate_env(require_gmail=False)
-        action = getattr(args, "profile_action", None)
-        if action == "evidence-index":
-            from .profile_evidence import write_evidence_index
-            path = write_evidence_index()
-            print(f"Evidence index: {path}")
-        else:
-            parser.parse_args(["profile", "--help"])
-
-    elif args.command == "resume":
-        _validate_env(require_gmail=False)
-        action = getattr(args, "resume_action", None)
-        if action == "tailor":
-            from .resume_cmd import run_resume_tailor
-            artifacts = run_resume_tailor(
-                api_key=LLM_API_KEY,
-                resume_path=getattr(args, "resume", None),
-                limit=getattr(args, "limit", 40),
-                tailor_all=getattr(args, "all", False),
-                top_n=getattr(args, "top", None),
-            )
-            for item in artifacts:
-                print(f"Tailored {item['role']}")
-                print(f"  Updated resume: {item['clean_resume']}")
-                print(f"  Review: {item['review']}")
-                print(f"  Record: {item['record']}")
-        else:
-            parser.parse_args(["resume", "--help"])
+        from .resume_cmd import run_resume_tailor
+        artifacts = run_resume_tailor(
+            api_key=LLM_API_KEY,
+            resume_path=getattr(args, "resume", None),
+            limit=getattr(args, "limit", 40),
+            tailor_all=getattr(args, "all", False),
+            top_n=getattr(args, "top", None),
+            lookback=getattr(args, "lookback", None),
+            match_terms=getattr(args, "match", []),
+        )
+        for item in artifacts:
+            print(f"Tailored {item['role']}")
+            print(f"  Updated resume: {item['clean_resume']}")
+            print(f"  Review: {item['review']}")
+            print(f"  Record: {item['record']}")
 
     elif args.command == "debug":
         _validate_env()

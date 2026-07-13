@@ -507,19 +507,14 @@ def select_candidates(
         return list(preselected or []) or candidates[:1]
     # Nothing pre-selected unless explicitly given (e.g. via --top N).
     preselected_keys = {item.role_key for item in preselected} if preselected is not None else set()
-    all_checked = bool(preselected_keys) and preselected_keys >= {item.role_key for item in candidates}
     console.print()
     hint = (
         f"{len(preselected_keys)} pre-selected" if preselected_keys else f"{len(candidates)} pending"
     )
     console.print(f"[dim]Choose roles to apply to. {hint}, highest match first.[/dim]")
-    # Top shortcut flips based on current pre-selection state.
-    if all_checked:
-        toggle_choice = Choice(_DESELECT_ALL, f"Deselect all {len(candidates)} roles")
-    else:
-        toggle_choice = Choice(_SELECT_ALL, f"Select all {len(candidates)} roles")
     choices = [
-        toggle_choice,
+        Choice(_SELECT_ALL, f"Select all {len(candidates)} roles"),
+        Choice(_DESELECT_ALL, f"Deselect all / clear"),
         Choice(_CANCEL, "Cancel / exit"),
         Separator(),
         *[
@@ -532,7 +527,7 @@ def select_candidates(
         choices=choices,
         style=INQUIRER_STYLE,
         instruction="↑↓ scrolls · Space toggles · Enter confirms",
-        height=min(len(candidates) + 4, 20),
+        height=min(len(candidates) + 5, 20),
         validate=lambda result: bool(result),
         invalid_message="Press Space to select at least one role, or Ctrl-C to cancel.",
     ).execute()
