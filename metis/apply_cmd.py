@@ -5,10 +5,10 @@ import json
 import os
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, quote_plus, urlparse
 
 from .application_state import data_dir, load_application_state, update_application_state
 from .application_profile import application_value, load_application_profile
@@ -20,7 +20,7 @@ log = __import__("logging").getLogger(__name__)
 
 _SELECT_ALL = "__metis_select_all__"
 _CANCEL = "__metis_cancel__"
-_FINAL_STATUSES = {"prefilled", "needs_review", "applied", "applied_confirmed", "rejected", "recruiter_screen"}
+_FINAL_STATUSES = {"applied", "applied_confirmed", "rejected", "recruiter_screen"}
 _SUCCESS_PATTERNS = (
     re.compile(r"application (?:has been )?submitted", re.I),
     re.compile(r"thanks? for (?:your )?application", re.I),
@@ -36,6 +36,38 @@ class ApplicationCandidate:
     record_path: Path | None
     resume_path: Path
     tailored: bool
+    resume_kind: str = ""
+    workflow_status: str = ""
+
+
+class LinkedInAuthenticationError(RuntimeError):
+    """The selected Chrome profile does not have an authenticated LinkedIn session."""
+
+
+def _has_linkedin_session(context: Any) -> bool:
+    """Use LinkedIn's auth cookie instead of unreliable page copy as session evidence."""
+    try:
+        return any(
+            cookie.get("name") == "li_at" and bool(cookie.get("value"))
+            for cookie in context.cookies("https://www.linkedin.com")
+        )
+    except Exception:
+        return False
+
+
+def _probe_linkedin_session(context: Any, page: Any) -> bool:
+    """Verify the session functionally when CDP cannot expose a Keychain cookie."""
+    if _has_linkedin_session(context):
+        return True
+    try:
+        page.goto("https://www.linkedin.com/feed/", wait_until="domcontentloaded", timeout=30_000)
+        page.wait_for_timeout(1_500)
+        path = urlparse(page.url).path.lower()
+        return path.startswith("/feed") and not any(
+            marker in path for marker in ("/login", "/signup", "/authwall")
+        )
+    except Exception:
+        return False
 
 
 def _role_key(role: dict[str, Any]) -> str:
@@ -51,6 +83,24 @@ def detect_ats(url: str) -> str | None:
     if host == "lever.co" or host.endswith(".lever.co"):
         return "lever"
     return None
+
+
+_SEARCH_BLOCKED_HOSTS = {
+    "linkedin.com", "www.linkedin.com", "indeed.com", "www.indeed.com",
+    "glassdoor.com", "www.glassdoor.com", "ziprecruiter.com", "www.ziprecruiter.com",
+    "builtin.com", "www.builtin.com", "simplify.jobs", "www.simplify.jobs",
+}
+
+
+def _is_external_job_url(url: str) -> bool:
+    """Allow employer/ATS pages while rejecting search, social, and aggregator links."""
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme not in {"http", "https"} or not host:
+        return False
+    if host in _SEARCH_BLOCKED_HOSTS or any(host.endswith(f".{item}") for item in _SEARCH_BLOCKED_HOSTS):
+        return False
+    return "google." not in host
 
 
 def _start_url(role: dict[str, Any]) -> str:
@@ -132,11 +182,15 @@ def _normalize_match(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", value.lower())
 
 
-def load_application_candidates(root: Path | None = None, *, include_applied: bool = False) -> list[ApplicationCandidate]:
+def load_application_candidates(
+    root: Path | None = None, *, include_applied: bool = False, resume_override: Path | None = None,
+) -> list[ApplicationCandidate]:
+    explicit_root = root is not None
     root = root or data_dir()
+    runs_path = root / "runs.jsonl" if explicit_root else RUNS_PATH
     state = load_application_state(root)
     tracker_applied = _tracker_applied_roles(root)
-    fallback = _fallback_resume()
+    fallback = resume_override or _fallback_resume()
     candidates: dict[str, ApplicationCandidate] = {}
     for record_path in sorted((root / "resume_tailor").glob("*/*/tailoring_record.json")):
         try:
@@ -149,14 +203,12 @@ def load_application_candidates(root: Path | None = None, *, include_applied: bo
             continue
         saved = state.get(role_key) or {}
         saved_application_url = str(saved.get("application_url") or "")
-        if saved_application_url:
+        if _is_external_job_url(saved_application_url):
             role = {**role, "apply_url": saved_application_url}
         application_company = str(saved.get("application_company") or "")
         if application_company and application_company != str(role.get("company") or ""):
             role = {**role, "source_company": role.get("company"), "company": application_company}
         if not _start_url(role):
-            continue
-        if not _is_application_ready(role):
             continue
         if not include_applied and (state.get(role_key) or {}).get("status") in _FINAL_STATUSES:
             continue
@@ -168,13 +220,16 @@ def load_application_candidates(root: Path | None = None, *, include_applied: bo
         fit = str((((record.get("plan") or {}).get("employer_lens") or {}).get("fit_assessment") or "")).lower()
         if fit.startswith("not_recommended"):
             continue
-        candidate = ApplicationCandidate(role_key, role, record_path, resume, tailored)
+        candidate = ApplicationCandidate(
+            role_key, role, record_path, resume, tailored,
+            "tailored" if tailored else "default", str(saved.get("status") or "not started"),
+        )
         previous = candidates.get(role_key)
         if previous is None or previous.record_path is None or record_path.stat().st_mtime >= previous.record_path.stat().st_mtime:
             candidates[role_key] = candidate
-    if fallback and RUNS_PATH.exists():
+    if fallback and runs_path.exists():
         recent_roles: list[dict[str, Any]] = []
-        for line in RUNS_PATH.read_text(encoding="utf-8").splitlines():
+        for line in runs_path.read_text(encoding="utf-8").splitlines():
             try:
                 role = json.loads(line)
             except (TypeError, json.JSONDecodeError):
@@ -187,19 +242,23 @@ def load_application_candidates(root: Path | None = None, *, include_applied: bo
             if (_normalize_match(str(role.get("company") or "")), _normalize_match(str(role.get("title") or ""))) in tracker_applied:
                 continue
             if role_key in candidates:
+                existing = candidates[role_key]
+                # Tailoring owns the resume artifact; the evaluated-role trace
+                # owns current score and evaluation-date metadata.
+                candidates[role_key] = replace(existing, role={**existing.role, **role})
                 continue
             if not include_applied and (state.get(role_key) or {}).get("status") in _FINAL_STATUSES:
                 continue
             saved = state.get(role_key) or {}
             saved_application_url = str(saved.get("application_url") or "")
-            if saved_application_url:
+            if _is_external_job_url(saved_application_url):
                 role = {**role, "apply_url": saved_application_url}
             application_company = str(saved.get("application_company") or "")
             if application_company and application_company != str(role.get("company") or ""):
                 role = {**role, "source_company": role.get("company"), "company": application_company}
-            if not _is_application_ready(role):
-                continue
-            candidates[role_key] = ApplicationCandidate(role_key, role, None, fallback, False)
+            candidates[role_key] = ApplicationCandidate(
+                role_key, role, None, fallback, False, "default", str(saved.get("status") or "not started"),
+            )
     if fallback:
         for role in _tracker_pending_roles(root):
             role_key = _role_key(role)
@@ -209,11 +268,11 @@ def load_application_candidates(root: Path | None = None, *, include_applied: bo
             if not include_applied and saved.get("status") in _FINAL_STATUSES:
                 continue
             saved_application_url = str(saved.get("application_url") or "")
-            if saved_application_url:
+            if _is_external_job_url(saved_application_url):
                 role = {**role, "apply_url": saved_application_url}
-            if not _is_application_ready(role):
-                continue
-            candidates[role_key] = ApplicationCandidate(role_key, role, None, fallback, False)
+            candidates[role_key] = ApplicationCandidate(
+                role_key, role, None, fallback, False, "default", str(saved.get("status") or "not started"),
+            )
     return sorted(
         candidates.values(),
         key=lambda item: (
@@ -233,8 +292,204 @@ def _label(candidate: ApplicationCandidate) -> str:
         day = dt.datetime.fromtimestamp(candidate.record_path.stat().st_mtime).strftime("%b %d")
     else:
         day = str(role.get("ts") or "")[:10] or "recent"
-    suffix = "tailored" if candidate.tailored else "default resume"
-    return f"{score:>3}% | {company:<22} | {title:<48} | {day} · {suffix}"
+    suffix = candidate.resume_kind or ("tailored" if candidate.tailored else "default resume")
+    status = candidate.workflow_status.replace("_", " ")
+    route = _application_route(candidate.role)
+    return f"{score:>3}% | {company:<22} | {title:<48} | {day} · {suffix} · {route} · {status}"
+
+
+def _application_route(role: dict[str, Any]) -> str:
+    if _is_external_job_url(_start_url(role)):
+        return "external"
+    mode = str(role.get("apply_mode") or "unknown").lower()
+    if mode == "easy_apply":
+        return "easy apply"
+    if mode == "offsite":
+        return "external"
+    return "resolve"
+
+
+_MATCH_STOP_WORDS = {
+    "a", "an", "and", "at", "for", "in", "of", "on", "product", "manager",
+    "senior", "staff", "principal", "lead", "technical", "the",
+}
+
+
+def _search_queries(role: dict[str, Any]) -> list[str]:
+    title = " ".join(str(role.get("title") or "").split())
+    company = " ".join(str(role.get("company") or "").split())
+    exact = f'"{title}" "{company}" jobs apply'
+    relaxed_title = " ".join(
+        word for word in title.split()
+        if re.sub(r"[^a-z]", "", word.lower()) not in {"senior", "staff", "principal", "lead"}
+    )
+    relaxed = f'"{relaxed_title or title}" "{company}" careers'
+    return [exact, relaxed] if relaxed != exact else [exact]
+
+
+def _search_result_url(href: str) -> str:
+    if not href:
+        return ""
+    if href.startswith("/url?"):
+        return (parse_qs(urlparse(href).query).get("q") or [""])[0]
+    parsed = urlparse(href)
+    if parsed.hostname and "google." in parsed.hostname and parsed.path == "/url":
+        return (parse_qs(parsed.query).get("q") or [""])[0]
+    return href if parsed.scheme in {"http", "https"} else ""
+
+
+def _role_tokens(value: str) -> set[str]:
+    return {
+        token for token in re.findall(r"[a-z0-9]+", value.lower())
+        if len(token) > 2 and token not in _MATCH_STOP_WORDS
+    }
+
+
+def _page_matches_role(page: Any, candidate: ApplicationCandidate) -> bool:
+    try:
+        body = page.locator("body").inner_text(timeout=5_000).lower()
+    except Exception:
+        return False
+    title_tokens = _role_tokens(str(candidate.role.get("title") or ""))
+    company_tokens = _role_tokens(str(candidate.role.get("company") or ""))
+    title_ratio = sum(token in body for token in title_tokens) / max(1, len(title_tokens))
+    company_match = not company_tokens or any(token in body for token in company_tokens)
+    return title_ratio >= 0.65 and company_match and _is_external_job_url(page.url)
+
+
+def _search_result_urls_from_page(search_page: Any) -> list[str]:
+    urls: list[str] = []
+    anchors = search_page.locator("a[href]")
+    for index in range(min(anchors.count(), 80)):
+        href = _search_result_url(anchors.nth(index).get_attribute("href") or "")
+        if href and _is_external_job_url(href) and href not in urls:
+            urls.append(href)
+    return urls[:10]
+
+
+def _google_result_urls(search_page: Any, query: str) -> list[str]:
+    search_page.goto(
+        f"https://www.google.com/search?q={quote_plus(query)}",
+        wait_until="domcontentloaded", timeout=30_000,
+    )
+    # Detect CAPTCHA / empty result set — Google bot-checks show very few links
+    urls = _search_result_urls_from_page(search_page)
+    if urls:
+        return urls
+    # Google CAPTCHA or empty — fall back to DuckDuckGo HTML endpoint
+    try:
+        search_page.goto(
+            f"https://html.duckduckgo.com/html/?q={quote_plus(query)}",
+            wait_until="domcontentloaded", timeout=30_000,
+        )
+        return _search_result_urls_from_page(search_page)
+    except Exception:
+        return []
+
+
+def _resolve_application_url(page: Any, candidate: ApplicationCandidate) -> str | None:
+    """Resolve in one reusable page so failed searches do not flash extra tabs."""
+    attempted: set[str] = set()
+    for query in _search_queries(candidate.role)[:2]:
+        try:
+            urls = _google_result_urls(page, query)
+        except Exception:
+            continue
+        for url in urls:
+            if url in attempted:
+                continue
+            attempted.add(url)
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+                if _page_matches_role(page, candidate):
+                    return page.url
+            except Exception:
+                continue
+    return None
+
+
+def _write_apply_diagnostic(
+    root: Path, candidate: ApplicationCandidate, *, phase: str, error: str, page: Any | None = None,
+) -> None:
+    """Append privacy-safe browser failure metadata without storing page HTML or form values."""
+    record = {
+        "ts": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+        "role_key": candidate.role_key,
+        "company": candidate.role.get("company"),
+        "title": candidate.role.get("title"),
+        "phase": phase,
+        "error": error,
+        "apply_mode": candidate.role.get("apply_mode"),
+    }
+    if page is not None:
+        try:
+            record["url"] = page.url
+            record["page_title"] = page.title()[:200]
+        except Exception:
+            pass
+    path = root / "apply_diagnostics.jsonl"
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+    path.chmod(0o600)
+
+
+def _candidate_date(candidate: ApplicationCandidate) -> str:
+    for field in ("ts", "date_suggested", "run_date"):
+        value = str(candidate.role.get(field) or "")[:10]
+        if re.match(r"^\d{4}-\d{2}-\d{2}$", value):
+            return value
+    if candidate.record_path:
+        folder_date = candidate.record_path.parent.parent.name
+        if re.match(r"^\d{8}$", folder_date):
+            return f"{folder_date[:4]}-{folder_date[4:6]}-{folder_date[6:]}"
+        return dt.datetime.fromtimestamp(candidate.record_path.stat().st_mtime).date().isoformat()
+    return ""
+
+
+def _empty_gate_message(
+    *, lookback: str | None, include_applied: bool, match_terms: list[str] | None,
+) -> str:
+    if not RUNS_PATH.exists():
+        return "No evaluated roles are available yet. Run `metis` first."
+    cutoff = ""
+    if lookback:
+        from .pipeline import _parse_lookback
+
+        since = _parse_lookback(lookback)
+        cutoff = since.date().isoformat() if since else ""
+    terms = [term.strip().lower() for term in (match_terms or []) if term.strip()]
+    state = load_application_state()
+    roles: dict[str, dict[str, Any]] = {}
+    for line in RUNS_PATH.read_text(encoding="utf-8").splitlines():
+        try:
+            role = json.loads(line)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if (role.get("eval") or {}).get("verdict") not in {"apply", "consider"}:
+            continue
+        date = str(role.get("ts") or role.get("date_suggested") or "")[:10]
+        if cutoff and (not date or date < cutoff):
+            continue
+        haystack = f"{role.get('company', '')} {role.get('title', '')}".lower()
+        if terms and not any(term in haystack for term in terms):
+            continue
+        roles[_role_key(role)] = role
+    unresolved = 0
+    final = 0
+    for role_key, role in roles.items():
+        saved = state.get(role_key) or {}
+        if not include_applied and saved.get("status") in _FINAL_STATUSES:
+            final += 1
+            continue
+        if not detect_ats(str(saved.get("application_url") or _start_url(role))):
+            unresolved += 1
+    return (
+        f"{len(roles)} evaluated Solid/Moderate role(s) matched the window, but none are ready to open.\n"
+        f"  {unresolved} need a direct Greenhouse, Ashby, or Lever application URL.\n"
+        f"  {final} are excluded by confirmed application outcome.\n"
+        "Your default resume is configured; ATS URL resolution is the remaining gate."
+    )
 
 
 def select_candidates(candidates: list[ApplicationCandidate]) -> list[ApplicationCandidate]:
@@ -246,7 +501,7 @@ def select_candidates(candidates: list[ApplicationCandidate]) -> list[Applicatio
     except Exception:
         return candidates[:1]
     console.print()
-    console.print(f"[dim]Choose application-ready roles. {len(candidates)} pending, highest match first.[/dim]")
+    console.print(f"[dim]Choose unapplied roles. {len(candidates)} pending, highest match first.[/dim]")
     choices = [
         Choice(_SELECT_ALL, f"Select all {len(candidates)} roles"),
         Choice(_CANCEL, "Cancel / exit"),
@@ -638,6 +893,8 @@ def _fill_location_control(page: Any, value: str) -> None:
     if not value:
         return
     location = page.get_by_label(re.compile(r"^(?:Current )?Location(?: \(City\))?\b", re.I))
+    if not location.count():
+        location = page.get_by_placeholder(re.compile(r"^Start typing", re.I))
     if location.count() and not _locator_has_value(location):
         _choose_location(page, location.first, value)
 
@@ -707,11 +964,44 @@ def _answer_known_choice(page: Any, question: str, answers: str | list[str]) -> 
     pattern = re.compile(question, re.I)
     for answer in answers:
         _fill_or_select(page, pattern, answer)
+        _choose_nearby_custom_option(page, pattern, answer)
         _choose_radio_group(page, pattern, re.compile(rf"^{re.escape(answer)}(?:\b|$)", re.I))
         if _question_is_answered(page, pattern):
             return
     if answers[0].lower() in {"yes", "no"}:
         _choose_yes_no(page, pattern, yes=answers[0].lower() == "yes")
+
+
+def _choose_nearby_custom_option(page: Any, question_pattern: re.Pattern[str], answer: str) -> None:
+    """Handle Greenhouse/Ashby custom selects without a label-control association."""
+    labels = page.locator("label")
+    matches = []
+    for index in range(labels.count()):
+        label = labels.nth(index)
+        text = label.inner_text().strip()
+        if question_pattern.search(text):
+            matches.append((len(text), label))
+    if not matches:
+        return
+    question = min(matches, key=lambda item: item[0])[1]
+    for levels in range(1, 6):
+        container = question.locator("xpath=" + "/.." * levels)
+        controls = container.locator(
+            'input[role="combobox"], [role="combobox"], button[aria-haspopup="listbox"]'
+        )
+        visible = [controls.nth(i) for i in range(controls.count()) if controls.nth(i).is_visible()]
+        if len(visible) != 1:
+            continue
+        try:
+            visible[0].click(timeout=3_000)
+            page.wait_for_timeout(250)
+            options = page.locator('[role="option"]:visible')
+            preferred = options.filter(has_text=re.compile(re.escape(answer), re.I))
+            if preferred.count():
+                preferred.first.click(timeout=3_000)
+                return
+        except Exception:
+            return
 
 
 def _answer_demographics_and_eligibility(page: Any, values: dict[str, str]) -> None:
@@ -882,6 +1172,14 @@ def _choose_custom_select(page: Any, label_pattern: re.Pattern[str], value: str)
 
 def _choose_location(page: Any, field: Any, value: str) -> None:
     city = value.split(",", 1)[0].strip() or value
+    try:
+        tag = field.evaluate("e => e.tagName.toLowerCase()")
+        if tag not in {"input", "textarea"}:
+            inputs = field.locator("input")
+            if inputs.count():
+                field = inputs.first
+    except Exception:
+        pass
     attempts = [city, value] if city != value else [city]
     for attempt in attempts:
         try:
@@ -978,49 +1276,120 @@ def _launch_browser_context(playwright: Any, profile_dir: Path, *, headless: boo
     try:
         return playwright.chromium.launch_persistent_context(
             str(profile_dir), channel="chrome", headless=headless, args=args,
+            # These Playwright defaults deliberately isolate credentials. Metis is
+            # user-authorized to reuse the selected local Chrome identity instead.
+            ignore_default_args=["--use-mock-keychain", "--password-store=basic", "--disable-sync"],
         )
     except Exception as exc:
         message = str(exc)
         if "existing browser session" not in message.lower() and "profile is already in use" not in message.lower():
             raise
         raise SystemExit(
-            "The Metis Chrome session is already open. Close its Chrome window, wait a few seconds, "
-            "then run `metis apply` again. Your prepared application tabs and state are preserved."
+            f"Chrome profile '{application_value('chrome_profile_name') or 'Default'}' is already in use. "
+            "Quit all Google Chrome windows, wait a few seconds, then run `metis apply` again. "
+            "Metis will use that same Chrome profile and its saved sessions."
         ) from None
 
 
-def _navigate_to_application(context: Any, page: Any) -> Any:
-    if detect_ats(page.url):
-        return page
-    body = page.locator("body").inner_text(timeout=5_000)
-    if "couldn’t sign you in" in body.lower() or "couldn't sign you in" in body.lower():
-        raise RuntimeError("Google blocked sign-in in the automated Chrome profile. Sign into LinkedIn directly instead of using Continue with Google.")
+def _find_linkedin_apply_control(page: Any, *, timeout_seconds: float = 15) -> Any | None:
+    # Authenticated LinkedIn commonly uses an accessible name such as
+    # "Apply to <role> on company website", and hydrates the button after
+    # DOMContentLoaded. Wait for those real variants instead of checking once.
     candidates = [
-        page.get_by_role("link", name=re.compile(r"^(?:easy )?apply(?: now)?$", re.I)),
-        page.get_by_role("button", name=re.compile(r"^(?:easy )?apply(?: now)?$", re.I)),
+        page.locator("button.jobs-apply-button"),
+        page.locator('button[aria-label^="Apply to" i]'),
+        page.locator('a[aria-label^="Apply to" i]'),
+        page.get_by_role("button", name=re.compile(r"\b(?:easy )?apply\b", re.I)),
+        page.get_by_role("link", name=re.compile(r"\b(?:easy )?apply\b", re.I)),
+        page.locator('button[data-modal="job-details-subnav-apply-modal"]'),
     ]
     control = None
-    for controls in candidates:
-        for index in range(controls.count()):
-            item = controls.nth(index)
-            if item.is_visible():
-                control = item
+    deadline = time.monotonic() + timeout_seconds
+    while control is None and time.monotonic() < deadline:
+        for controls in candidates:
+            for index in range(controls.count()):
+                item = controls.nth(index)
+                try:
+                    if item.is_visible():
+                        control = item
+                        break
+                except Exception:
+                    continue
+            if control is not None:
                 break
-        if control is not None:
-            break
+        if control is None:
+            page.wait_for_timeout(250)
+    return control
+
+
+def _navigate_to_application(context: Any, page: Any) -> tuple[Any, str]:
+    """Follow LinkedIn's Apply control, returning (destination, easy|external)."""
+    if detect_ats(page.url):
+        return page, "external"
+    path = urlparse(page.url).path.lower()
+    is_auth_route = any(marker in path for marker in ("/login", "/signup", "/authwall"))
+    if is_auth_route:
+        raise LinkedInAuthenticationError(
+            "LinkedIn is not signed in in Chrome's Default profile. Sign into LinkedIn in that profile, "
+            "quit Chrome, then retry."
+        )
+    control = _find_linkedin_apply_control(page)
     if control is None:
-        raise RuntimeError("Could not find an external Apply control on the posting.")
-    text = (control.inner_text() or "").strip()
+        raise RuntimeError("Could not find LinkedIn's Apply control on the posting.")
+    text = " ".join(filter(None, [
+        (control.inner_text() or "").strip(),
+        (control.get_attribute("aria-label") or "").strip(),
+    ]))
     if "easy apply" in text.lower():
-        raise RuntimeError("LinkedIn Easy Apply is not supported yet.")
+        return page, "easy"
     before = list(context.pages)
-    control.click(timeout=5_000)
+    control.click(timeout=15_000)
     page.wait_for_timeout(1_500)
     new_pages = [item for item in context.pages if item not in before]
     destination = new_pages[-1] if new_pages else page
     destination.wait_for_load_state("domcontentloaded", timeout=60_000)
-    if not detect_ats(destination.url):
-        raise RuntimeError(f"The external application host is not supported yet: {destination.url}")
+    if "linkedin.com" in (urlparse(destination.url).hostname or "").lower():
+        raise RuntimeError("LinkedIn Apply did not open an external career page.")
+    if not _is_external_job_url(destination.url):
+        raise RuntimeError(f"LinkedIn Apply opened an unsupported destination: {destination.url}")
+    return destination, "external"
+
+
+def _navigate_external_to_form(context: Any, page: Any) -> Any:
+    """Follow an employer job-detail Apply control to the actual application form."""
+    if detect_ats(page.url):
+        return page
+    controls = [
+        page.get_by_role("link", name=re.compile(r"^(?:apply|apply now|apply for this job)\b", re.I)),
+        page.get_by_role("button", name=re.compile(r"^(?:apply|apply now|apply for this job)\b", re.I)),
+    ]
+    control = None
+    for group in controls:
+        for index in range(group.count()):
+            item = group.nth(index)
+            try:
+                text = (item.inner_text() or "").strip().lower()
+                if item.is_visible() and "submit" not in text:
+                    control = item
+                    break
+            except Exception:
+                continue
+        if control is not None:
+            break
+    if control is None:
+        return page
+    before = list(context.pages)
+    original = page
+    control.click(timeout=15_000)
+    page.wait_for_timeout(1_000)
+    new_pages = [item for item in context.pages if item not in before]
+    destination = new_pages[-1] if new_pages else page
+    destination.wait_for_load_state("domcontentloaded", timeout=60_000)
+    if destination is not original:
+        try:
+            original.close()
+        except Exception:
+            pass
     return destination
 
 
@@ -1062,10 +1431,23 @@ def prepare_batch_in_browser(
         profile_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         context = _launch_browser_context(playwright, profile_dir, headless=headless)
         initial_pages = list(context.pages)
+        scratch_page = initial_pages[0] if initial_pages else context.new_page()
         active: dict[Any, tuple[ApplicationCandidate, dict[str, Any]]] = {}
-        for candidate in candidates:
+        print(f"Using Chrome profile: {profile_dir}")
+        needs_linkedin = any(not _is_external_job_url(_start_url(item.role)) for item in candidates)
+        linkedin_ok = True
+        if needs_linkedin:
+            linkedin_ok = _probe_linkedin_session(context, scratch_page)
+            if not linkedin_ok:
+                print(
+                    f"⚠  LinkedIn is not signed in at {profile_dir} — "
+                    "roles with LinkedIn URLs will go through web search instead. "
+                    "To enable LinkedIn routing: open LinkedIn in that Chrome profile, "
+                    "sign in, quit Chrome completely, then retry."
+                )
+        for candidate_index, candidate in enumerate(candidates):
             start_url = _start_url(candidate.role)
-            ats = detect_ats(start_url) or "external"
+            ats = detect_ats(start_url) or "unresolved"
             common = {
                 "role": candidate.role,
                 "tailoring_record": str(candidate.record_path) if candidate.record_path else None,
@@ -1073,10 +1455,97 @@ def prepare_batch_in_browser(
                 "ats": ats,
             }
             update_application_state(candidate.role_key, status="opened", root=root, **common)
-            page = context.new_page()
+            page = None
             try:
-                page.goto(start_url, wait_until="domcontentloaded", timeout=60_000)
-                page = _navigate_to_application(context, page)
+                direct_ats = detect_ats(start_url)
+                direct_external = _is_external_job_url(start_url)
+                if direct_external:
+                    page = context.new_page()
+                    page.goto(start_url, wait_until="domcontentloaded", timeout=60_000)
+                elif not linkedin_ok:
+                    # LinkedIn session unavailable — go straight to web search.
+                    destination = None
+                    route = "unresolved"
+                else:
+                    # LinkedIn is the source of truth for routing. Authenticated Easy Apply
+                    # remains there; offsite Apply follows LinkedIn's employer destination.
+                    scratch_page.goto(start_url, wait_until="domcontentloaded", timeout=60_000)
+                    try:
+                        destination, route = _navigate_to_application(context, scratch_page)
+                    except LinkedInAuthenticationError as linkedin_exc:
+                        message = str(linkedin_exc)
+                        _write_apply_diagnostic(
+                            root, candidate, phase="linkedin_auth", error=message, page=scratch_page,
+                        )
+                        # Session expired mid-batch — mark this role and fall through to
+                        # search for remaining candidates rather than aborting everything.
+                        linkedin_ok = False
+                        log.warning("LinkedIn auth lost mid-batch for %s: %s", candidate.role_key, message)
+                        update_application_state(
+                            candidate.role_key, status="blocked", root=root, error=message, **common,
+                        )
+                        results[candidate.role_key] = {
+                            "role": f"{candidate.role.get('title')} at {candidate.role.get('company')}",
+                            "status": "blocked",
+                        }
+                        print(
+                            f"LinkedIn auth expired — skipping {candidate.role.get('company')}. "
+                            "Remaining LinkedIn-URL roles will try web search."
+                        )
+                        continue
+                    except Exception as linkedin_exc:
+                        log.info("LinkedIn Apply routing failed for %s: %s", candidate.role_key, linkedin_exc)
+                        _write_apply_diagnostic(
+                            root, candidate, phase="linkedin_routing", error=str(linkedin_exc), page=scratch_page,
+                        )
+                        destination = None
+                        route = "unresolved"
+                    if route == "easy":
+                        page = scratch_page
+                        scratch_page = context.new_page()
+                        common.update({"ats": "linkedin", "application_url": page.url, "resolution_status": "easy_apply"})
+                        update_application_state(candidate.role_key, status="opened_linkedin", root=root, **common)
+                        results[candidate.role_key] = {
+                            "role": f"{candidate.role.get('title')} at {candidate.role.get('company')}",
+                            "status": "opened_linkedin",
+                        }
+                        active[page] = (candidate, common)
+                        continue
+                    if route == "external" and destination is not None:
+                        page = destination
+                        if destination is scratch_page:
+                            scratch_page = context.new_page()
+                        resolved_url = page.url
+                        resolution_method = "linkedin_apply"
+                    else:
+                        resolved_url = _resolve_application_url(scratch_page, candidate)
+                        resolution_method = "google_search"
+                    if resolved_url:
+                        if page is None:
+                            page = scratch_page
+                            scratch_page = context.new_page()
+                        common.update({
+                            "application_url": resolved_url,
+                            "resolution_status": "confirmed",
+                            "resolution_method": resolution_method,
+                            "resolved_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+                        })
+                    else:
+                        common.update({
+                            "resolution_status": "unresolved",
+                            "resolution_attempted_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+                        })
+                        update_application_state(candidate.role_key, status="blocked", root=root, **common)
+                        print(
+                            f"Could not confidently resolve an external application for "
+                            f"{candidate.role.get('title')} at {candidate.role.get('company')}."
+                        )
+                        results[candidate.role_key] = {
+                            "role": f"{candidate.role.get('title')} at {candidate.role.get('company')}",
+                            "status": "blocked",
+                        }
+                        continue
+                page = _navigate_external_to_form(context, page)
                 common["ats"] = detect_ats(page.url) or ats
                 common["application_url"] = page.url
                 _fill_visible_form(page, candidate)
@@ -1092,10 +1561,16 @@ def prepare_batch_in_browser(
                 }
                 active[page] = (candidate, common)
             except Exception as exc:
+                _write_apply_diagnostic(
+                    root, candidate, phase="prepare_form", error=str(exc), page=page,
+                )
                 update_application_state(candidate.role_key, status="blocked", root=root, error=str(exc), **common)
                 print(f"Could not prepare {candidate.role.get('title')} at {candidate.role.get('company')}: {exc}")
                 results[candidate.role_key] = {"role": f"{candidate.role.get('title')} at {candidate.role.get('company')}", "status": "blocked"}
-                page.close()
+                if page is not None:
+                    page.close()
+        if scratch_page in context.pages and scratch_page not in active:
+            scratch_page.close()
         for page in initial_pages:
             if page in context.pages and page not in active:
                 page.close()
@@ -1108,6 +1583,8 @@ def prepare_batch_in_browser(
                 for page, (candidate, common) in list(active.items()):
                     if page.is_closed():
                         active.pop(page, None)
+                        continue
+                    if common.get("ats") == "linkedin":
                         continue
                     try:
                         if _looks_submitted(page.url, page.locator("body").inner_text(timeout=2_000)):
@@ -1132,14 +1609,54 @@ def prepare_batch_in_browser(
             context.close()
         except Exception:
             pass
-    return [results[item.role_key] for item in candidates]
+    final = [results[item.role_key] for item in candidates]
+    counts: dict[str, int] = {}
+    for r in final:
+        counts[r["status"]] = counts.get(r["status"], 0) + 1
+    summary_lines = []
+    if counts.get("applied") or counts.get("prefilled") or counts.get("needs_review"):
+        summary_lines.append(f"  Prepared externally:  {counts.get('prefilled', 0) + counts.get('needs_review', 0) + counts.get('applied', 0)}")
+    if counts.get("opened_linkedin"):
+        summary_lines.append(f"  Opened in LinkedIn:   {counts['opened_linkedin']}")
+    if counts.get("blocked"):
+        summary_lines.append(f"  Could not resolve:    {counts['blocked']}")
+    if counts.get("auth_required"):
+        summary_lines.append(f"  Auth required:        {counts['auth_required']}")
+    if summary_lines:
+        print("\nBatch summary:")
+        print("\n".join(summary_lines))
+    return final
 
 
 def run_apply(
     *, apply_all: bool = False, top_n: int | None = None, include_applied: bool = False,
-    match_terms: list[str] | None = None,
+    match_terms: list[str] | None = None, latest_n: int | None = None,
+    lookback: str | None = None, resume_path: str | None = None,
+    force_default_resume: bool = False,
 ) -> list[dict[str, str]]:
-    candidates = load_application_candidates(include_applied=include_applied)
+    configured_default = _fallback_resume()
+    override: Path | None = None
+    if resume_path:
+        override = Path(resume_path).expanduser()
+        if not override.is_file() or override.suffix.lower() != ".docx":
+            raise SystemExit("--resume must point to an existing DOCX file.")
+    elif force_default_resume:
+        if configured_default is None:
+            raise SystemExit("No configured default resume. Run `metis config autofill` or pass --resume DOCX.")
+        override = configured_default
+    candidates = load_application_candidates(include_applied=include_applied, resume_override=override)
+    if override is not None:
+        kind = "custom" if resume_path else "default"
+        candidates = [replace(candidate, resume_path=override, tailored=False, resume_kind=kind) for candidate in candidates]
+
+    if lookback:
+        from .pipeline import _parse_lookback
+
+        since = _parse_lookback(lookback)
+        if since is None:
+            raise SystemExit(f"Could not parse --lookback '{lookback}'. Try: '7d', '30d', '2026-07-01'.")
+        cutoff = since.date().isoformat()
+        candidates = [candidate for candidate in candidates if _candidate_date(candidate) >= cutoff]
     terms = [term.strip().lower() for term in (match_terms or []) if term.strip()]
     if terms:
         candidates = [
@@ -1147,14 +1664,21 @@ def run_apply(
             if any(term in f"{candidate.role.get('company', '')} {candidate.role.get('title', '')}".lower() for term in terms)
         ]
     if not candidates:
-        raise SystemExit(
-            "No pending tailored roles with an available DOCX resume. Run `metis resume tailor`, "
-            "or set METIS_DEFAULT_RESUME."
-        )
+        raise SystemExit(_empty_gate_message(
+            lookback=lookback, include_applied=include_applied, match_terms=match_terms,
+        ))
     if top_n is not None:
         if top_n <= 0:
             raise SystemExit("--top must be a positive integer.")
         selected = candidates[:top_n]
+    elif latest_n is not None:
+        if latest_n <= 0:
+            raise SystemExit("--latest must be a positive integer.")
+        selected = sorted(
+            candidates,
+            key=lambda candidate: (_candidate_date(candidate), int((candidate.role.get("eval") or {}).get("score") or 0)),
+            reverse=True,
+        )[:latest_n]
     elif apply_all:
         selected = candidates
     elif not os.isatty(0):
