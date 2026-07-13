@@ -492,21 +492,31 @@ def _empty_gate_message(
     )
 
 
-def select_candidates(candidates: list[ApplicationCandidate]) -> list[ApplicationCandidate]:
+def select_candidates(
+    candidates: list[ApplicationCandidate],
+    *,
+    preselected: list[ApplicationCandidate] | None = None,
+) -> list[ApplicationCandidate]:
     try:
         from InquirerPy import inquirer
         from InquirerPy.base.control import Choice
         from InquirerPy.separator import Separator
         from .theme import INQUIRER_STYLE, console
     except Exception:
-        return candidates[:1]
+        return (preselected if preselected is not None else candidates)[:1]
+    preselected_keys = {item.role_key for item in (preselected if preselected is not None else candidates)}
     console.print()
-    console.print(f"[dim]Choose unapplied roles. {len(candidates)} pending, highest match first.[/dim]")
+    n_pre = len(preselected_keys) if preselected is not None else len(candidates)
+    hint = f"{n_pre} pre-selected" if preselected is not None else f"{len(candidates)} pending"
+    console.print(f"[dim]Choose roles to apply to. {hint}, highest match first.[/dim]")
     choices = [
         Choice(_SELECT_ALL, f"Select all {len(candidates)} roles"),
         Choice(_CANCEL, "Cancel / exit"),
         Separator(),
-        *[Choice(item.role_key, f"{idx:>2}. {_label(item)}") for idx, item in enumerate(candidates, 1)],
+        *[
+            Choice(item.role_key, f"{idx:>2}. {_label(item)}", enabled=item.role_key in preselected_keys)
+            for idx, item in enumerate(candidates, 1)
+        ],
     ]
     selected = inquirer.checkbox(
         message="Applications",
@@ -1693,15 +1703,17 @@ def run_apply(
     if top_n is not None:
         if top_n <= 0:
             raise SystemExit("--top must be a positive integer.")
-        selected = candidates[:top_n]
+        preselected = candidates[:top_n]
+        selected = select_candidates(candidates, preselected=preselected) if os.isatty(0) else preselected
     elif latest_n is not None:
         if latest_n <= 0:
             raise SystemExit("--latest must be a positive integer.")
-        selected = sorted(
+        preselected = sorted(
             candidates,
             key=lambda candidate: (_candidate_date(candidate), int((candidate.role.get("eval") or {}).get("score") or 0)),
             reverse=True,
         )[:latest_n]
+        selected = select_candidates(candidates, preselected=preselected) if os.isatty(0) else preselected
     elif apply_all:
         selected = candidates
     elif not os.isatty(0):
