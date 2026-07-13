@@ -293,21 +293,27 @@ def _label(candidate: ApplicationCandidate) -> str:
         day = dt.datetime.fromtimestamp(candidate.record_path.stat().st_mtime).strftime("%b %d")
     else:
         day = str(role.get("ts") or "")[:10] or "recent"
-    suffix = candidate.resume_kind or ("tailored" if candidate.tailored else "default resume")
-    status = candidate.workflow_status.replace("_", " ")
+    suffix = "tailored" if candidate.tailored else "default"
+    _STATUS_DISPLAY = {
+        "prefilled": "form ready", "blocked": "failed", "": "new",
+        "not_started": "new", "opened_linkedin": "LI open",
+        "applied": "applied ✓", "applied_confirmed": "confirmed ✓",
+        "needs_review": "needs review",
+    }
+    status = _STATUS_DISPLAY.get(candidate.workflow_status, candidate.workflow_status.replace("_", " "))
     route = _application_route(candidate.role)
     return f"{score:>3}% | {company:<22} | {title:<48} | {day} · {suffix} · {route} · {status}"
 
 
 def _application_route(role: dict[str, Any]) -> str:
     if _is_external_job_url(_start_url(role)):
-        return "external"
+        return "direct ATS"
     mode = str(role.get("apply_mode") or "unknown").lower()
     if mode == "easy_apply":
-        return "easy apply"
+        return "Easy Apply"
     if mode == "offsite":
-        return "external"
-    return "resolve"
+        return "via LinkedIn"
+    return "via LinkedIn"
 
 
 _MATCH_STOP_WORDS = {
@@ -512,10 +518,14 @@ def select_candidates(
         f"{len(preselected_keys)} pre-selected" if preselected_keys else f"{len(candidates)} pending"
     )
     console.print(f"[dim]Choose roles to apply to. {hint}, highest match first.[/dim]")
+    # "Deselect all" is only shown when items are pre-checked (so there's something to clear).
+    # InquirerPy can't relabel choices dynamically, so we include only what's meaningful upfront.
+    header_choices: list[Any] = [Choice(_SELECT_ALL, f"Select all {len(candidates)} roles")]
+    if preselected_keys:
+        header_choices.append(Choice(_DESELECT_ALL, "Deselect all / clear"))
+    header_choices.append(Choice(_CANCEL, "Cancel / exit"))
     choices = [
-        Choice(_SELECT_ALL, f"Select all {len(candidates)} roles"),
-        Choice(_DESELECT_ALL, f"Deselect all / clear"),
-        Choice(_CANCEL, "Cancel / exit"),
+        *header_choices,
         Separator(),
         *[
             Choice(item.role_key, f"{idx:>2}. {_label(item)}", enabled=item.role_key in preselected_keys)
@@ -527,7 +537,7 @@ def select_candidates(
         choices=choices,
         style=INQUIRER_STYLE,
         instruction="↑↓ scrolls · Space toggles · Enter confirms",
-        height=min(len(candidates) + 5, 20),
+        height=min(len(candidates) + len(header_choices) + 2, 20),
         validate=lambda result: bool(result),
         invalid_message="Press Space to select at least one role, or Ctrl-C to cancel.",
     ).execute()
@@ -535,10 +545,14 @@ def select_candidates(
         raise SystemExit("Cancelled.")
     if _SELECT_ALL in selected:
         return candidates
-    if _DESELECT_ALL in selected:
+    # Strip sentinel keys; if real roles remain, use them — user may have toggled
+    # "Deselect all" alongside individual picks, which means they want just the picks.
+    sentinels = {_SELECT_ALL, _DESELECT_ALL, _CANCEL}
+    real_selected = [key for key in selected if key not in sentinels]
+    if _DESELECT_ALL in selected and not real_selected:
         raise SystemExit("No roles selected.")
     by_key = {item.role_key: item for item in candidates}
-    return [by_key[key] for key in selected if key in by_key]
+    return [by_key[key] for key in real_selected if key in by_key]
 
 
 def _looks_submitted(url: str, text: str) -> bool:

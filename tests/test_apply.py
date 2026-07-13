@@ -148,7 +148,7 @@ def test_load_candidates_includes_unresolved_linkedin_role(tmp_path, monkeypatch
     candidate = apply_cmd.load_application_candidates(tmp_path)[0]
 
     assert candidate.role_key == "unresolved"
-    assert apply_cmd._application_route(candidate.role) == "external"
+    assert apply_cmd._application_route(candidate.role) == "via LinkedIn"
 
 
 def test_search_queries_are_bounded_and_search_redirect_is_unwrapped():
@@ -166,9 +166,9 @@ def test_search_queries_are_bounded_and_search_redirect_is_unwrapped():
 def test_application_route_includes_easy_apply_and_unknown():
     from metis.apply_cmd import _application_route
 
-    assert _application_route({"url": "https://linkedin.com/jobs/view/1", "apply_mode": "easy_apply"}) == "easy apply"
-    assert _application_route({"url": "https://linkedin.com/jobs/view/2", "apply_mode": "unknown"}) == "resolve"
-    assert _application_route({"apply_url": "https://careers.microsoft.com/us/en/job/123/title"}) == "external"
+    assert _application_route({"url": "https://linkedin.com/jobs/view/1", "apply_mode": "easy_apply"}) == "Easy Apply"
+    assert _application_route({"url": "https://linkedin.com/jobs/view/2", "apply_mode": "unknown"}) == "via LinkedIn"
+    assert _application_route({"apply_url": "https://careers.microsoft.com/us/en/job/123/title"}) == "direct ATS"
 
 
 def test_linkedin_apply_mode_detection():
