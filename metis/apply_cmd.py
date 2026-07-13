@@ -19,6 +19,7 @@ log = __import__("logging").getLogger(__name__)
 
 
 _SELECT_ALL = "__metis_select_all__"
+_DESELECT_ALL = "__metis_deselect_all__"
 _CANCEL = "__metis_cancel__"
 _FINAL_STATUSES = {"applied", "applied_confirmed", "rejected", "recruiter_screen"}
 _SUCCESS_PATTERNS = (
@@ -503,14 +504,22 @@ def select_candidates(
         from InquirerPy.separator import Separator
         from .theme import INQUIRER_STYLE, console
     except Exception:
-        return (preselected if preselected is not None else candidates)[:1]
-    preselected_keys = {item.role_key for item in (preselected if preselected is not None else candidates)}
+        return list(preselected or []) or candidates[:1]
+    # Nothing pre-selected unless explicitly given (e.g. via --top N).
+    preselected_keys = {item.role_key for item in preselected} if preselected is not None else set()
+    all_checked = bool(preselected_keys) and preselected_keys >= {item.role_key for item in candidates}
     console.print()
-    n_pre = len(preselected_keys) if preselected is not None else len(candidates)
-    hint = f"{n_pre} pre-selected" if preselected is not None else f"{len(candidates)} pending"
+    hint = (
+        f"{len(preselected_keys)} pre-selected" if preselected_keys else f"{len(candidates)} pending"
+    )
     console.print(f"[dim]Choose roles to apply to. {hint}, highest match first.[/dim]")
+    # Top shortcut flips based on current pre-selection state.
+    if all_checked:
+        toggle_choice = Choice(_DESELECT_ALL, f"Deselect all {len(candidates)} roles")
+    else:
+        toggle_choice = Choice(_SELECT_ALL, f"Select all {len(candidates)} roles")
     choices = [
-        Choice(_SELECT_ALL, f"Select all {len(candidates)} roles"),
+        toggle_choice,
         Choice(_CANCEL, "Cancel / exit"),
         Separator(),
         *[
@@ -522,7 +531,8 @@ def select_candidates(
         message="Applications",
         choices=choices,
         style=INQUIRER_STYLE,
-        instruction="Space toggles, Enter confirms",
+        instruction="↑↓ scrolls · Space toggles · Enter confirms",
+        height=min(len(candidates) + 4, 20),
         validate=lambda result: bool(result),
         invalid_message="Press Space to select at least one role, or Ctrl-C to cancel.",
     ).execute()
@@ -530,6 +540,8 @@ def select_candidates(
         raise SystemExit("Cancelled.")
     if _SELECT_ALL in selected:
         return candidates
+    if _DESELECT_ALL in selected:
+        raise SystemExit("No roles selected.")
     by_key = {item.role_key: item for item in candidates}
     return [by_key[key] for key in selected if key in by_key]
 
@@ -1469,39 +1481,52 @@ def prepare_batch_in_browser(
             try:
                 direct_ats = detect_ats(start_url)
                 direct_external = _is_external_job_url(start_url)
+                apply_mode_val = str(candidate.role.get("apply_mode") or "").lower()
+
+                # For offsite / unknown roles, try Google/DDG first — it never needs LinkedIn auth.
+                # Easy Apply has no external URL; skip search and require LinkedIn nav.
+                google_url: str | None = None
+                if not direct_external and apply_mode_val != "easy_apply":
+                    try:
+                        google_url = _resolve_application_url(scratch_page, candidate)
+                    except Exception:
+                        pass
+
                 if direct_external:
+                    # Direct ATS or employer URL already known — navigate straight to it.
                     page = context.new_page()
                     page.goto(start_url, wait_until="domcontentloaded", timeout=60_000)
+                elif google_url:
+                    # Google/DDG found the ATS URL — use it without LinkedIn.
+                    page = scratch_page
+                    scratch_page = context.new_page()
+                    common.update({
+                        "application_url": google_url,
+                        "resolution_status": "confirmed",
+                        "resolution_method": "google_search",
+                        "resolved_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+                    })
                 elif not linkedin_ok:
-                    # LinkedIn session unavailable — go straight to web search.
-                    resolved_url = _resolve_application_url(scratch_page, candidate)
-                    if resolved_url:
-                        page = scratch_page
-                        scratch_page = context.new_page()
-                        common.update({
-                            "application_url": resolved_url,
-                            "resolution_status": "confirmed",
-                            "resolution_method": "google_search",
-                            "resolved_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
-                        })
-                    else:
-                        common.update({
-                            "resolution_status": "unresolved",
-                            "resolution_attempted_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
-                        })
-                        update_application_state(candidate.role_key, status="blocked", root=root, **common)
-                        print(
-                            f"Could not prepare {candidate.role.get('title')} at "
-                            f"{candidate.role.get('company')}: web search found no ATS URL."
-                        )
-                        results[candidate.role_key] = {
-                            "role": f"{candidate.role.get('title')} at {candidate.role.get('company')}",
-                            "status": "blocked",
-                        }
-                        continue
+                    # Google failed and LinkedIn is not signed in — nothing more we can try.
+                    reason = (
+                        "Easy Apply requires a signed-in LinkedIn session"
+                        if apply_mode_val == "easy_apply"
+                        else "web search found no ATS URL and LinkedIn is not signed in"
+                    )
+                    common.update({
+                        "resolution_status": "unresolved",
+                        "resolution_attempted_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+                    })
+                    update_application_state(candidate.role_key, status="blocked", root=root, **common)
+                    print(f"Could not prepare {candidate.role.get('title')} at {candidate.role.get('company')}: {reason}.")
+                    results[candidate.role_key] = {
+                        "role": f"{candidate.role.get('title')} at {candidate.role.get('company')}",
+                        "status": "blocked",
+                    }
+                    continue
                 else:
-                    # LinkedIn is the source of truth for routing. Authenticated Easy Apply
-                    # remains there; offsite Apply follows LinkedIn's employer destination.
+                    # LinkedIn is signed in — use it as primary for Easy Apply and fallback
+                    # for offsite roles where Google search came up empty.
                     scratch_page.goto(start_url, wait_until="domcontentloaded", timeout=60_000)
                     try:
                         destination, route = _navigate_to_application(context, scratch_page)
@@ -1510,8 +1535,6 @@ def prepare_batch_in_browser(
                         _write_apply_diagnostic(
                             root, candidate, phase="linkedin_auth", error=message, page=scratch_page,
                         )
-                        # Session expired mid-batch — mark this role and fall through to
-                        # search for remaining candidates rather than aborting everything.
                         linkedin_ok = False
                         log.warning("LinkedIn auth lost mid-batch for %s: %s", candidate.role_key, message)
                         update_application_state(
@@ -1523,7 +1546,7 @@ def prepare_batch_in_browser(
                         }
                         print(
                             f"LinkedIn auth expired — skipping {candidate.role.get('company')}. "
-                            "Remaining LinkedIn-URL roles will try web search."
+                            "Remaining roles will try web search."
                         )
                         continue
                     except Exception as linkedin_exc:
@@ -1544,34 +1567,26 @@ def prepare_batch_in_browser(
                         }
                         active[page] = (candidate, common)
                         continue
-                    if route == "external" and destination is not None:
+                    elif route == "external" and destination is not None:
                         page = destination
                         if destination is scratch_page:
                             scratch_page = context.new_page()
-                        resolved_url = page.url
-                        resolution_method = "linkedin_apply"
-                    else:
-                        resolved_url = _resolve_application_url(scratch_page, candidate)
-                        resolution_method = "google_search"
-                    if resolved_url:
-                        if page is None:
-                            page = scratch_page
-                            scratch_page = context.new_page()
                         common.update({
-                            "application_url": resolved_url,
+                            "application_url": page.url,
                             "resolution_status": "confirmed",
-                            "resolution_method": resolution_method,
+                            "resolution_method": "linkedin_apply",
                             "resolved_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
                         })
                     else:
+                        # Both Google and LinkedIn navigation failed.
                         common.update({
                             "resolution_status": "unresolved",
                             "resolution_attempted_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
                         })
                         update_application_state(candidate.role_key, status="blocked", root=root, **common)
                         print(
-                            f"Could not confidently resolve an external application for "
-                            f"{candidate.role.get('title')} at {candidate.role.get('company')}."
+                            f"Could not prepare {candidate.role.get('title')} at "
+                            f"{candidate.role.get('company')}: web search and LinkedIn nav both failed."
                         )
                         results[candidate.role_key] = {
                             "role": f"{candidate.role.get('title')} at {candidate.role.get('company')}",
