@@ -307,7 +307,18 @@ def _find_company_location_container(a_tag, title: str) -> tuple[str, str]:
     return "", ""
 
 
-def _fetch_one_jd(job: dict) -> tuple[str, str]:
+def _apply_mode_from_html(html: str) -> str:
+    lowered = (html or "").lower()
+    if "no longer accepting applications" in lowered:
+        return "closed"
+    if "offsite-apply" in lowered or "offsite_apply" in lowered:
+        return "offsite"
+    if "easy apply" in lowered or "easy-apply" in lowered or "easy_apply" in lowered:
+        return "easy_apply"
+    return "unknown"
+
+
+def _fetch_one_jd(job: dict) -> tuple[str, str, str]:
     """Fetch the JD text and external apply URL for a job.
 
     Returns (jd_text, apply_url). apply_url is the external ATS link
@@ -334,9 +345,10 @@ def _fetch_one_jd(job: dict) -> tuple[str, str]:
                     time.sleep(2 ** attempt)
             else:
                 # Non-retryable status (403, 404, etc.)
-                return "", ""
+                return "", "", "unknown"
         if r is None or r.status_code != 200:
-            return "", ""
+            return "", "", "unknown"
+        apply_mode = _apply_mode_from_html(r.text)
         soup = BeautifulSoup(r.text, "html.parser")
         # LinkedIn embeds structured job data in JSON-LD
         for script in soup.find_all("script", type="application/ld+json"):
@@ -354,17 +366,17 @@ def _fetch_one_jd(job: dict) -> tuple[str, str]:
                     # Reject LinkedIn-internal apply URLs — only keep real external ATS links
                     if "linkedin.com" in apply_url:
                         apply_url = ""
-                    return jd_text, apply_url
+                    return jd_text, apply_url, apply_mode
             except (json.JSONDecodeError, AttributeError):
                 continue
         # Fallback: common LinkedIn description containers (no apply URL available here)
         for cls_pat in [r"description__text", r"job-details__main-content", r"show-more-less-html"]:
             el = soup.find(class_=re.compile(cls_pat, re.I))
             if el:
-                return el.get_text("\n", strip=True)[:3000], ""
+                return el.get_text("\n", strip=True)[:3000], "", apply_mode
     except Exception as e:
         log.warning(f"JD fetch failed ({job['title']} @ {job['company']}): {e}")
-    return "", ""
+    return "", "", "unknown"
 
 
 def enrich_jobs(jobs: list[dict]) -> list[dict]:
@@ -376,9 +388,10 @@ def enrich_jobs(jobs: list[dict]) -> list[dict]:
     import time as _time
     linkedin_jobs = [j for j in jobs if j.get("source") != "proactive"]
     for i, job in enumerate(linkedin_jobs):
-        jd_text, apply_url = _fetch_one_jd(job)
+        jd_text, apply_url, apply_mode = _fetch_one_jd(job)
         job["jd"]        = jd_text
         job["apply_url"] = apply_url
+        job["apply_mode"] = apply_mode
         if i < len(linkedin_jobs) - 1:
             _time.sleep(0.4)
     fetched   = sum(1 for j in jobs if j.get("jd"))

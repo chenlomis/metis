@@ -67,6 +67,7 @@ class JobDict(TypedDict, total=False):
     job_id: str
     url: str
     apply_url: str
+    apply_mode: Literal["offsite", "easy_apply", "unknown"]
     jd: str
     source: str                     # "linkedin" | "proactive"
     extraction: dict                # 27-field Haiku extraction output

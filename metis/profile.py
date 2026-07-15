@@ -218,18 +218,17 @@ def load_profile_text() -> str | None:
     if not profile_text:
         return None
 
-    # 3. Append feedback notes if present
-    feedback_path = _data_dir() / "feedback.md"
-    if feedback_path.exists():
-        feedback = feedback_path.read_text().strip()
-        if feedback:
-            profile_text += (
-                "\n\n"
-                "CANDIDATE CALIBRATION FEEDBACK:\n"
-                "The candidate has provided these scoring notes from past runs.\n"
-                "Use them to adjust your judgment — they take precedence over generic defaults:\n\n"
-                + feedback
-            )
-            log.info("Loaded scoring feedback from feedback.md")
+    # 3. Append active feedback entries if present (lazy import avoids circular dependency)
+    from .feedback import load_active_feedback_text
+    feedback = load_active_feedback_text(feedback_file=_data_dir() / "feedback.md")
+    if feedback:
+        profile_text += (
+            "\n\n"
+            "CANDIDATE CALIBRATION FEEDBACK:\n"
+            "The candidate has provided these scoring notes from past runs.\n"
+            "Use them to adjust your judgment — they take precedence over generic defaults:\n\n"
+            + feedback
+        )
+        log.info("Loaded active scoring feedback from feedback.md")
 
     return profile_text

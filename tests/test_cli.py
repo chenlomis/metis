@@ -82,7 +82,7 @@ def test_feedback_list_routes_without_gmail_validation(monkeypatch):
     assert calls["listed"] is True
 
 
-def test_resume_tailor_routes_with_provider_key_without_gmail_validation(monkeypatch):
+def test_tailor_routes_with_provider_key_without_gmail_validation(monkeypatch):
     from metis import cli
     import metis.resume_cmd as resume_cmd
 
@@ -96,7 +96,7 @@ def test_resume_tailor_routes_with_provider_key_without_gmail_validation(monkeyp
         lambda **kwargs: calls.update(kwargs) or [],
     )
 
-    cli.main(["resume", "tailor"])
+    cli.main(["tailor"])
 
     assert calls["require_gmail"] is False
     assert calls["api_key"] == "provider-key"
@@ -104,26 +104,7 @@ def test_resume_tailor_routes_with_provider_key_without_gmail_validation(monkeyp
     assert calls["tailor_all"] is False
 
 
-def test_profile_evidence_index_routes_without_gmail_validation(monkeypatch):
-    from metis import cli
-    import metis.profile_evidence as profile_evidence
-
-    calls = {}
-    monkeypatch.setattr(cli, "_configure_logging", lambda: None)
-    monkeypatch.setattr(cli, "_validate_env", lambda require_gmail=True: calls.update(require_gmail=require_gmail))
-    monkeypatch.setattr(
-        profile_evidence,
-        "write_evidence_index",
-        lambda output=None: calls.update(output=output) or "/tmp/profile.evidence.index.yaml",
-    )
-
-    cli.main(["profile", "evidence-index"])
-
-    assert calls["require_gmail"] is False
-    assert calls["output"] is None
-
-
-def test_resume_tailor_resume_path_routes(monkeypatch):
+def test_tailor_resume_path_routes(monkeypatch):
     from metis import cli
     import metis.resume_cmd as resume_cmd
 
@@ -132,12 +113,12 @@ def test_resume_tailor_resume_path_routes(monkeypatch):
     monkeypatch.setattr(cli, "_validate_env", lambda require_gmail=True: None)
     monkeypatch.setattr(resume_cmd, "run_resume_tailor", lambda **kwargs: calls.update(kwargs) or [])
 
-    cli.main(["resume", "tailor", "--resume", "/tmp/resume.docx"])
+    cli.main(["tailor", "--resume", "/tmp/resume.docx"])
 
     assert calls["resume_path"] == "/tmp/resume.docx"
 
 
-def test_resume_tailor_all_flag_routes(monkeypatch):
+def test_tailor_all_flag_routes(monkeypatch):
     from metis import cli
     import metis.resume_cmd as resume_cmd
 
@@ -146,12 +127,12 @@ def test_resume_tailor_all_flag_routes(monkeypatch):
     monkeypatch.setattr(cli, "_validate_env", lambda require_gmail=True: None)
     monkeypatch.setattr(resume_cmd, "run_resume_tailor", lambda **kwargs: calls.update(kwargs) or [])
 
-    cli.main(["resume", "tailor", "--all"])
+    cli.main(["tailor", "--all"])
 
     assert calls["tailor_all"] is True
 
 
-def test_resume_tailor_top_flag_routes(monkeypatch):
+def test_tailor_top_flag_routes(monkeypatch):
     from metis import cli
     import metis.resume_cmd as resume_cmd
 
@@ -160,9 +141,63 @@ def test_resume_tailor_top_flag_routes(monkeypatch):
     monkeypatch.setattr(cli, "_validate_env", lambda require_gmail=True: None)
     monkeypatch.setattr(resume_cmd, "run_resume_tailor", lambda **kwargs: calls.update(kwargs) or [])
 
-    cli.main(["resume", "tailor", "--top", "3"])
+    cli.main(["tailor", "--top", "3"])
 
     assert calls["top_n"] == 3
+
+
+def test_config_autofill_routes(monkeypatch):
+    from metis import cli
+    import metis.config_apply_cmd as config_apply_cmd
+
+    calls = {}
+    monkeypatch.setattr(cli, "_configure_logging", lambda: None)
+    monkeypatch.setattr(config_apply_cmd, "run_config_apply", lambda **kwargs: calls.update(kwargs))
+
+    cli.main(["config", "autofill", "--show"])
+
+    assert calls["show"] is True
+
+
+def test_config_profile_reuses_init_flow(monkeypatch):
+    from metis import cli
+    import metis.init_cmd as init_cmd
+
+    calls = {}
+    monkeypatch.setattr(cli, "_configure_logging", lambda: None)
+    monkeypatch.setattr(cli, "_validate_env", lambda require_gmail=True: calls.update(require_gmail=require_gmail))
+    monkeypatch.setattr(init_cmd, "run_init", lambda **kwargs: calls.update(kwargs))
+
+    cli.main(["config", "profile"])
+
+    assert calls["require_gmail"] is False
+    assert calls["api_key"] == cli.ANTHROPIC_API_KEY
+
+
+def test_apply_extended_flags_route(monkeypatch):
+    from metis import cli
+    import metis.apply_cmd as apply_cmd
+
+    calls = {}
+    monkeypatch.setattr(cli, "_configure_logging", lambda: None)
+    monkeypatch.setattr(cli, "GMAIL_ADDRESS", "")
+    monkeypatch.setattr(cli, "GMAIL_APP_PASSWORD", "")
+    monkeypatch.setattr(apply_cmd, "run_apply", lambda **kwargs: calls.update(kwargs) or [])
+
+    cli.main(["apply", "--lookback", "7d", "--latest", "4", "--default-resume"])
+
+    assert calls["lookback"] == "7d"
+    assert calls["latest_n"] == 4
+    assert calls["force_default_resume"] is True
+
+
+def test_apply_selection_modes_are_mutually_exclusive():
+    from metis import cli
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["apply", "--top", "3", "--latest", "3"])
+
+    assert exc.value.code == 2
 
 
 def test_summary_sends_real_report_by_default(monkeypatch):

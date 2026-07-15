@@ -157,6 +157,33 @@ Run `make test` inside the venv. A GitHub Actions workflow (`.github/workflows/t
 
 ## Robustness
 
+### Browser-assisted application routing
+- Use the configured Chrome user-data directory and profile name; never silently substitute a
+  disposable or copied identity.
+- On macOS, preserve Keychain-backed sessions by ignoring Playwright's `--use-mock-keychain`,
+  `--password-store=basic`, and `--disable-sync` defaults.
+- Fail clearly when the selected profile is already owned by another Chrome process; never delete
+  Chrome singleton locks or force concurrent access.
+- For LinkedIn-sourced roles, inspect LinkedIn first: Easy Apply remains there, offsite Apply follows
+  the employer destination, and search is fallback-only.
+- Wait for dynamically hydrated Apply controls and match real accessible-name variants. Do not use
+  a one-time visibility check immediately after `DOMContentLoaded`.
+- Resolve failed batches through one scratch page. Do not create and close multiple visible tabs for
+  speculative searches, and do not cache a URL until it has been opened and validated.
+- Keep form preparation separate from application outcomes. Browser success may write `applied`, but
+  confirmation email is authoritative and writes `applied_confirmed`. Tracker email processing must
+  reconcile both `applications.xlsx` and `application_state.json`.
+- Before candidate selection, `metis apply` may scan recent ATS email signals quietly; do not include
+  the expensive direct-outreach company search or open the workbook in that preflight path.
+- Treat authentication loss as batch-systemic: write `auth_required` and stop. Treat missing controls,
+  expired postings, and form failures as role-specific. Employer job-detail pages may require one
+  additional Apply navigation before filling.
+- Determine LinkedIn authentication from a non-empty `li_at` cookie when exposed; if macOS Keychain
+  hides it from CDP, probe `/feed/` and trust the resulting route. Only login/signup/authwall redirects
+  establish global logout. Never infer it from generic sign-in copy inside a job page.
+- Append privacy-safe failures to `apply_diagnostics.jsonl` with phase, URL, title, and reason only.
+  Never persist DOM/HTML, screenshots, cookies, tokens, or candidate form values in diagnostics.
+
 ### Error handling hierarchy
 1. **Expected failures** (bad email format, missing JD, API 429): catch specifically, log at `WARNING`, continue pipeline.
 2. **Unexpected failures** (assertion errors, key errors, type errors): let them propagate — do not swallow. The pipeline should fail loudly.

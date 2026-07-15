@@ -86,10 +86,23 @@ def detect_ats(url: str) -> str | None:
     return None
 
 
+# Recruiter aggregators: hide the employer, so search never resolves to the employer ATS.
+# Listed in the spec as always-blocked. Also added to _SEARCH_BLOCKED_HOSTS so their URLs
+# are ignored when parsing Google/DDG result pages.
+_AGGREGATOR_DOMAINS = {
+    "jobgether.com", "theladders.com", "ladders.com",
+    "harnham.com", "hired.com",
+}
+# Company-name substrings that identify aggregators (used when the role URL is LinkedIn-hosted)
+_AGGREGATOR_COMPANY_SUBSTRINGS = {
+    "jobgether", "the ladders", "ladders.com", "harnham", "hired.com",
+}
+
 _SEARCH_BLOCKED_HOSTS = {
     "linkedin.com", "www.linkedin.com", "indeed.com", "www.indeed.com",
     "glassdoor.com", "www.glassdoor.com", "ziprecruiter.com", "www.ziprecruiter.com",
     "builtin.com", "www.builtin.com", "simplify.jobs", "www.simplify.jobs",
+    *_AGGREGATOR_DOMAINS,
 }
 
 
@@ -221,6 +234,8 @@ def load_application_candidates(
         fit = str((((record.get("plan") or {}).get("employer_lens") or {}).get("fit_assessment") or "")).lower()
         if fit.startswith("not_recommended"):
             continue
+        if str(role.get("apply_mode") or "").lower() == "closed":
+            continue
         candidate = ApplicationCandidate(
             role_key, role, record_path, resume, tailored,
             "tailored" if tailored else "default", str(saved.get("status") or "not started"),
@@ -236,6 +251,8 @@ def load_application_candidates(
             except (TypeError, json.JSONDecodeError):
                 continue
             if (role.get("eval") or {}).get("verdict") not in {"apply", "consider"} or not _start_url(role):
+                continue
+            if str(role.get("apply_mode") or "").lower() == "closed":
                 continue
             recent_roles.append(role)
         for role in recent_roles:
@@ -294,26 +311,7 @@ def _label(candidate: ApplicationCandidate) -> str:
     else:
         day = str(role.get("ts") or "")[:10] or "recent"
     suffix = "tailored" if candidate.tailored else "default"
-    _STATUS_DISPLAY = {
-        "prefilled": "form ready", "blocked": "failed", "": "new",
-        "not_started": "new", "opened_linkedin": "LI open",
-        "applied": "applied ✓", "applied_confirmed": "confirmed ✓",
-        "needs_review": "needs review",
-    }
-    status = _STATUS_DISPLAY.get(candidate.workflow_status, candidate.workflow_status.replace("_", " "))
-    route = _application_route(candidate.role)
-    return f"{score:>3}% | {company:<22} | {title:<48} | {day} · {suffix} · {route} · {status}"
-
-
-def _application_route(role: dict[str, Any]) -> str:
-    if _is_external_job_url(_start_url(role)):
-        return "direct ATS"
-    mode = str(role.get("apply_mode") or "unknown").lower()
-    if mode == "easy_apply":
-        return "Easy Apply"
-    if mode == "offsite":
-        return "via LinkedIn"
-    return "via LinkedIn"
+    return f"{score:>3}% | {company:<22} | {title:<48} | {day} · {suffix}"
 
 
 _MATCH_STOP_WORDS = {
@@ -342,6 +340,9 @@ def _search_result_url(href: str) -> str:
     parsed = urlparse(href)
     if parsed.hostname and "google." in parsed.hostname and parsed.path == "/url":
         return (parse_qs(parsed.query).get("q") or [""])[0]
+    # DDG HTML wraps results as protocol-relative redirect: //duckduckgo.com/l/?uddg=<encoded-url>
+    if (parsed.hostname or "").endswith("duckduckgo.com") and "uddg" in (parsed.query or ""):
+        return parse_qs(parsed.query).get("uddg", [""])[0]
     return href if parsed.scheme in {"http", "https"} else ""
 
 
@@ -374,44 +375,85 @@ def _search_result_urls_from_page(search_page: Any) -> list[str]:
     return urls[:10]
 
 
-def _google_result_urls(search_page: Any, query: str) -> list[str]:
-    search_page.goto(
-        f"https://www.google.com/search?q={quote_plus(query)}",
-        wait_until="domcontentloaded", timeout=30_000,
-    )
-    # Detect CAPTCHA / empty result set — Google bot-checks show very few links
-    urls = _search_result_urls_from_page(search_page)
-    if urls:
-        return urls
-    # Google CAPTCHA or empty — fall back to DuckDuckGo HTML endpoint
-    try:
-        search_page.goto(
-            f"https://html.duckduckgo.com/html/?q={quote_plus(query)}",
-            wait_until="domcontentloaded", timeout=30_000,
-        )
-        return _search_result_urls_from_page(search_page)
-    except Exception:
-        return []
+_SEARCH_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
 
 
-def _resolve_application_url(page: Any, candidate: ApplicationCandidate) -> str | None:
-    """Resolve in one reusable page so failed searches do not flash extra tabs."""
-    attempted: set[str] = set()
-    for query in _search_queries(candidate.role)[:2]:
+def _http_search_urls(query: str) -> list[str]:
+    """Search via HTTP — no browser, no CAPTCHA, no profile conflicts."""
+    import httpx
+    engines = [
+        f"https://html.duckduckgo.com/html/?q={quote_plus(query)}",
+        f"https://www.bing.com/search?q={quote_plus(query)}&count=10",
+        f"https://www.google.com/search?q={quote_plus(query)}&num=10",
+    ]
+    for search_url in engines:
         try:
-            urls = _google_result_urls(page, query)
-        except Exception:
+            r = httpx.get(search_url, headers=_SEARCH_HEADERS, timeout=20, follow_redirects=True)
+            if r.status_code != 200:
+                log.debug("apply: search %s returned %d for %r", search_url.split("?")[0], r.status_code, query)
+                continue
+            urls: list[str] = []
+            for m in re.finditer(r'href=["\']([^"\']+)["\']', r.text):
+                resolved = _search_result_url(m.group(1))
+                if resolved and _is_external_job_url(resolved) and resolved not in urls:
+                    urls.append(resolved)
+            if urls:
+                log.debug("apply: search %s found %d candidate URLs for %r", search_url.split("?")[0], len(urls), query)
+                return urls[:10]
+            log.debug("apply: search %s returned 0 usable URLs for %r", search_url.split("?")[0], query)
+        except Exception as exc:
+            log.debug("apply: search %s failed: %s", search_url.split("?")[0], exc)
             continue
-        for url in urls:
+    return []
+
+
+def _page_content_matches_role(html: str, candidate: ApplicationCandidate) -> bool:
+    """HTTP version of _page_matches_role — checks raw HTML body for title/company tokens."""
+    try:
+        from bs4 import BeautifulSoup
+        body = BeautifulSoup(html, "html.parser").get_text(" ").lower()
+    except Exception:
+        body = html.lower()
+    title_tokens = _role_tokens(str(candidate.role.get("title") or ""))
+    company_tokens = _role_tokens(str(candidate.role.get("company") or ""))
+    title_ratio = sum(token in body for token in title_tokens) / max(1, len(title_tokens))
+    company_match = not company_tokens or any(token in body for token in company_tokens)
+    return title_ratio >= 0.65 and company_match
+
+
+def _resolve_application_url(candidate: ApplicationCandidate) -> str | None:
+    """Resolve ATS URL via HTTP search — no browser needed, no profile conflicts."""
+    import httpx
+    attempted: set[str] = set()
+    company = candidate.role.get("company", "")
+    title = candidate.role.get("title", "")
+    for query in _search_queries(candidate.role)[:2]:
+        log.debug("apply: searching ATS URL for %r at %r: %r", title, company, query)
+        for url in _http_search_urls(query):
             if url in attempted:
                 continue
             attempted.add(url)
             try:
-                page.goto(url, wait_until="domcontentloaded", timeout=60_000)
-                if _page_matches_role(page, candidate):
-                    return page.url
-            except Exception:
+                r = httpx.get(url, headers=_SEARCH_HEADERS, timeout=20, follow_redirects=True)
+                host = urlparse(str(r.url)).hostname or ""
+                if any(host == agg or host.endswith(f".{agg}") for agg in _AGGREGATOR_DOMAINS):
+                    log.debug("apply: skipping aggregator result %s", host)
+                    continue
+                if r.status_code == 200 and _page_content_matches_role(r.text, candidate):
+                    log.debug("apply: ATS URL resolved to %s", r.url)
+                    return str(r.url)
+                log.debug("apply: page content mismatch for %s (status=%d)", url, r.status_code)
+            except Exception as exc:
+                log.debug("apply: failed to fetch candidate URL %s: %s", url, exc)
                 continue
+    log.debug("apply: no ATS URL found for %r at %r", title, company)
     return None
 
 
@@ -492,10 +534,10 @@ def _empty_gate_message(
         if not detect_ats(str(saved.get("application_url") or _start_url(role))):
             unresolved += 1
     return (
-        f"{len(roles)} evaluated Solid/Moderate role(s) matched the window, but none are ready to open.\n"
-        f"  {unresolved} need a direct Greenhouse, Ashby, or Lever application URL.\n"
+        f"{len(roles)} evaluated role(s) matched the window, but none are ready to open.\n"
+        f"  {unresolved} have no cached ATS URL yet (web search will run at apply time).\n"
         f"  {final} are excluded by confirmed application outcome.\n"
-        "Your default resume is configured; ATS URL resolution is the remaining gate."
+        "Run `metis apply` interactively to let web search find application URLs."
     )
 
 
@@ -1291,35 +1333,36 @@ def _choose_radio_group(page: Any, question_pattern: re.Pattern[str], option_pat
             return
 
 
-def _chrome_profile_dir(root: Path) -> Path:
-    configured = application_value("chrome_profile_dir")
-    return Path(configured).expanduser() if configured else root / "chrome_profiles" / "default"
+def _launch_browser_context(playwright: Any, *, headless: bool) -> Any:
+    """Launch a fresh Chrome browser context — no persistent profile, no conflict with running Chrome.
 
-
-def _launch_browser_context(playwright: Any, profile_dir: Path, *, headless: bool) -> Any:
-    args = [
-        "--no-default-browser-check",
-        *(
-            [f"--profile-directory={application_value('chrome_profile_name')}"]
-            if application_value("chrome_profile_name") else []
-        ),
-    ]
-    try:
-        return playwright.chromium.launch_persistent_context(
-            str(profile_dir), channel="chrome", headless=headless, args=args,
-            # These Playwright defaults deliberately isolate credentials. Metis is
-            # user-authorized to reuse the selected local Chrome identity instead.
-            ignore_default_args=["--use-mock-keychain", "--password-store=basic", "--disable-sync"],
-        )
-    except Exception as exc:
-        message = str(exc)
-        if "existing browser session" not in message.lower() and "profile is already in use" not in message.lower():
-            raise
-        raise SystemExit(
-            f"Chrome profile '{application_value('chrome_profile_name') or 'Default'}' is already in use. "
-            "Quit all Google Chrome windows, wait a few seconds, then run `metis apply` again. "
-            "Metis will use that same Chrome profile and its saved sessions."
-        ) from None
+    LinkedIn auth is handled via the LINKEDIN_COOKIE (li_at) env var injected as a cookie.
+    Google search runs via HTTP (see _resolve_application_url) so no Google session is needed here.
+    """
+    browser = playwright.chromium.launch(
+        channel="chrome",
+        headless=headless,
+        args=["--no-default-browser-check"],
+    )
+    context = browser.new_context(
+        user_agent=_SEARCH_HEADERS["User-Agent"],
+        viewport=None,
+    )
+    linkedin_cookie = os.getenv("LINKEDIN_COOKIE", "").strip()
+    if linkedin_cookie:
+        try:
+            context.add_cookies([{
+                "name": "li_at",
+                "value": linkedin_cookie,
+                "domain": ".linkedin.com",
+                "path": "/",
+                "httpOnly": True,
+                "secure": True,
+                "sameSite": "None",
+            }])
+        except Exception as exc:
+            log.debug("apply: LinkedIn cookie injection failed: %s", exc)
+    return context
 
 
 def _find_linkedin_apply_control(page: Any, *, timeout_seconds: float = 15) -> Any | None:
@@ -1458,23 +1501,23 @@ def prepare_batch_in_browser(
     root = root or data_dir()
     results: dict[str, dict[str, str]] = {}
     with sync_playwright() as playwright:
-        profile_dir = _chrome_profile_dir(root)
-        profile_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-        context = _launch_browser_context(playwright, profile_dir, headless=headless)
-        initial_pages = list(context.pages)
-        scratch_page = initial_pages[0] if initial_pages else context.new_page()
+        context = _launch_browser_context(playwright, headless=headless)
         active: dict[Any, tuple[ApplicationCandidate, dict[str, Any]]] = {}
-        print(f"Using Chrome profile: {profile_dir}")
-        needs_linkedin = any(not _is_external_job_url(_start_url(item.role)) for item in candidates)
+        print("Launched Chrome for form filling (fresh session, LinkedIn cookie injected).")
+        # Only probe LinkedIn if Easy Apply roles are in the batch — search runs via HTTP.
+        needs_linkedin = any(
+            str(item.role.get("apply_mode") or "").lower() == "easy_apply" for item in candidates
+        )
         linkedin_ok = True
         if needs_linkedin:
-            linkedin_ok = _probe_linkedin_session(context, scratch_page)
+            probe_page = context.new_page()
+            linkedin_ok = _probe_linkedin_session(context, probe_page)
+            probe_page.close()
             if not linkedin_ok:
                 print(
-                    f"⚠  LinkedIn is not signed in at {profile_dir} — "
-                    "roles with LinkedIn URLs will go through web search instead. "
-                    "To enable LinkedIn routing: open LinkedIn in that Chrome profile, "
-                    "sign in, quit Chrome completely, then retry."
+                    "⚠  LinkedIn session not valid — Easy Apply roles will be blocked. "
+                    "Update LINKEDIN_COOKIE in ~/.job_pipeline/.env with a fresh li_at value "
+                    "from Chrome DevTools (Application → Cookies → linkedin.com)."
                 )
         for candidate_index, candidate in enumerate(candidates):
             start_url = _start_url(candidate.role)
@@ -1488,40 +1531,9 @@ def prepare_batch_in_browser(
             update_application_state(candidate.role_key, status="opened", root=root, **common)
             page = None
             try:
-                direct_ats = detect_ats(start_url)
-                direct_external = _is_external_job_url(start_url)
                 apply_mode_val = str(candidate.role.get("apply_mode") or "").lower()
 
-                # For offsite / unknown roles, try Google/DDG first — it never needs LinkedIn auth.
-                # Easy Apply has no external URL; skip search and require LinkedIn nav.
-                google_url: str | None = None
-                if not direct_external and apply_mode_val != "easy_apply":
-                    try:
-                        google_url = _resolve_application_url(scratch_page, candidate)
-                    except Exception:
-                        pass
-
-                if direct_external:
-                    # Direct ATS or employer URL already known — navigate straight to it.
-                    page = context.new_page()
-                    page.goto(start_url, wait_until="domcontentloaded", timeout=60_000)
-                elif google_url:
-                    # Google/DDG found the ATS URL — use it without LinkedIn.
-                    page = scratch_page
-                    scratch_page = context.new_page()
-                    common.update({
-                        "application_url": google_url,
-                        "resolution_status": "confirmed",
-                        "resolution_method": "google_search",
-                        "resolved_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
-                    })
-                elif not linkedin_ok:
-                    # Google failed and LinkedIn is not signed in — nothing more we can try.
-                    reason = (
-                        "Easy Apply requires a signed-in LinkedIn session"
-                        if apply_mode_val == "easy_apply"
-                        else "web search found no ATS URL and LinkedIn is not signed in"
-                    )
+                def _mark_blocked(reason: str) -> None:
                     common.update({
                         "resolution_status": "unresolved",
                         "resolution_attempted_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -1532,42 +1544,36 @@ def prepare_batch_in_browser(
                         "role": f"{candidate.role.get('title')} at {candidate.role.get('company')}",
                         "status": "blocked",
                     }
-                    continue
-                else:
-                    # LinkedIn is signed in — use it as primary for Easy Apply and fallback
-                    # for offsite roles where Google search came up empty.
-                    scratch_page.goto(start_url, wait_until="domcontentloaded", timeout=60_000)
+
+                # ── Step 1: Easy Apply path (LinkedIn inline form) ────────────────
+                if apply_mode_val == "easy_apply":
+                    if not linkedin_ok:
+                        _mark_blocked("Easy Apply requires a valid LINKEDIN_COOKIE in .env")
+                        continue
+                    li_page = context.new_page()
+                    li_page.goto(start_url, wait_until="domcontentloaded", timeout=60_000)
                     try:
-                        destination, route = _navigate_to_application(context, scratch_page)
+                        destination, route = _navigate_to_application(context, li_page)
                     except LinkedInAuthenticationError as linkedin_exc:
                         message = str(linkedin_exc)
-                        _write_apply_diagnostic(
-                            root, candidate, phase="linkedin_auth", error=message, page=scratch_page,
-                        )
+                        _write_apply_diagnostic(root, candidate, phase="linkedin_auth", error=message, page=li_page)
                         linkedin_ok = False
                         log.warning("LinkedIn auth lost mid-batch for %s: %s", candidate.role_key, message)
-                        update_application_state(
-                            candidate.role_key, status="blocked", root=root, error=message, **common,
-                        )
+                        update_application_state(candidate.role_key, status="blocked", root=root, error=message, **common)
                         results[candidate.role_key] = {
                             "role": f"{candidate.role.get('title')} at {candidate.role.get('company')}",
                             "status": "blocked",
                         }
-                        print(
-                            f"LinkedIn auth expired — skipping {candidate.role.get('company')}. "
-                            "Remaining roles will try web search."
-                        )
+                        li_page.close()
+                        print(f"LinkedIn cookie invalid — skipping {candidate.role.get('company')}. Update LINKEDIN_COOKIE in .env.")
                         continue
                     except Exception as linkedin_exc:
                         log.info("LinkedIn Apply routing failed for %s: %s", candidate.role_key, linkedin_exc)
-                        _write_apply_diagnostic(
-                            root, candidate, phase="linkedin_routing", error=str(linkedin_exc), page=scratch_page,
-                        )
+                        _write_apply_diagnostic(root, candidate, phase="linkedin_routing", error=str(linkedin_exc), page=li_page)
                         destination = None
                         route = "unresolved"
                     if route == "easy":
-                        page = scratch_page
-                        scratch_page = context.new_page()
+                        page = li_page
                         common.update({"ats": "linkedin", "application_url": page.url, "resolution_status": "easy_apply"})
                         update_application_state(candidate.role_key, status="opened_linkedin", root=root, **common)
                         results[candidate.role_key] = {
@@ -1577,9 +1583,10 @@ def prepare_batch_in_browser(
                         active[page] = (candidate, common)
                         continue
                     elif route == "external" and destination is not None:
+                        # Edge case: clicking Apply on LinkedIn opened an external ATS page.
                         page = destination
-                        if destination is scratch_page:
-                            scratch_page = context.new_page()
+                        if destination is not li_page:
+                            li_page.close()
                         common.update({
                             "application_url": page.url,
                             "resolution_status": "confirmed",
@@ -1587,21 +1594,49 @@ def prepare_batch_in_browser(
                             "resolved_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
                         })
                     else:
-                        # Both Google and LinkedIn navigation failed.
-                        common.update({
-                            "resolution_status": "unresolved",
-                            "resolution_attempted_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
-                        })
-                        update_application_state(candidate.role_key, status="blocked", root=root, **common)
-                        print(
-                            f"Could not prepare {candidate.role.get('title')} at "
-                            f"{candidate.role.get('company')}: web search and LinkedIn nav both failed."
-                        )
-                        results[candidate.role_key] = {
-                            "role": f"{candidate.role.get('title')} at {candidate.role.get('company')}",
-                            "status": "blocked",
-                        }
+                        li_page.close()
+                        _mark_blocked("LinkedIn Easy Apply navigation failed")
                         continue
+
+                # ── Step 2: Offsite / unknown path (HTTP search for ATS URL) ─────
+                else:
+                    # Recruiter aggregators hide the employer; no discoverable ATS URL.
+                    source_host = (urlparse(start_url).hostname or "").lower().removeprefix("www.")
+                    company_lower = str(candidate.role.get("company") or "").lower()
+                    if (
+                        source_host in _AGGREGATOR_DOMAINS
+                        or any(source_host.endswith(f".{d}") for d in _AGGREGATOR_DOMAINS)
+                        or any(sub in company_lower for sub in _AGGREGATOR_COMPANY_SUBSTRINGS)
+                    ):
+                        _mark_blocked(f"role posted by recruiter aggregator ({company_lower or source_host}) — no employer identity discoverable")
+                        continue
+
+                    direct_external = _is_external_job_url(start_url)
+                    if direct_external:
+                        # apply_url or direct employer URL already known — skip search.
+                        page = context.new_page()
+                        page.goto(start_url, wait_until="domcontentloaded", timeout=60_000)
+                    else:
+                        # HTTP search — no browser, no profile, no CAPTCHA.
+                        if candidate_index > 0:
+                            time.sleep(1.0)
+                        google_url: str | None = None
+                        try:
+                            google_url = _resolve_application_url(candidate)
+                        except Exception:
+                            pass
+                        if google_url:
+                            page = context.new_page()
+                            page.goto(google_url, wait_until="domcontentloaded", timeout=60_000)
+                            common.update({
+                                "application_url": google_url,
+                                "resolution_status": "confirmed",
+                                "resolution_method": "google_search",
+                                "resolved_at": dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+                            })
+                        else:
+                            _mark_blocked("web search found no ATS URL")
+                            continue
                 page = _navigate_external_to_form(context, page)
                 common["ats"] = detect_ats(page.url) or ats
                 common["application_url"] = page.url
@@ -1626,11 +1661,13 @@ def prepare_batch_in_browser(
                 results[candidate.role_key] = {"role": f"{candidate.role.get('title')} at {candidate.role.get('company')}", "status": "blocked"}
                 if page is not None:
                     page.close()
-        if scratch_page in context.pages and scratch_page not in active:
-            scratch_page.close()
-        for page in initial_pages:
-            if page in context.pages and page not in active:
-                page.close()
+        # Close any pages that were opened but are not active application tabs.
+        for page in list(context.pages):
+            if page not in active:
+                try:
+                    page.close()
+                except Exception:
+                    pass
         if headless or not active:
             context.close()
             return [results[item.role_key] for item in candidates]

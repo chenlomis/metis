@@ -1324,6 +1324,9 @@ def run_track(
     since_dt: datetime.datetime,
     dry_run: bool = False,
     api_key: str | None = None,
+    open_tracker: bool = True,
+    backfill: bool = True,
+    scan_company_outreach: bool = True,
 ) -> None:
     """Parse confirmation/rejection emails and update the Applications tracker."""
     try:
@@ -1338,12 +1341,12 @@ def run_track(
 
     if dry_run:
         log.info("track: dry-run — skipping digest tracker backfill.")
-    else:
+    elif backfill:
         log.info("track: step 1 — backfilling tracker from digest emails…")
         backfill_from_digests(gmail_address, app_password, since_dt)
 
     applied_companies: set[str] = set()
-    if TRACKER_PATH.exists():
+    if scan_company_outreach and TRACKER_PATH.exists():
         _wb = openpyxl.load_workbook(TRACKER_PATH, read_only=True, data_only=True)
         _ws = _wb.active
         for _r in range(2, _ws.max_row + 1):
@@ -1410,6 +1413,13 @@ def run_track(
         role    = parsed["role"]
         kind    = parsed["classification"]
 
+        from .application_state import reconcile_application_event
+        reconciled_key = reconcile_application_event(
+            company, role, kind, event_date=parsed.get("date"),
+        )
+        if reconciled_key:
+            log.info("track: reconciled application state %s → %s", reconciled_key, kind)
+
         row_idx = find_tracker_row(ws, company, role)
         if row_idx is None and kind == "confirmation" and role:
             row_idx = find_tracker_row(ws, company, None)
@@ -1461,10 +1471,11 @@ def run_track(
         wb.save(TRACKER_PATH)
         TRACKER_PATH.chmod(0o600)
         log.info("track: updated %d row(s) in %s", changed, TRACKER_PATH)
-        print(f"  Tracker → {TRACKER_PATH}")
-        if sys.stdout.isatty():
-            import subprocess
-            subprocess.Popen(["open", str(TRACKER_PATH)])
+        if open_tracker:
+            print(f"  Tracker → {TRACKER_PATH}")
+            if sys.stdout.isatty():
+                import subprocess
+                subprocess.Popen(["open", str(TRACKER_PATH)])
     else:
         wb.save(TRACKER_PATH)
         TRACKER_PATH.chmod(0o600)

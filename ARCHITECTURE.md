@@ -13,6 +13,22 @@ of 3–8 roles worth acting on.
 
 ---
 
+## AI Platform Patterns
+
+metis is small, but it exercises the same platform concerns as larger AI systems:
+
+| Pattern | Where it shows up |
+|---|---|
+| Context engineering | `profile.py`, `prompts.py`, `feedback.md`, extracted JD context |
+| Semantic grounding | `domain_taxonomy.yaml`, 27-field extraction, scoring rubric |
+| Model abstraction | `metis/llm/`, per-stage model resolution |
+| Agent/tool surface | `mcp_server.py`, `services/`, dry-run defaults |
+| Evaluation | `runs.jsonl`, `applications.xlsx`, `provider_eval.py`, scoring contracts |
+| Observability | `trace.py`, `metis summary`, `metis debug` |
+| Guardrails | OAuth PKCE, local-only state, no-fabrication resume rules, cost caps |
+
+---
+
 ## Pipeline Flow
 
 ```
@@ -163,6 +179,17 @@ Primary: `ts-node render.ts` (React Email — rich, pixel-perfect).
 Fallback: `build_digest_html()` (pure Python inline HTML).
 The fallback activates if Node isn't available or ts-node fails — the digest is always
 delivered even if the rich renderer isn't set up.
+
+### 8. Domain ontology grounding (domain_taxonomy.yaml)
+`domain_taxonomy.yaml` is a structured domain ontology: named job domains (developer platform,
+fintech, healthcare, enterprise SaaS, etc.) each with `native_signals` (direct evidence the
+model treats as strong fit), `adjacent_signals` (transferable signals treated as cautious fit),
+and `hard_barriers` (requirements that block a "foreign" score regardless of other fit). The
+taxonomy is rendered into the scoring system prompt via `render_domain_taxonomy()` so the
+scoring model has consistent domain definitions across runs — it can't drift in how it
+interprets "platform experience" or "regulated domain" between different call batches.
+This is distinct from the profile's `industry_avoid` field (user preference) — the taxonomy
+defines what evidence is required for each domain regardless of preference.
 
 ---
 
@@ -396,6 +423,20 @@ email-provider abstraction is wired through end-to-end.
 | `init_cmd.py` | `metis init` wizard (4-step, re-runnable); offers schedule setup at end |
 | `schedule_cmd.py` | Schedule install/remove/show; builds launchd plist (macOS) or crontab line (Linux) |
 | `feedback.py` | `metis feedback`: collect → configured LLM parse → confirm → append to `feedback.md` |
+| `domain_taxonomy.py` | Loads and renders `domain_taxonomy.yaml`; injected into every scoring prompt |
+| `domain_taxonomy.yaml` | Domain ontology: named job domains with native signals, adjacent signals, and hard barriers |
+| `normalization.py` | Deterministic post-processing for init: maps freeform LLM output to canonical role families, seniority levels, company types, and customer-type taxonomies |
+| `tailor.py` | Resume tailoring: evidence indexing, hard-gap detection, targeted bullet rewriting per JD |
+| `resume_cmd.py` | `metis resume`: orchestrates tailoring flow — loads profile evidence, calls tailor.py, writes output |
+| `apply_cmd.py` | `metis apply`: IMAP reconciliation, candidate picker (InquirerPy), Playwright browser automation, ATS form filling |
+| `mcp_server.py` | MCP tool server (FastMCP); exposes 9 tools so Claude Code and other agents can drive Metis via natural language |
+| `services/` | Service-layer wrappers around pipeline internals for MCP — structured status, before/after counts, process-local state isolation |
+| `provider_eval.py` | Offline provider bakeoff helpers: compare normalized eval objects without calling APIs; used for regression checks |
+| `report_cmd.py` | `metis summary`: reads `runs.jsonl`, renders cross-run summary report (score distribution, verdict breakdown, top roles) |
+| `track_imap.py` / `track_parse.py` / `track_write.py` | Split tracker pipeline: IMAP fetch of application status emails → parse confirmation/rejection → write updates to `applications.xlsx` |
+| `contracts.py` | Schema contracts and validation for eval objects; `REQUIRED_DIMENSIONS`, `VALID_VERDICTS`, `validate_eval_schema()` |
+| `types.py` | Shared type aliases (`JobDict`, etc.) |
+| `theme.py` | InquirerPy style constants (`INQUIRER_STYLE`, `get_style()`) shared across interactive prompts |
 
 ---
 
@@ -725,6 +766,21 @@ asleep at that time, the job is skipped — not queued. For a Monday+Thursday sc
 sleeping through Thursday means the next run is Monday (7-day gap instead of 4-day).
 Workaround: run `metis --lookback 7d` manually after a gap, or widen
 `DEFAULT_LOOKBACK` in `.env` for scheduled runs.
+
+**T-13 (P3): No live metrics endpoint**
+`runs.jsonl` captures a full trace per job (score, verdict, extraction fields, model, prompt
+version), and `metis summary` renders a cross-run report. There is no real-time dashboard
+or push-based alerting — all observability is pull-based (read the file or run the command).
+A structured query endpoint or lightweight local UI (e.g. read `runs.jsonl` into a
+`datasette` instance) would shorten the feedback loop when debugging scoring regressions.
+
+**T-14 (P3): No structured per-role application memory**
+`seen_roles.json` tracks role hashes to prevent re-scoring; `runs.jsonl` records full trace
+per job. Neither structure stores rich cross-session context for a role: e.g. "interviewed
+March 2026, declined offer", "applied twice across two job cycles". Application history lives
+in the tracker (`applications.xlsx`) but is not injected into scoring or tailoring prompts.
+A structured memory store keyed by `role_hash` would allow the scoring model to treat
+returning roles differently — de-prioritizing past rejections, surfacing re-open roles.
 
 ---
 

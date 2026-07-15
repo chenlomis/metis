@@ -231,6 +231,30 @@ call sites until explicitly wired through the provider abstraction.
 
 ## Critical constraints
 
+### Browser-assisted `metis apply` invariants
+- Use the Chrome profile explicitly configured by the user. On macOS, keep its real Keychain-backed
+  identity by ignoring Playwright defaults `--use-mock-keychain`, `--password-store=basic`, and
+  `--disable-sync`; otherwise the same profile directory appears unsigned.
+- Never bypass Chrome's profile lock. If ordinary Chrome owns the configured profile, instruct the
+  user to quit Chrome before retrying.
+- LinkedIn routing order is fixed: original posting → Easy Apply stays on LinkedIn; offsite Apply
+  follows the employer; web search is fallback-only. Accept validated employer/Workday destinations,
+  not only Greenhouse/Lever/Ashby.
+- LinkedIn Apply controls hydrate asynchronously and may be named `Apply to <role> on company
+  website`; use a bounded wait and realistic selectors. Reuse one scratch page for failed resolution
+  rather than flashing tabs, and cache only opened, validated external URLs.
+- `prefilled` is not `applied`. Browser success records `applied`; confirmation email records
+  `applied_confirmed`. `metis track` must reconcile the xlsx tracker and `application_state.json`, and
+  `metis apply` refreshes recent ATS email outcomes before filtering candidates without running the
+  expensive direct-recruiter/company scan.
+- LinkedIn authentication loss is systemic: record `auth_required` and stop the batch. Persist
+  privacy-safe failure metadata to `apply_diagnostics.jsonl`; never persist HTML, screenshots,
+  cookies, tokens, or form answers. Follow one employer-page Apply control before declaring that a
+  resolved company career page has no application form.
+- Check LinkedIn authentication using `li_at` when CDP exposes it; otherwise probe `/feed/` because
+  macOS Keychain cookies may be usable without being readable through automation. Only explicit
+  login/signup/authwall redirects prove logout; generic sign-in text inside a job modal does not.
+
 ### -2. Interactive CLI UX must use the centralized theme/prompt system
 
 New interactive command flows must use `console`, `INQUIRER_STYLE`, and helper

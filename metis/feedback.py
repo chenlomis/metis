@@ -134,7 +134,8 @@ def append_feedback_entry(
         f" | run:{run_id or 'unknown'}"
         f" | category:{meta.get('category', 'scoring_calibration')}"
         f" | roles:{','.join(meta.get('roles', []))}"
-        f" | dims:{','.join(meta.get('dims', []))} -->"
+        f" | dims:{','.join(meta.get('dims', []))}"
+        f" | status:active -->"
     )
     entry = f"\n{comment}\n## [user] {date_str}\n\n{text}\n"
 
@@ -152,18 +153,111 @@ def save_feedback_entry(text: str) -> None:
 
 
 def load_feedback_text() -> Optional[str]:
-    """Return all feedback.md content for prompt injection.
+    """Return all feedback.md content (all statuses) — for conflict detection context.
 
-    No TTL — all entries are included. The feedback represents user intent
-    calibration, not time-bounded state. If the file ever grows impractically
-    large (>3k tokens), add a summarisation step here before returning.
-
-    Called by score.py → build_score_system() on every scoring run.
+    Use load_active_feedback_text() for prompt injection into scoring.
     """
     if not FEEDBACK_FILE.exists():
         return None
     content = FEEDBACK_FILE.read_text().strip()
     return content if content else None
+
+
+# ---------------------------------------------------------------------------
+# Entry-level helpers — status filtering and in-place mutation
+# ---------------------------------------------------------------------------
+
+def _split_entries(content: str) -> tuple[str, list[str]]:
+    """Split feedback.md into (preamble, [entry_blocks]).
+
+    Each entry block starts with its <!-- id:... --> comment line.
+    """
+    parts = re.split(r'(?=\n<!-- id:)', content)
+    preamble = parts[0]
+    entries  = [p.lstrip('\n') for p in parts[1:]]
+    return preamble, entries
+
+
+def _entry_status(block: str) -> str:
+    """Extract status from an entry block's comment header. Defaults to 'active'."""
+    m = re.search(r'\bstatus:(\w+)', block)
+    return m.group(1) if m else "active"
+
+
+def load_active_feedback_text(feedback_file: Optional[Path] = None) -> Optional[str]:
+    """Return only status:active feedback entries for prompt injection.
+
+    Entries without a status field (legacy format) are treated as active.
+    Falls back to the full file content when no structured <!-- id: --> entries
+    are found (plain-text legacy files).
+
+    feedback_file: override path (used by profile.py to respect METIS_DATA_DIR).
+    Called by score.py and profile.py on every scoring run.
+    """
+    path = feedback_file if feedback_file is not None else FEEDBACK_FILE
+    if not path.exists():
+        return None
+    content = path.read_text().strip()
+    if not content:
+        return None
+    _, entries = _split_entries(content)
+    if not entries:
+        return content  # plain-text legacy file — inject as-is
+    active = [e for e in entries if _entry_status(e) == "active"]
+    if not active:
+        return None
+    return "\n\n".join(active)
+
+
+def _update_entry_status(entry_id: str, new_status: str) -> bool:
+    """Rewrite the status field of a specific entry in feedback.md in-place.
+
+    Returns True if the entry was found and updated, False if not found.
+    """
+    if not FEEDBACK_FILE.exists():
+        return False
+    content = FEEDBACK_FILE.read_text()
+    pattern = re.compile(
+        r'(<!-- id:' + re.escape(entry_id) + r'[^>]*?)(\s*-->)',
+        re.DOTALL,
+    )
+    def _replace(m: re.Match) -> str:
+        header = m.group(1)
+        if ' | status:' in header:
+            header = re.sub(r' \| status:\w+', f' | status:{new_status}', header)
+        else:
+            header = header + f' | status:{new_status}'
+        return header + m.group(2)
+
+    new_content, n = pattern.subn(_replace, content)
+    if n == 0:
+        return False
+    FEEDBACK_FILE.write_text(new_content)
+    return True
+
+
+def migrate_feedback_status() -> int:
+    """Add | status:active to all entries that lack a status field.
+
+    Returns the number of entries updated. Safe to run multiple times (idempotent).
+    """
+    if not FEEDBACK_FILE.exists():
+        return 0
+    content = FEEDBACK_FILE.read_text()
+    count   = 0
+
+    def _add_status(m: re.Match) -> str:
+        nonlocal count
+        header = m.group(1)
+        if ' | status:' not in header:
+            count += 1
+            return header + ' | status:active' + m.group(2)
+        return m.group(0)
+
+    new_content = re.sub(r'(<!-- id:[^>]*?)(\s*-->)', _add_status, content)
+    if count > 0:
+        FEEDBACK_FILE.write_text(new_content)
+    return count
 
 
 def write_feedback_log(
@@ -246,11 +340,17 @@ def _parse_entries(content: str) -> list[dict]:
             ]
         first_line = body_lines[0] if body_lines else ""
 
+        # Extract status from comment header for this entry (default active)
+        block_text = content[prev_bound:end]
+        status_m   = re.search(r'\bstatus:(\w+)', block_text[:block_text.find("##") + 1] if "##" in block_text else block_text)
+        status     = status_m.group(1) if status_m else "active"
+
         entries.append({
             "date":       date_str,
             "id":         fb_id,
             "source":     source,
             "first_line": first_line,
+            "status":     status,
         })
 
     return entries
@@ -523,7 +623,7 @@ def run_feedback(api_key: Optional[str] = None) -> None:
             style=Style(color=THEME["dim"]),
         )
 
-    existing   = load_feedback_text()
+    existing   = load_active_feedback_text()
     n_existing = existing.count("\n## ") if existing else 0
     if n_existing:
         console.print(

@@ -77,6 +77,7 @@ def test_append_includes_comment_header(tmp_data):
     assert "<!-- id:fb_20260619_abcd" in content
     assert "roles:gitlab" in content
     assert "dims:culture_values" in content
+    assert "status:active" in content
 
 
 def test_append_accumulates_entries(tmp_data):
@@ -135,6 +136,198 @@ def test_load_returns_all_entries_no_ttl(tmp_data):
     assert text is not None
     assert "Old feedback from a year ago" in text
     assert "New feedback today" in text
+
+
+# ---------------------------------------------------------------------------
+# status field in append_feedback_entry
+# ---------------------------------------------------------------------------
+
+def test_append_includes_status_active(tmp_data):
+    from metis.feedback import append_feedback_entry, FEEDBACK_FILE
+    append_feedback_entry("note", "fb_001", None, {})
+    assert "status:active" in FEEDBACK_FILE.read_text()
+
+
+# ---------------------------------------------------------------------------
+# _parse_entries — status field
+# ---------------------------------------------------------------------------
+
+def test_parse_entries_returns_status_active(tmp_data):
+    from metis.feedback import FEEDBACK_FILE, _parse_entries, _FEEDBACK_HEADER
+    FEEDBACK_FILE.write_text(
+        _FEEDBACK_HEADER +
+        "\n<!-- id:fb_001 | run:r1 | category:scoring_calibration | roles: | dims: | status:active -->\n"
+        "## [user] 2026-07-01\n\nSome note.\n"
+    )
+    entries = _parse_entries(FEEDBACK_FILE.read_text())
+    assert entries[0]["status"] == "active"
+
+
+def test_parse_entries_defaults_status_active_for_legacy(tmp_data):
+    from metis.feedback import FEEDBACK_FILE, _parse_entries, _FEEDBACK_HEADER
+    FEEDBACK_FILE.write_text(
+        _FEEDBACK_HEADER +
+        "\n<!-- id:fb_old | run:r1 | roles: | dims: -->\n"
+        "## [user] 2025-01-01\n\nLegacy entry.\n"
+    )
+    entries = _parse_entries(FEEDBACK_FILE.read_text())
+    assert entries[0]["status"] == "active"
+
+
+def test_parse_entries_returns_superseded_status(tmp_data):
+    from metis.feedback import FEEDBACK_FILE, _parse_entries, _FEEDBACK_HEADER
+    FEEDBACK_FILE.write_text(
+        _FEEDBACK_HEADER +
+        "\n<!-- id:fb_001 | run:r1 | roles: | dims: | status:superseded -->\n"
+        "## [user] 2026-07-01\n\nOld note.\n"
+    )
+    entries = _parse_entries(FEEDBACK_FILE.read_text())
+    assert entries[0]["status"] == "superseded"
+
+
+# ---------------------------------------------------------------------------
+# load_active_feedback_text
+# ---------------------------------------------------------------------------
+
+def test_load_active_returns_none_when_missing(tmp_data):
+    from metis.feedback import load_active_feedback_text
+    assert load_active_feedback_text() is None
+
+
+def test_load_active_includes_active_entries(tmp_data):
+    from metis.feedback import FEEDBACK_FILE, load_active_feedback_text, _FEEDBACK_HEADER
+    FEEDBACK_FILE.write_text(
+        _FEEDBACK_HEADER +
+        "\n<!-- id:fb_001 | run:r1 | roles: | dims: | status:active -->\n"
+        "## [user] 2026-07-01\n\nKeep this.\n"
+    )
+    text = load_active_feedback_text()
+    assert text is not None
+    assert "Keep this." in text
+
+
+def test_load_active_excludes_superseded_entries(tmp_data):
+    from metis.feedback import FEEDBACK_FILE, load_active_feedback_text, _FEEDBACK_HEADER
+    FEEDBACK_FILE.write_text(
+        _FEEDBACK_HEADER +
+        "\n<!-- id:fb_001 | run:r1 | roles: | dims: | status:superseded -->\n"
+        "## [user] 2026-07-01\n\nOld note — should be excluded.\n"
+        "\n<!-- id:fb_002 | run:r2 | roles: | dims: | status:active -->\n"
+        "## [user] 2026-07-02\n\nNew note — should be included.\n"
+    )
+    text = load_active_feedback_text()
+    assert text is not None
+    assert "Old note" not in text
+    assert "New note" in text
+
+
+def test_load_active_returns_none_when_all_superseded(tmp_data):
+    from metis.feedback import FEEDBACK_FILE, load_active_feedback_text, _FEEDBACK_HEADER
+    FEEDBACK_FILE.write_text(
+        _FEEDBACK_HEADER +
+        "\n<!-- id:fb_001 | run:r1 | roles: | dims: | status:superseded -->\n"
+        "## [user] 2026-07-01\n\nGone.\n"
+    )
+    assert load_active_feedback_text() is None
+
+
+def test_load_active_treats_legacy_entries_as_active(tmp_data):
+    from metis.feedback import FEEDBACK_FILE, load_active_feedback_text, _FEEDBACK_HEADER
+    FEEDBACK_FILE.write_text(
+        _FEEDBACK_HEADER +
+        "\n<!-- id:fb_old | run:r1 | roles: | dims: -->\n"
+        "## [user] 2025-01-01\n\nLegacy entry no status field.\n"
+    )
+    text = load_active_feedback_text()
+    assert text is not None
+    assert "Legacy entry" in text
+
+
+# ---------------------------------------------------------------------------
+# _update_entry_status
+# ---------------------------------------------------------------------------
+
+def test_update_entry_status_rewrites_active_to_superseded(tmp_data):
+    from metis.feedback import FEEDBACK_FILE, _update_entry_status, _FEEDBACK_HEADER
+    FEEDBACK_FILE.write_text(
+        _FEEDBACK_HEADER +
+        "\n<!-- id:fb_001 | run:r1 | roles: | dims: | status:active -->\n"
+        "## [user] 2026-07-01\n\nSome note.\n"
+    )
+    result = _update_entry_status("fb_001", "superseded")
+    assert result is True
+    assert "status:superseded" in FEEDBACK_FILE.read_text()
+    assert "status:active" not in FEEDBACK_FILE.read_text()
+
+
+def test_update_entry_status_returns_false_when_not_found(tmp_data):
+    from metis.feedback import FEEDBACK_FILE, _update_entry_status, _FEEDBACK_HEADER
+    FEEDBACK_FILE.write_text(_FEEDBACK_HEADER + "\n<!-- id:fb_001 | status:active -->\n## [user] 2026-07-01\n\nNote.\n")
+    result = _update_entry_status("fb_999", "superseded")
+    assert result is False
+
+
+def test_update_entry_status_adds_status_to_legacy_entry(tmp_data):
+    from metis.feedback import FEEDBACK_FILE, _update_entry_status, _FEEDBACK_HEADER
+    FEEDBACK_FILE.write_text(
+        _FEEDBACK_HEADER +
+        "\n<!-- id:fb_old | run:r1 | roles: | dims: -->\n"
+        "## [user] 2025-01-01\n\nLegacy.\n"
+    )
+    result = _update_entry_status("fb_old", "superseded")
+    assert result is True
+    assert "status:superseded" in FEEDBACK_FILE.read_text()
+
+
+# ---------------------------------------------------------------------------
+# migrate_feedback_status
+# ---------------------------------------------------------------------------
+
+def test_migrate_adds_status_to_legacy_entries(tmp_data):
+    from metis.feedback import FEEDBACK_FILE, migrate_feedback_status, _FEEDBACK_HEADER
+    FEEDBACK_FILE.write_text(
+        _FEEDBACK_HEADER +
+        "\n<!-- id:fb_001 | run:r1 | roles: | dims: -->\n"
+        "## [user] 2025-01-01\n\nOld entry.\n"
+        "\n<!-- id:fb_002 | run:r2 | roles: | dims: -->\n"
+        "## [user] 2025-06-01\n\nAnother old entry.\n"
+    )
+    count = migrate_feedback_status()
+    assert count == 2
+    content = FEEDBACK_FILE.read_text()
+    assert content.count("status:active") == 2
+
+
+def test_migrate_is_idempotent(tmp_data):
+    from metis.feedback import FEEDBACK_FILE, migrate_feedback_status, _FEEDBACK_HEADER
+    FEEDBACK_FILE.write_text(
+        _FEEDBACK_HEADER +
+        "\n<!-- id:fb_001 | run:r1 | roles: | dims: -->\n"
+        "## [user] 2025-01-01\n\nOld entry.\n"
+    )
+    migrate_feedback_status()
+    count2 = migrate_feedback_status()
+    assert count2 == 0
+    assert FEEDBACK_FILE.read_text().count("status:active") == 1
+
+
+def test_migrate_skips_entries_already_with_status(tmp_data):
+    from metis.feedback import FEEDBACK_FILE, migrate_feedback_status, _FEEDBACK_HEADER
+    FEEDBACK_FILE.write_text(
+        _FEEDBACK_HEADER +
+        "\n<!-- id:fb_001 | run:r1 | roles: | dims: | status:active -->\n"
+        "## [user] 2026-07-01\n\nAlready has status.\n"
+        "\n<!-- id:fb_002 | run:r2 | roles: | dims: -->\n"
+        "## [user] 2025-01-01\n\nMissing status.\n"
+    )
+    count = migrate_feedback_status()
+    assert count == 1
+    assert FEEDBACK_FILE.read_text().count("status:active") == 2
+
+
+def test_migrate_returns_zero_when_file_missing(tmp_data):
+    from metis.feedback import migrate_feedback_status
+    assert migrate_feedback_status() == 0
 
 
 # ---------------------------------------------------------------------------

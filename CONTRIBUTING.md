@@ -29,6 +29,10 @@ make test
 - Update `ARCHITECTURE.md` when changing data flow or extension points.
 - Add or update tests for parser, state, scoring contract, rendering, or scheduler changes.
 
+## Documentation style
+
+README is for first-time users. Keep it short, task-oriented, and human. Put architecture depth in `ARCHITECTURE.md`, engineering rules in `ENGINEERING.md`, and durable agent rules in `AGENTS.md`. If a README change adds a long explanation, look for something to trim or link out instead.
+
 ## Good areas to contribute
 
 The [README roadmap](./README.md#roadmap) is the best source for larger directions. A few especially useful areas:

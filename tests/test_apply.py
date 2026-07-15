@@ -148,7 +148,6 @@ def test_load_candidates_includes_unresolved_linkedin_role(tmp_path, monkeypatch
     candidate = apply_cmd.load_application_candidates(tmp_path)[0]
 
     assert candidate.role_key == "unresolved"
-    assert apply_cmd._application_route(candidate.role) == "via LinkedIn"
 
 
 def test_search_queries_are_bounded_and_search_redirect_is_unwrapped():
@@ -162,13 +161,6 @@ def test_search_queries_are_bounded_and_search_redirect_is_unwrapped():
     assert not _is_external_job_url("https://www.linkedin.com/jobs/view/123")
     assert not _is_external_job_url("https://www.indeed.com/viewjob?jk=123")
 
-
-def test_application_route_includes_easy_apply_and_unknown():
-    from metis.apply_cmd import _application_route
-
-    assert _application_route({"url": "https://linkedin.com/jobs/view/1", "apply_mode": "easy_apply"}) == "Easy Apply"
-    assert _application_route({"url": "https://linkedin.com/jobs/view/2", "apply_mode": "unknown"}) == "via LinkedIn"
-    assert _application_route({"apply_url": "https://careers.microsoft.com/us/en/job/123/title"}) == "direct ATS"
 
 
 def test_linkedin_apply_mode_detection():
@@ -206,23 +198,28 @@ def test_linkedin_apply_selector_handles_authenticated_accessible_name():
     assert found.get_attribute("aria-label") == "Apply to Principal Product Manager on company website"
 
 
-def test_browser_launch_preserves_selected_chrome_identity(tmp_path):
+def test_browser_launch_injects_linkedin_cookie(monkeypatch):
     from metis.apply_cmd import _launch_browser_context
 
-    captured = {}
+    monkeypatch.setenv("LINKEDIN_COOKIE", "test-li-at-value")
+    injected_cookies = []
+
+    class Context:
+        pages = []
+        def add_cookies(self, cookies): injected_cookies.extend(cookies)
+
+    class Browser:
+        def new_context(self, **kwargs): return Context()
 
     class Chromium:
-        def launch_persistent_context(self, *args, **kwargs):
-            captured.update({"args": args, "kwargs": kwargs})
-            return "context"
+        def launch(self, **kwargs): return Browser()
 
     class Playwright:
         chromium = Chromium()
 
-    assert _launch_browser_context(Playwright(), tmp_path, headless=False) == "context"
-    assert captured["kwargs"]["ignore_default_args"] == [
-        "--use-mock-keychain", "--password-store=basic", "--disable-sync",
-    ]
+    ctx = _launch_browser_context(Playwright(), headless=False)
+    assert isinstance(ctx, Context)
+    assert any(c.get("name") == "li_at" and c.get("value") == "test-li-at-value" for c in injected_cookies)
 
 
 def test_linkedin_session_uses_auth_cookie_not_page_copy():
@@ -511,3 +508,21 @@ def test_run_apply_default_resume_overrides_tailored_resume(tmp_path, monkeypatc
     assert selected[0].resume_path == default
     assert selected[0].resume_kind == "default"
     assert selected[0].tailored is False
+
+
+def test_search_result_url_handles_ddg_redirect():
+    from metis.apply_cmd import _search_result_url
+
+    # DDG HTML wraps result links as protocol-relative redirect URLs
+    ddg_href = "//duckduckgo.com/l/?uddg=https%3A%2F%2Fcareers.microsoft.com%2Fus%2Fen%2Fjob%2F123&rut=abc"
+    assert _search_result_url(ddg_href) == "https://careers.microsoft.com/us/en/job/123"
+
+    # Google /url? pattern still works
+    google_href = "/url?q=https%3A%2F%2Fjobs.airbnb.com%2F123&sa=U"
+    assert _search_result_url(google_href) == "https://jobs.airbnb.com/123"
+
+    # Plain https URL passes through
+    assert _search_result_url("https://boards.greenhouse.io/acme/jobs/1") == "https://boards.greenhouse.io/acme/jobs/1"
+
+    # Protocol-relative non-DDG URL is dropped
+    assert _search_result_url("//example.com/job") == ""

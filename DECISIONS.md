@@ -392,3 +392,52 @@ However, a role that explicitly requires niche domain credibility such as RDMA/I
 datacenter networking, kernel/driver work, hardware architecture, GPU scheduling, regulated
 credentials, or similar mandatory expertise should create real friction. The scorer should not
 promote such roles solely because company and level look attractive.
+
+**D-69 · `metis apply` routes through authenticated LinkedIn first and preserves the selected Chrome identity**
+LinkedIn is the routing source of truth for roles discovered there. Application preparation follows
+this order: open the original LinkedIn posting, keep LinkedIn Easy Apply on LinkedIn, follow an
+offsite Apply control to the employer, and use web search only as a fallback. Employer-owned and
+Workday career pages are valid destinations; resolution is not restricted to Greenhouse, Lever,
+and Ashby. A resolved employer URL is cached only after navigation and role validation. Historical
+LinkedIn URLs stored as `application_url` must not override the source posting as if they were
+external destinations.
+
+On macOS, using a user's chosen Chrome profile requires its Keychain-backed credentials. Playwright
+normally injects `--use-mock-keychain`, `--password-store=basic`, and `--disable-sync`; those flags
+make the correct profile directory appear as an unsigned "Person 1" profile. The Metis browser
+launcher must ignore those three defaults. Only one Chrome process may own the profile, so ordinary
+Chrome must be fully quit before `metis apply` launches it. Apply-control detection must allow
+LinkedIn hydration latency and accessible names such as `Apply to <role> on company website`.
+
+**D-70 · Application status uses hybrid browser signals plus authoritative email reconciliation**
+Preparing a form is not evidence that it was submitted, so `prefilled` and `needs_review` remain
+pending. A browser-observed confirmation page records `applied` immediately. Confirmation email
+promotes the role to `applied_confirmed`; rejection and recruiter-screen emails update their matching
+terminal states. `metis track` dual-writes `applications.xlsx` and `application_state.json`, while
+`metis apply` runs a quiet three-day ATS-email reconciliation before constructing its picker.
+
+The pre-Apply scan deliberately skips direct-recruiter searches across all previously applied
+companies and does not open the workbook. Email-to-state matching requires a sufficiently similar
+role title plus either fuzzy company agreement or a meaningful shared company token, allowing aliases
+such as `Amazon` ↔ `Prime Video & Amazon MGM Studios` and ATS title suffixes such as job IDs. This
+keeps confirmed roles from resurfacing without assuming that every opened or prefilled form was sent.
+
+**D-71 · Apply failures are classified, persisted safely, and systemic auth failure stops the batch**
+`blocked` is reserved for a role-specific routing or form-preparation failure. Loss of LinkedIn
+authentication is systemic: record `auth_required`, stop routing immediately, and leave remaining
+roles retryable rather than opening/searching every role under a broken session. Employer-owned job
+detail pages may require a second Apply click before form filling; follow that control before deciding
+that the destination has no form.
+
+Browser failures append to owner-only `~/.job_pipeline/apply_diagnostics.jsonl`. Records contain
+timestamp, role key/title/company, phase, final URL, page title, apply mode, and error summary. They
+must never contain page HTML, screenshots, field values, cookies, tokens, or credentials. This makes
+post-run RCA possible without requiring users to transcribe terminal output or disclose application
+answers.
+
+LinkedIn authentication should use the browser context's `li_at` cookie when CDP exposes it. macOS
+Keychain-backed cookies can remain usable by Chrome without being returned through the automation
+API, so a missing CDP cookie falls back to a functional `/feed/` probe. Only an explicit redirect to
+login/signup/authwall is global logout evidence—not generic page copy. Authenticated job pages can
+contain phrases such as "Sign in with email" inside posting-specific modals, and treating that copy as
+global logout causes false batch-wide circuit breaking.

@@ -254,7 +254,20 @@ These constraints are enforced by `tests/test_render_format.py`. Run that test a
 - `init_cmd.py` imports `QUESTIONARY_STYLE`, `INQUIRER_STYLE`, `console`, and print helpers from theme. No hardcoded hex values anywhere else.
 - Light/dark detection: `METIS_THEME=light|dark` env var → `COLORFGBG` fallback → default dark.
 
-### 3. Email is React Email (TSX), not plain HTML
+### 3. Scoring pipeline invariant — feedback.md is ALWAYS injected
+
+`profile.py:load_profile_text()` is the single gatekeeper for the system prompt. It MUST:
+1. Load `profile.yaml` → render via `render_profile()`
+2. Append `~/.job_pipeline/feedback.md` if it exists (the `CANDIDATE CALIBRATION FEEDBACK` block)
+3. Return the combined string to callers
+
+This combined text is injected as the system prompt for **both** Haiku prescreen AND Sonnet scoring. No caller may bypass this by calling `render_profile()` directly or omitting the feedback append.
+
+**Never skip the feedback append.** If feedback.md is empty or missing, that is fine — the function handles it gracefully. But the code path that reads and appends it must remain in `load_profile_text()` and must not be conditionally removed.
+
+If the storage format of feedback ever changes (e.g. jsonl instead of markdown), the render step that converts it back to injected text lives here in `load_profile_text()` — not in score.py or pipeline.py.
+
+### 4. Email is React Email (TSX), not plain HTML
 - Rendered via `ts-node` in `render.py:render_html()`. Falls back to `build_digest_html()` Python if ts-node fails.
 - Layout is table-based (no CSS grid/flex) for email client compatibility.
 - All email color tokens are in `utils/colors.ts`, not in Python.

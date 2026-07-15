@@ -112,7 +112,7 @@ _SELECT_ALL = "__metis_select_all__"
 _CANCEL = "__metis_cancel__"
 
 
-def _load_recent_roles(limit: int = 40) -> list[dict[str, Any]]:
+def _load_recent_roles(limit: int = 40, lookback: str | None = None) -> list[dict[str, Any]]:
     if not RUNS_PATH.exists():
         return []
     rows: list[dict[str, Any]] = []
@@ -128,9 +128,18 @@ def _load_recent_roles(limit: int = 40) -> list[dict[str, Any]]:
             continue
         rows.append(row)
 
-    latest_date = max((_role_date(row) for row in rows), default="")
-    if latest_date:
-        rows = [row for row in rows if _role_date(row) == latest_date]
+    if lookback:
+        from .pipeline import _parse_lookback
+
+        since = _parse_lookback(lookback)
+        if since is None:
+            raise SystemExit(f"Could not parse --lookback '{lookback}'. Try: '7d', '30d', '2026-07-01'.")
+        cutoff = since.date().isoformat()
+        rows = [row for row in rows if _role_date(row) and _role_date(row) >= cutoff]
+    else:
+        latest_date = max((_role_date(row) for row in rows), default="")
+        if latest_date:
+            rows = [row for row in rows if _role_date(row) == latest_date]
 
     deduped: dict[str, dict[str, Any]] = {}
     for row in rows:
@@ -202,7 +211,7 @@ def _select_roles_interactively(roles: list[dict[str, Any]]) -> list[dict[str, A
         raise SystemExit(
             "Recent Solid/Moderate roles do not include posting URLs yet. "
             "Those rows were likely scored before resume tailoring added URL lineage. "
-            "Run `metis` once on this branch so Metis can save posting URLs, then rerun `metis resume tailor`."
+            "Run `metis` once so Metis can save posting URLs, then rerun `metis tailor`."
         )
     try:
         from InquirerPy import inquirer
@@ -322,7 +331,7 @@ def _resolve_resume_path(profile: dict, resume_path: str | None = None) -> Path:
         if candidate.exists() and candidate.suffix.lower() == ".docx":
             return candidate
     raise SystemExit(
-        "No source resume DOCX found. Set METIS_RESUME or pass `metis resume tailor --resume PATH`."
+        "No source resume DOCX found. Set METIS_RESUME or pass `metis tailor --resume PATH`."
     )
 
 
@@ -335,13 +344,21 @@ def run_resume_tailor(
     non_interactive: bool = False,
     tailor_all: bool = False,
     top_n: int | None = None,
+    lookback: str | None = None,
+    match_terms: list[str] | None = None,
 ) -> list[dict[str, str]]:
     profile = load_profile_yaml()
     if not profile:
         raise SystemExit("No profile.yaml found. Run `metis init` first.")
     source_resume_path = _resolve_resume_path(profile, resume_path)
 
-    recent = _load_recent_roles(limit=limit)
+    recent = _load_recent_roles(limit=limit, lookback=lookback) if lookback else _load_recent_roles(limit=limit)
+    terms = [term.strip().lower() for term in (match_terms or []) if term.strip()]
+    if terms:
+        recent = [
+            role for role in recent
+            if any(term in f"{role.get('company', '')} {role.get('title', '')}".lower() for term in terms)
+        ]
     if not recent:
         raise SystemExit(
             "No recent Solid/Moderate roles found in runs.jsonl. "
@@ -353,7 +370,7 @@ def run_resume_tailor(
         raise SystemExit(
             "Recent Solid/Moderate roles do not include posting URLs yet. "
             "Those rows were likely scored before resume tailoring added URL lineage. "
-            "Run `metis` once on this branch so Metis can save posting URLs, then rerun `metis resume tailor`."
+            "Run `metis` once so Metis can save posting URLs, then rerun `metis tailor`."
         )
     if top_n is not None:
         if top_n <= 0:
@@ -362,7 +379,7 @@ def run_resume_tailor(
     elif tailor_all:
         roles = eligible
     elif non_interactive or not os.isatty(0):
-        raise SystemExit("Run `metis resume tailor --all`, or run interactively to choose roles.")
+        raise SystemExit("Run `metis tailor --all`, or run interactively to choose roles.")
     else:
         roles = _select_roles_interactively(recent)
 

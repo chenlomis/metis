@@ -3,12 +3,15 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import re
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
 
 VALID_STATUSES = {
-    "opened", "prefilled", "needs_review", "blocked", "applied", "applied_confirmed", "rejected", "recruiter_screen",
+    "opened", "opened_linkedin", "prefilled", "needs_review", "blocked", "auth_required",
+    "applied", "applied_confirmed", "rejected", "recruiter_screen",
 }
 
 
@@ -57,3 +60,54 @@ def update_application_state(
     temp.replace(path)
     path.chmod(0o600)
     return entry
+
+
+def reconcile_application_event(
+    company: str,
+    role: str | None,
+    classification: str,
+    *,
+    event_date: str | None = None,
+    root: Path | None = None,
+) -> str | None:
+    """Match an email event to browser state and return the updated role key."""
+    if not role or classification not in {"confirmation", "rejection", "recruiter_screen"}:
+        return None
+
+    def norm(value: str) -> str:
+        return re.sub(r"[^a-z0-9]", "", value.lower())
+
+    def company_tokens(value: str) -> set[str]:
+        ignored = {"careers", "company", "inc", "llc", "studios", "jobs", "the"}
+        return {
+            token for token in re.findall(r"[a-z0-9]+", value.lower())
+            if len(token) >= 4 and token not in ignored
+        }
+
+    state = load_application_state(root)
+    best_key: str | None = None
+    best_score = 0.0
+    for role_key, entry in state.items():
+        saved_role = entry.get("role") or {}
+        saved_company = str(saved_role.get("company") or "")
+        saved_title = str(saved_role.get("title") or "")
+        company_score = SequenceMatcher(None, norm(company), norm(saved_company)).ratio()
+        role_score = SequenceMatcher(None, norm(role), norm(saved_title)).ratio()
+        has_company_token = bool(company_tokens(company) & company_tokens(saved_company))
+        company_matches = company_score >= 0.70 or has_company_token
+        if company_matches and role_score >= 0.55:
+            score = (company_score + role_score) / 2
+            if score > best_score:
+                best_key, best_score = role_key, score
+    if best_key is None:
+        return None
+    status = {
+        "confirmation": "applied_confirmed",
+        "rejection": "rejected",
+        "recruiter_screen": "recruiter_screen",
+    }[classification]
+    update_application_state(
+        best_key, status=status, root=root,
+        email_evidence={"classification": classification, "date": event_date},
+    )
+    return best_key

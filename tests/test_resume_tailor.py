@@ -398,7 +398,7 @@ def test_non_interactive_without_all_requires_explicit_batch_choice(monkeypatch)
     with pytest.raises(SystemExit) as exc:
         resume_cmd.run_resume_tailor(api_key="test-key", non_interactive=True)
 
-    assert "resume tailor --all" in str(exc.value)
+    assert "metis tailor --all" in str(exc.value)
 
 
 def test_run_resume_tailor_rejects_output_outside_data_dir(tmp_path, monkeypatch):

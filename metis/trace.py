@@ -27,6 +27,7 @@ def write_trace(job: JobDict, *, model: str = "claude-sonnet-4-6") -> None:
         "job_id":         job.get("job_id", ""),
         "url":            job.get("url", ""),
         "apply_url":      job.get("apply_url", ""),
+        "apply_mode":     job.get("apply_mode", "unknown"),
         "source":         job.get("source", ""),
         "extraction":     job.get("extraction", {}),
         "eval":           job.get("eval", {}),

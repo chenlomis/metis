@@ -6,6 +6,8 @@ Metis is an AI-powered career agent that automates the first round of job discov
 
 Think of it as a personal decision agent for high-volume opportunity triage: it helps you decide what deserves attention, what can wait, and what is not worth your time.
 
+Under the hood, it is a compact AI platform: source ingestion, semantic extraction, model routing, evaluation traces, feedback memory, and agent-facing tools all share the same local runtime.
+
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![LLM providers](https://img.shields.io/badge/LLM-Anthropic%20%7C%20OpenAI-blueviolet.svg)](#env-configuration)
@@ -362,6 +364,8 @@ The server exposes these tools: `get_metis_status`, `run_job_search`,
 `list_scoring_feedback`, `track_applications`, `list_application_activity`, and
 `generate_progress_summary`. `run_job_search` and `track_applications` default to
 dry-run mode for safer agent usage.
+
+This makes metis usable as local agent infrastructure: agent clients can inspect state, run dry-run searches, retrieve role details, record feedback, and generate summaries without shelling out to ad hoc commands.
 
 ### State and debugging
 
