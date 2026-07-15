@@ -243,7 +243,7 @@ def load_application_candidates(
         previous = candidates.get(role_key)
         if previous is None or previous.record_path is None or record_path.stat().st_mtime >= previous.record_path.stat().st_mtime:
             candidates[role_key] = candidate
-    if fallback and runs_path.exists():
+    if runs_path.exists():
         recent_roles: list[dict[str, Any]] = []
         for line in runs_path.read_text(encoding="utf-8").splitlines():
             try:
@@ -264,6 +264,8 @@ def load_application_candidates(
                 # Tailoring owns the resume artifact; the evaluated-role trace
                 # owns current score and evaluation-date metadata.
                 candidates[role_key] = replace(existing, role={**existing.role, **role})
+                continue
+            if fallback is None:
                 continue
             if not include_applied and (state.get(role_key) or {}).get("status") in _FINAL_STATUSES:
                 continue
